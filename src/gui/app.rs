@@ -3,16 +3,44 @@
 //! This module provides the main GPUI-based graphical interface for Quill.
 
 use gpui::{
-    div, img, px, rgb, rgba, size, App, AppContext, Application, Bounds, Context, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
-    Point, Render, Size, StatefulInteractiveElement, Styled, StyledImage, Window, WindowBounds,
-    WindowOptions,
+    div, img, px, rgb, rgba, size, svg, App, AppContext, Application, AssetSource, Bounds, Context,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Point, Render,
+    Result as GpuiResult, SharedString, Size, StatefulInteractiveElement, Styled, StyledImage,
+    Window, WindowBounds, WindowOptions,
 };
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+use std::fs;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::core::types::{Annotation, AnnotationType, Color, Region};
+/// Asset source for loading SVG icons and other assets
+struct Assets {
+    base: PathBuf,
+}
+
+impl AssetSource for Assets {
+    fn load(&self, path: &str) -> GpuiResult<Option<Cow<'static, [u8]>>> {
+        fs::read(self.base.join(path))
+            .map(|data| Some(Cow::Owned(data)))
+            .map_err(|err| err.into())
+    }
+
+    fn list(&self, path: &str) -> GpuiResult<Vec<SharedString>> {
+        let full_path = self.base.join(path);
+        if full_path.is_dir() {
+            Ok(fs::read_dir(full_path)?
+                .filter_map(|entry| entry.ok())
+                .map(|entry| SharedString::from(entry.path().to_string_lossy().to_string()))
+                .collect())
+        } else {
+            Ok(vec![])
+        }
+    }
+}
+
+use crate::core::types::{Annotation, AnnotationId, AnnotationType, Color, Region};
 use crate::core::types::Point as QuillPoint;
 use crate::gui::toolbar::Tool;
 
@@ -20,7 +48,7 @@ use crate::gui::toolbar::Tool;
 const ANNOTATIONS_FILE_VERSION: &str = "1.0";
 
 /// Height of the toolbar in pixels (used for coordinate offset)
-const TOOLBAR_HEIGHT: f32 = 44.0;
+const TOOLBAR_HEIGHT: f32 = 100.0;
 
 /// Serializable annotation data for JSON persistence
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -296,6 +324,17 @@ pub struct DragState {
     pub current_point: QuillPoint,
 }
 
+/// Text input state for creating/editing text annotations
+#[derive(Debug, Clone)]
+pub struct TextInputState {
+    /// Position where the text annotation will be placed (in image coordinates)
+    pub position: QuillPoint,
+    /// Current text content being typed
+    pub content: String,
+    /// If editing an existing annotation, its ID
+    pub editing_annotation_id: Option<AnnotationId>,
+}
+
 /// Main application struct for GPUI
 pub struct QuillApp {
     file_path: Option<PathBuf>,
@@ -318,22 +357,34 @@ impl QuillApp {
     pub fn run(self) -> anyhow::Result<()> {
         let file_path = self.file_path.clone();
 
-        Application::new().run(move |cx: &mut App| {
-            let window_size: Size<gpui::Pixels> = size(px(1200.), px(800.));
+        // Get the assets base path - try manifest dir first, then executable dir
+        let assets_base = std::env::var("CARGO_MANIFEST_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(PathBuf::from))
+                    .unwrap_or_else(|| PathBuf::from("."))
+            });
 
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds {
-                    origin: Point::default(),
-                    size: window_size,
-                })),
-                ..Default::default()
-            };
+        Application::new()
+            .with_assets(Assets { base: assets_base })
+            .run(move |cx: &mut App| {
+                let window_size: Size<gpui::Pixels> = size(px(1200.), px(800.));
 
-            cx.open_window(options, |_window, cx| {
-                cx.new(|_cx| EditorView::new(file_path.clone()))
-            })
-            .expect("Failed to open window");
-        });
+                let options = WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds {
+                        origin: Point::default(),
+                        size: window_size,
+                    })),
+                    ..Default::default()
+                };
+
+                cx.open_window(options, |_window, cx| {
+                    cx.new(|cx| EditorView::new(file_path.clone(), cx))
+                })
+                .expect("Failed to open window");
+            });
 
         Ok(())
     }
@@ -367,11 +418,15 @@ pub struct EditorView {
     canvas_width: f32,
     /// Canvas display height (estimated)
     canvas_height: f32,
+    /// Focus handle for keyboard input
+    focus_handle: FocusHandle,
+    /// Text input state for creating/editing text annotations
+    text_input_state: Option<TextInputState>,
 }
 
 impl EditorView {
     /// Create a new editor view
-    pub fn new(file_path: Option<PathBuf>) -> Self {
+    pub fn new(file_path: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
         // Load image dimensions if file path is provided
         let (image_width, image_height) = if let Some(ref path) = file_path {
             if let Ok(img) = image::open(path) {
@@ -387,6 +442,9 @@ impl EditorView {
         let canvas_width = 1200.0_f32;
         let canvas_height = 734.0_f32; // 800 - 44 - 22
 
+        // Create focus handle for keyboard input
+        let focus_handle = cx.focus_handle();
+
         let mut view = Self {
             file_path,
             annotations: Vec::new(),
@@ -398,6 +456,8 @@ impl EditorView {
             image_height,
             canvas_width,
             canvas_height,
+            focus_handle,
+            text_input_state: None,
         };
         // Load existing annotations if available
         view.load_annotations();
@@ -584,8 +644,8 @@ impl EditorView {
                 });
                 cx.notify();
             }
-            Tool::Text | Tool::Number => {
-                // For text/number, we place at click position
+            Tool::Text => {
+                // For text, enter text input mode at click position
                 let position = event.position;
                 let screen_x: f32 = position.x.into();
                 let screen_y: f32 = position.y.into();
@@ -593,44 +653,64 @@ impl EditorView {
                 let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
                 let point = QuillPoint::new(img_x, img_y);
 
-                match self.active_tool {
-                    Tool::Text => {
-                        let annotation = Annotation::new(AnnotationType::Text {
-                            position: point,
-                            content: "Text".to_string(),
-                            font_size: 16.0,
-                            align: crate::core::types::TextAlign::Left,
-                            background: None,
-                            max_width: None,
-                        }).with_color(self.current_color);
-                        self.annotations.push(annotation);
-                        // Save annotations to disk after adding
-                        self.save_annotations();
-                    }
-                    Tool::Number => {
-                        let next_number = self.annotations.iter()
-                            .filter_map(|a| match &a.annotation_type {
-                                AnnotationType::Number { value, .. } => Some(*value),
-                                _ => None,
-                            })
-                            .max()
-                            .unwrap_or(0) + 1;
-
-                        let annotation = Annotation::new(AnnotationType::Number {
-                            position: point,
-                            value: next_number,
-                            radius: 14.0,
-                        }).with_color(self.current_color);
-                        self.annotations.push(annotation);
-                        // Save annotations to disk after adding
-                        self.save_annotations();
-                    }
-                    _ => {}
-                }
+                // Enter text input mode
+                self.text_input_state = Some(TextInputState {
+                    position: point,
+                    content: String::new(),
+                    editing_annotation_id: None,
+                });
                 cx.notify();
             }
-            Tool::Select | Tool::Crop => {
-                // Select and Crop have different behaviors
+            Tool::Number => {
+                // For number, we place at click position immediately
+                let position = event.position;
+                let screen_x: f32 = position.x.into();
+                let screen_y: f32 = position.y.into();
+                // Convert screen coordinates to image coordinates
+                let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
+                let point = QuillPoint::new(img_x, img_y);
+
+                let next_number = self.annotations.iter()
+                    .filter_map(|a| match &a.annotation_type {
+                        AnnotationType::Number { value, .. } => Some(*value),
+                        _ => None,
+                    })
+                    .max()
+                    .unwrap_or(0) + 1;
+
+                let annotation = Annotation::new(AnnotationType::Number {
+                    position: point,
+                    value: next_number,
+                    radius: 14.0,
+                }).with_color(self.current_color);
+                self.annotations.push(annotation);
+                // Save annotations to disk after adding
+                self.save_annotations();
+                cx.notify();
+            }
+            Tool::Select => {
+                // Check if clicking on a text annotation to edit it
+                let position = event.position;
+                let screen_x: f32 = position.x.into();
+                let screen_y: f32 = position.y.into();
+                let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
+                let click_point = QuillPoint::new(img_x, img_y);
+
+                // Find text annotation at click position
+                if let Some(annotation) = self.find_text_annotation_at(click_point) {
+                    if let AnnotationType::Text { position, content, .. } = &annotation.annotation_type {
+                        // Enter edit mode for this annotation
+                        self.text_input_state = Some(TextInputState {
+                            position: *position,
+                            content: content.clone(),
+                            editing_annotation_id: Some(annotation.id),
+                        });
+                        cx.notify();
+                    }
+                }
+            }
+            Tool::Crop => {
+                // Crop has different behavior
             }
         }
     }
@@ -748,17 +828,18 @@ impl EditorView {
         let button_bg = rgb(0x3d3d3d);
         let button_active_bg = rgb(0x0078d4);
         let text_color = rgb(0xcccccc);
+        let icon_color = rgb(0xffffff);
 
         div()
             .flex()
             .flex_row()
             .w_full()
-            .h(px(44.))
+            .h(px(100.))
             .bg(toolbar_bg)
             .border_b_1()
             .border_color(rgb(0x1e1e1e))
-            .px_2()
-            .gap_1()
+            .px_4()
+            .gap_3()
             .items_center()
             .children(tools_to_show.iter().map(|tool| {
                 let is_active = *tool == self.active_tool;
@@ -767,16 +848,27 @@ impl EditorView {
                 div()
                     .id(tool.name())
                     .flex()
+                    .flex_col()
                     .items_center()
                     .justify_center()
-                    .px_3()
-                    .py_1()
-                    .rounded_md()
+                    .w(px(72.))
+                    .h(px(80.))
+                    .gap_2()
+                    .rounded_lg()
                     .cursor_pointer()
                     .bg(if is_active { button_active_bg } else { button_bg })
-                    .text_color(text_color)
-                    .text_sm()
-                    .child(tool.name())
+                    .child(
+                        svg()
+                            .path(tool.icon_path())
+                            .size(px(36.))
+                            .text_color(icon_color)
+                    )
+                    .child(
+                        div()
+                            .text_color(text_color)
+                            .text_xs()
+                            .child(tool.name())
+                    )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.select_tool(tool_copy, cx);
                     }))
@@ -1131,12 +1223,16 @@ impl EditorView {
         let status_bg = rgb(0x007acc);
         let text_color = rgb(0xffffff);
 
-        let status_text = format!(
-            "Tool: {} | Annotations: {} | {}",
-            self.active_tool.name(),
-            self.annotations.len(),
-            if self.drag_state.is_some() { "Drawing..." } else { "Ready" }
-        );
+        let status_text = if self.text_input_state.is_some() {
+            "Typing text... (Enter to confirm, Escape to cancel)".to_string()
+        } else {
+            format!(
+                "Tool: {} | Annotations: {} | {}",
+                self.active_tool.name(),
+                self.annotations.len(),
+                if self.drag_state.is_some() { "Drawing..." } else { "Ready" }
+            )
+        };
 
         div()
             .flex()
@@ -1148,6 +1244,162 @@ impl EditorView {
             .text_color(text_color)
             .text_xs()
             .child(status_text)
+    }
+
+    /// Find a text annotation at the given point (in image coordinates)
+    fn find_text_annotation_at(&self, point: QuillPoint) -> Option<&Annotation> {
+        self.annotations.iter().find(|a| {
+            if let AnnotationType::Text { .. } = &a.annotation_type {
+                a.contains_point(point)
+            } else {
+                false
+            }
+        })
+    }
+
+    /// Handle keyboard input
+    fn handle_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        // Only handle if we're in text input mode
+        if self.text_input_state.is_none() {
+            return;
+        }
+
+        let keystroke = &event.keystroke;
+        let key = &keystroke.key;
+
+        match key.as_str() {
+            "enter" => {
+                // Confirm the text input
+                self.confirm_text_input(cx);
+            }
+            "escape" => {
+                // Cancel text input
+                self.cancel_text_input(cx);
+            }
+            "backspace" => {
+                // Delete last character
+                if let Some(ref mut state) = self.text_input_state {
+                    state.content.pop();
+                    cx.notify();
+                }
+            }
+            _ => {
+                // Add typed character - use key_char if available, otherwise key
+                if let Some(ref mut state) = self.text_input_state {
+                    if let Some(ref char) = keystroke.key_char {
+                        // Only add printable characters
+                        if !char.is_empty() {
+                            state.content.push_str(char);
+                            cx.notify();
+                        }
+                    } else if key.len() == 1 {
+                        // Single character key (like 'a', 'b', etc.)
+                        state.content.push_str(key);
+                        cx.notify();
+                    }
+                }
+            }
+        }
+    }
+
+    /// Confirm text input and create/update the annotation
+    fn confirm_text_input(&mut self, cx: &mut Context<Self>) {
+        let Some(input_state) = self.text_input_state.take() else {
+            return;
+        };
+
+        // Only create annotation if there's actual content
+        if input_state.content.trim().is_empty() {
+            cx.notify();
+            return;
+        }
+
+        if let Some(annotation_id) = input_state.editing_annotation_id {
+            // Update existing annotation
+            if let Some(annotation) = self.annotations.iter_mut().find(|a| a.id == annotation_id) {
+                if let AnnotationType::Text { content, .. } = &mut annotation.annotation_type {
+                    *content = input_state.content;
+                    annotation.touch();
+                }
+            }
+        } else {
+            // Create new annotation
+            let annotation = Annotation::new(AnnotationType::Text {
+                position: input_state.position,
+                content: input_state.content,
+                font_size: 16.0,
+                align: crate::core::types::TextAlign::Left,
+                background: None,
+                max_width: None,
+            }).with_color(self.current_color);
+            self.annotations.push(annotation);
+        }
+
+        // Save annotations to disk
+        self.save_annotations();
+        cx.notify();
+    }
+
+    /// Cancel text input without creating annotation
+    fn cancel_text_input(&mut self, cx: &mut Context<Self>) {
+        self.text_input_state = None;
+        cx.notify();
+    }
+
+    /// Render the text input overlay
+    fn render_text_input_overlay(&self, input_state: &TextInputState, _cx: &mut Context<Self>) -> impl IntoElement {
+        // Scale position to screen coordinates
+        let (screen_x, screen_y) = self.scale_point(input_state.position.x, input_state.position.y);
+
+        let input_bg = rgb(0xffffff);
+        let input_border = rgb(0x0078d4);
+        let text_color = rgb(0x000000);
+        let placeholder_color = rgb(0x888888);
+
+        // Display content or placeholder
+        let display_text = if input_state.content.is_empty() {
+            "Type here...".to_string()
+        } else {
+            input_state.content.clone()
+        };
+
+        let is_placeholder = input_state.content.is_empty();
+
+        div()
+            .absolute()
+            .left(px(screen_x))
+            .top(px(screen_y))
+            .min_w(px(150.))
+            .min_h(px(28.))
+            .px_2()
+            .py_1()
+            .bg(input_bg)
+            .border_2()
+            .border_color(input_border)
+            .rounded_md()
+            .shadow_lg()
+            .text_color(if is_placeholder { placeholder_color } else { text_color })
+            .text_sm()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .child(display_text)
+                    .child(
+                        // Blinking cursor indicator
+                        div()
+                            .w(px(2.))
+                            .h(px(16.))
+                            .bg(input_border)
+                            .ml_px()
+                    )
+            )
+    }
+}
+
+impl Focusable for EditorView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }
 
@@ -1163,12 +1415,24 @@ impl Render for EditorView {
         // Check if sidecar file has changed and reload annotations if needed
         self.check_and_reload_annotations();
 
-        div()
+        let mut container = div()
+            .id("editor-container")
             .size_full()
             .flex()
             .flex_col()
+            .track_focus(&self.focus_handle)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_key_down(event, window, cx);
+            }))
             .child(self.render_toolbar(cx))
             .child(self.render_canvas(cx))
-            .child(self.render_status_bar())
+            .child(self.render_status_bar());
+
+        // Add text input overlay if in text input mode
+        if let Some(ref input_state) = self.text_input_state {
+            container = container.child(self.render_text_input_overlay(input_state, cx));
+        }
+
+        container
     }
 }

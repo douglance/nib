@@ -66,6 +66,22 @@ impl Tool {
             Tool::Crop => 'c',
         }
     }
+
+    /// Returns the icon file path for this tool (Lucide icons, ISC license)
+    pub fn icon_path(&self) -> &'static str {
+        match self {
+            Tool::Select => "assets/icons/select.svg",
+            Tool::Arrow => "assets/icons/arrow.svg",
+            Tool::Rectangle => "assets/icons/rectangle.svg",
+            Tool::Ellipse => "assets/icons/ellipse.svg",
+            Tool::Text => "assets/icons/text.svg",
+            Tool::Number => "assets/icons/number.svg",
+            Tool::Blur => "assets/icons/blur.svg",
+            Tool::Highlight => "assets/icons/highlight.svg",
+            Tool::Line => "assets/icons/line.svg",
+            Tool::Crop => "assets/icons/crop.svg",
+        }
+    }
 }
 
 /// Toolbar state
