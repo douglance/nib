@@ -1,0 +1,82 @@
+[package]
+name = "quill"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Fast, native screenshot annotation tool with semantic visual communication"
+license = "MIT"
+keywords = ["screenshot", "annotation", "image", "tool"]
+categories = ["graphics", "gui", "command-line-utilities"]
+
+[[bin]]
+name = "quill"
+path = "src/main.rs"
+
+[lib]
+name = "quill"
+path = "src/lib.rs"
+
+[dependencies]
+# GUI Framework (Zed's GPU-accelerated UI)
+gpui = "0.2"
+
+# CLI parsing
+clap = { version = "4.5", features = ["derive", "env", "string"] }
+
+# Image processing
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+imageproc = "0.25"
+
+# Screen capture
+screenshots = "0.8"
+
+# Clipboard
+arboard = { version = "3.4", features = ["image-data"] }
+
+# Local database for search index
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Async runtime
+tokio = { version = "1.42", features = ["rt-multi-thread", "fs", "sync", "macros"] }
+
+# File watching
+notify = "7.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Directories (config, cache paths)
+dirs = "5.0"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Unique IDs
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Collaboration (real-time sync between CLI and GUI)
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1.5"
+interprocess = { version = "2.2", features = ["tokio"] }
+parking_lot = "0.12"
+dashmap = "6.0"
+crossbeam-channel = "0.5"
+
+[dev-dependencies]
+tempfile = "3.14"
+proptest = "1.5"
+criterion = { version = "0.5", features = ["html_reports"] }
+insta = { version = "1.41", features = ["yaml"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
