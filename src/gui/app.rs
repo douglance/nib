@@ -19,6 +19,9 @@ use crate::gui::toolbar::Tool;
 /// Version string for the annotations file format
 const ANNOTATIONS_FILE_VERSION: &str = "1.0";
 
+/// Height of the toolbar in pixels (used for coordinate offset)
+const TOOLBAR_HEIGHT: f32 = 44.0;
+
 /// Serializable annotation data for JSON persistence
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializedAnnotation {
@@ -194,7 +197,7 @@ fn serialize_annotation(annotation: &Annotation) -> SerializedAnnotation {
 }
 
 /// Convert a SerializedAnnotation back to Annotation
-fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annotation> {
+pub fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annotation> {
     let color = hex_to_color(&serialized.color);
 
     let annotation_type = match (serialized.annotation_type.as_str(), &serialized.geometry) {
@@ -436,7 +439,7 @@ impl EditorView {
 
         (
             (x as f32 * scale) + offset_x,
-            (y as f32 * scale) + offset_y,
+            (y as f32 * scale) + offset_y + TOOLBAR_HEIGHT,
             w as f32 * scale,
             h as f32 * scale,
         )
@@ -447,7 +450,7 @@ impl EditorView {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
         (
             (x as f32 * scale) + offset_x,
-            (y as f32 * scale) + offset_y,
+            (y as f32 * scale) + offset_y + TOOLBAR_HEIGHT,
         )
     }
 
@@ -455,8 +458,11 @@ impl EditorView {
     fn screen_to_image_coords(&self, screen_x: f32, screen_y: f32) -> (f64, f64) {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
 
+        // Subtract toolbar height since mouse coords are in window space
+        let canvas_y = screen_y - TOOLBAR_HEIGHT;
+
         let image_x = (screen_x - offset_x) / scale;
-        let image_y = (screen_y - offset_y) / scale;
+        let image_y = (canvas_y - offset_y) / scale;
 
         (image_x as f64, image_y as f64)
     }
@@ -567,6 +573,10 @@ impl EditorView {
                 let screen_y: f32 = position.y.into();
                 // Convert screen coordinates to image coordinates
                 let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
+
+                // DEBUG: Print click coordinates in image space
+                eprintln!("CLICK: screen=({:.0}, {:.0}) -> image=({:.0}, {:.0})",
+                         screen_x, screen_y, img_x, img_y);
                 self.drag_state = Some(DragState {
                     tool: self.active_tool,
                     start_point: QuillPoint::new(img_x, img_y),
@@ -700,10 +710,16 @@ impl EditorView {
                     filled: false,
                 }
             }
-            Tool::Highlight => AnnotationType::Highlight {
-                region: Region::from_points(start, end),
-                corner_radius: 0.0,
-            },
+            Tool::Highlight => {
+                let region = Region::from_points(start, end);
+                // DEBUG: Print annotation coordinates in image space
+                eprintln!("HIGHLIGHT CREATED: x={:.0}, y={:.0}, w={:.0}, h={:.0}",
+                         region.x, region.y, region.width, region.height);
+                AnnotationType::Highlight {
+                    region,
+                    corner_radius: 0.0,
+                }
+            }
             Tool::Blur => AnnotationType::Blur {
                 region: Region::from_points(start, end),
                 intensity: crate::core::types::BlurIntensity::Medium,
