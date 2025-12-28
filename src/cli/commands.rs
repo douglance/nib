@@ -608,6 +608,122 @@ pub fn run_annotations(args: &AnnotationsArgs) -> Result<()> {
     Ok(())
 }
 
+/// Execute the add-annotation command (add annotation to sidecar file)
+pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
+    tracing::info!(?args, "Running add-annotation");
+
+    // Verify the image file exists
+    if !args.file.exists() {
+        return Err(crate::core::QuillError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    let annotations_path = annotations_file_path(&args.file);
+
+    // Load existing annotations or create empty file
+    let mut annotations_file = if annotations_path.exists() {
+        let json_content = std::fs::read_to_string(&annotations_path)?;
+        serde_json::from_str::<AnnotationsFile>(&json_content).unwrap_or_else(|_| {
+            AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new())
+        })
+    } else {
+        AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new())
+    };
+
+    // Determine next annotation ID (a1, a2, etc.)
+    let next_id = annotations_file
+        .annotations
+        .iter()
+        .filter_map(|a| {
+            a.id.strip_prefix('a')
+                .and_then(|n| n.parse::<u32>().ok())
+        })
+        .max()
+        .unwrap_or(0) + 1;
+
+    // Create the geometry based on annotation type
+    let geometry = match args.annotation_type.as_str() {
+        "rectangle" | "highlight" | "blur" | "crop" => {
+            crate::gui::AnnotationGeometry::Rectangle {
+                x: args.x,
+                y: args.y,
+                width: args.width,
+                height: args.height,
+            }
+        }
+        "arrow" | "line" => {
+            crate::gui::AnnotationGeometry::Line {
+                start_x: args.x,
+                start_y: args.y,
+                end_x: args.x + args.width,
+                end_y: args.y + args.height,
+            }
+        }
+        "ellipse" => {
+            crate::gui::AnnotationGeometry::Ellipse {
+                center_x: args.x + args.width / 2.0,
+                center_y: args.y + args.height / 2.0,
+                radius_x: args.width / 2.0,
+                radius_y: args.height / 2.0,
+            }
+        }
+        "text" => {
+            crate::gui::AnnotationGeometry::Point {
+                x: args.x,
+                y: args.y,
+                value: None,
+                content: args.text.clone().or_else(|| Some("Text".to_string())),
+            }
+        }
+        "number" => {
+            crate::gui::AnnotationGeometry::Point {
+                x: args.x,
+                y: args.y,
+                value: args.value.or(Some(next_id)),
+                content: None,
+            }
+        }
+        _ => {
+            return Err(crate::core::QuillError::Other(format!(
+                "Unknown annotation type: {}. Valid types: rectangle, arrow, line, ellipse, highlight, blur, text, number",
+                args.annotation_type
+            )));
+        }
+    };
+
+    // Create the new annotation
+    let new_annotation = crate::gui::SerializedAnnotation {
+        id: format!("a{}", next_id),
+        annotation_type: args.annotation_type.clone(),
+        geometry,
+        color: args.color.clone(),
+    };
+
+    // Add to annotations list
+    annotations_file.annotations.push(new_annotation.clone());
+
+    // Write back to sidecar file
+    let json = serde_json::to_string_pretty(&annotations_file).map_err(|e| {
+        crate::core::QuillError::Other(format!("Failed to serialize annotations: {}", e))
+    })?;
+
+    std::fs::write(&annotations_path, json)?;
+
+    println!("Added annotation [{}] {} at ({}, {})",
+        new_annotation.id,
+        args.annotation_type,
+        args.x,
+        args.y
+    );
+    println!("Saved to: {}", annotations_path.display());
+
+    Ok(())
+}
+
 // =============================================================================
 // Helper functions
 // =============================================================================

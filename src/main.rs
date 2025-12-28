@@ -45,5 +45,6 @@ async fn run() -> Result<()> {
         Command::Folder => cli::run_folder(),
         Command::Gui(args) => cli::run_gui(args),
         Command::Annotations(args) => cli::run_annotations(args),
+        Command::AddAnnotation(args) => cli::run_add_annotation(args),
     }
 }

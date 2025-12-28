@@ -10,6 +10,7 @@ use gpui::{
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use crate::core::types::{Annotation, AnnotationType, Color, Region};
 use crate::core::types::Point as QuillPoint;
@@ -353,6 +354,8 @@ pub struct EditorView {
     drag_state: Option<DragState>,
     /// Current drawing color
     current_color: Color,
+    /// Last modification time of the sidecar annotations file (for file watching)
+    last_sidecar_modified: Option<SystemTime>,
 }
 
 impl EditorView {
@@ -364,14 +367,52 @@ impl EditorView {
             active_tool: Tool::Rectangle,
             drag_state: None,
             current_color: Color::RED,
+            last_sidecar_modified: None,
         };
         // Load existing annotations if available
         view.load_annotations();
+        // Record initial modification time
+        view.update_sidecar_modified_time();
         view
     }
 
+    /// Update the stored modification time of the sidecar file
+    fn update_sidecar_modified_time(&mut self) {
+        if let Some(ref path) = self.file_path {
+            let sidecar_path = annotations_file_path(path);
+            if let Ok(metadata) = std::fs::metadata(&sidecar_path) {
+                self.last_sidecar_modified = metadata.modified().ok();
+            }
+        }
+    }
+
+    /// Check if the sidecar file has been modified and reload annotations if needed
+    fn check_and_reload_annotations(&mut self) {
+        let Some(ref path) = self.file_path else {
+            return;
+        };
+
+        let sidecar_path = annotations_file_path(path);
+
+        // Check if file exists and get modification time
+        let Ok(metadata) = std::fs::metadata(&sidecar_path) else {
+            return;
+        };
+
+        let Ok(current_modified) = metadata.modified() else {
+            return;
+        };
+
+        // Compare with stored modification time
+        if self.last_sidecar_modified != Some(current_modified) {
+            tracing::debug!("Sidecar file changed, reloading annotations");
+            self.load_annotations();
+            self.last_sidecar_modified = Some(current_modified);
+        }
+    }
+
     /// Save annotations to a sidecar JSON file
-    fn save_annotations(&self) {
+    fn save_annotations(&mut self) {
         let Some(ref image_path) = self.file_path else {
             return;
         };
@@ -393,6 +434,8 @@ impl EditorView {
                     tracing::warn!("Failed to save annotations to {:?}: {}", annotations_path, e);
                 } else {
                     tracing::debug!("Saved {} annotations to {:?}", self.annotations.len(), annotations_path);
+                    // Update modification time to avoid reloading our own changes
+                    self.update_sidecar_modified_time();
                 }
             }
             Err(e) => {
@@ -964,6 +1007,9 @@ impl EditorView {
 
 impl Render for EditorView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        // Check if sidecar file has changed and reload annotations if needed
+        self.check_and_reload_annotations();
+
         div()
             .size_full()
             .flex()

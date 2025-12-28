@@ -51,6 +51,9 @@ pub enum Command {
 
     /// Read annotations from a sidecar JSON file
     Annotations(AnnotationsArgs),
+
+    /// Add an annotation to an image
+    AddAnnotation(AddAnnotationArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -193,4 +196,42 @@ pub enum SortOrder {
     Date,
     Name,
     Size,
+}
+
+#[derive(Parser, Debug)]
+pub struct AddAnnotationArgs {
+    /// Image file to annotate
+    pub file: PathBuf,
+
+    /// Annotation type (rectangle, arrow, highlight, text, number, line, ellipse, blur)
+    #[arg(short = 't', long, default_value = "rectangle")]
+    pub annotation_type: String,
+
+    /// X coordinate
+    #[arg(short = 'x', long)]
+    pub x: f64,
+
+    /// Y coordinate
+    #[arg(short = 'y', long)]
+    pub y: f64,
+
+    /// Width (for shapes)
+    #[arg(short = 'w', long, default_value = "100")]
+    pub width: f64,
+
+    /// Height (for shapes)
+    #[arg(short = 'H', long, default_value = "50")]
+    pub height: f64,
+
+    /// Color in hex format
+    #[arg(short = 'c', long, default_value = "#ff0000")]
+    pub color: String,
+
+    /// Text content (for text annotations)
+    #[arg(long)]
+    pub text: Option<String>,
+
+    /// Number value (for number annotations)
+    #[arg(long)]
+    pub value: Option<u32>,
 }
