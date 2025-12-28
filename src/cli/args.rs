@@ -48,6 +48,19 @@ pub enum Command {
 
     /// Launch the GUI editor
     Gui(GuiArgs),
+
+    /// Read annotations from a sidecar JSON file
+    Annotations(AnnotationsArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct AnnotationsArgs {
+    /// Image file to read annotations for (reads from {file}.annotations.json)
+    pub file: PathBuf,
+
+    /// Output as raw JSON instead of formatted text
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Parser, Debug)]

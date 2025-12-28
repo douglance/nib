@@ -12,3 +12,4 @@ pub mod toolbar;
 pub mod window;
 
 pub use app::QuillApp;
+pub use app::{annotations_file_path, AnnotationsFile, AnnotationGeometry, SerializedAnnotation};

@@ -8,7 +8,7 @@ use crate::collab::{
     types::ClientType,
 };
 use crate::core::{qml, QuillImage, Result};
-use crate::gui::QuillApp;
+use crate::gui::{QuillApp, annotations_file_path, AnnotationsFile};
 use crate::storage::{self, export, index::Index, qml_file};
 use arboard::Clipboard;
 use chrono::{DateTime, Local};
@@ -517,6 +517,93 @@ pub fn run_gui(args: &GuiArgs) -> Result<()> {
     };
 
     app.run().map_err(|e| crate::core::QuillError::Other(e.to_string()))?;
+
+    Ok(())
+}
+
+/// Execute the annotations command (read annotations from sidecar JSON file)
+pub fn run_annotations(args: &AnnotationsArgs) -> Result<()> {
+    tracing::info!(?args, "Running annotations");
+
+    let annotations_path = annotations_file_path(&args.file);
+
+    if !annotations_path.exists() {
+        if args.json {
+            // Output empty JSON structure
+            let empty = AnnotationsFile::new(
+                &args.file.to_string_lossy(),
+                Vec::new(),
+            );
+            println!("{}", serde_json::to_string_pretty(&empty).unwrap_or_default());
+        } else {
+            println!("No annotations found for: {}", args.file.display());
+            println!("Annotations file would be at: {}", annotations_path.display());
+        }
+        return Ok(());
+    }
+
+    let json_content = std::fs::read_to_string(&annotations_path)?;
+
+    if args.json {
+        // Output raw JSON
+        print!("{}", json_content);
+    } else {
+        // Parse and format output
+        match serde_json::from_str::<AnnotationsFile>(&json_content) {
+            Ok(file) => {
+                println!("Annotations for: {}", args.file.display());
+                println!("Sidecar file: {}", annotations_path.display());
+                println!("Format version: {}", file.version);
+                println!("{}", "─".repeat(50));
+
+                if file.annotations.is_empty() {
+                    println!("No annotations found.");
+                } else {
+                    println!("Found {} annotation(s):\n", file.annotations.len());
+
+                    for (i, annotation) in file.annotations.iter().enumerate() {
+                        let geometry_info = match &annotation.geometry {
+                            crate::gui::AnnotationGeometry::Rectangle { x, y, width, height } => {
+                                format!("x={:.0}, y={:.0}, w={:.0}, h={:.0}", x, y, width, height)
+                            }
+                            crate::gui::AnnotationGeometry::Line { start_x, start_y, end_x, end_y } => {
+                                format!("({:.0},{:.0}) -> ({:.0},{:.0})", start_x, start_y, end_x, end_y)
+                            }
+                            crate::gui::AnnotationGeometry::Ellipse { center_x, center_y, radius_x, radius_y } => {
+                                format!("center=({:.0},{:.0}), rx={:.0}, ry={:.0}", center_x, center_y, radius_x, radius_y)
+                            }
+                            crate::gui::AnnotationGeometry::Point { x, y, value, content } => {
+                                let mut info = format!("({:.0},{:.0})", x, y);
+                                if let Some(v) = value {
+                                    info.push_str(&format!(" value={}", v));
+                                }
+                                if let Some(c) = content {
+                                    info.push_str(&format!(" \"{}\"", c));
+                                }
+                                info
+                            }
+                        };
+
+                        println!(
+                            "  {}. [{}] {} {} [{}]",
+                            i + 1,
+                            annotation.id,
+                            annotation.annotation_type.to_uppercase(),
+                            geometry_info,
+                            annotation.color
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                println!("Error parsing annotations file: {}", e);
+                return Err(crate::core::QuillError::Other(format!(
+                    "Failed to parse annotations: {}",
+                    e
+                )));
+            }
+        }
+    }
 
     Ok(())
 }
