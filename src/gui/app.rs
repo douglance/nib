@@ -356,11 +356,34 @@ pub struct EditorView {
     current_color: Color,
     /// Last modification time of the sidecar annotations file (for file watching)
     last_sidecar_modified: Option<SystemTime>,
+    /// Original image width in pixels
+    image_width: u32,
+    /// Original image height in pixels
+    image_height: u32,
+    /// Canvas display width (estimated)
+    canvas_width: f32,
+    /// Canvas display height (estimated)
+    canvas_height: f32,
 }
 
 impl EditorView {
     /// Create a new editor view
     pub fn new(file_path: Option<PathBuf>) -> Self {
+        // Load image dimensions if file path is provided
+        let (image_width, image_height) = if let Some(ref path) = file_path {
+            if let Ok(img) = image::open(path) {
+                (img.width(), img.height())
+            } else {
+                (1920, 1080) // default fallback
+            }
+        } else {
+            (1920, 1080) // default for no image
+        };
+
+        // Estimate canvas size (window 1200x800 minus toolbar ~44px and statusbar ~22px)
+        let canvas_width = 1200.0_f32;
+        let canvas_height = 734.0_f32; // 800 - 44 - 22
+
         let mut view = Self {
             file_path,
             annotations: Vec::new(),
@@ -368,6 +391,10 @@ impl EditorView {
             drag_state: None,
             current_color: Color::RED,
             last_sidecar_modified: None,
+            image_width,
+            image_height,
+            canvas_width,
+            canvas_height,
         };
         // Load existing annotations if available
         view.load_annotations();
@@ -384,6 +411,54 @@ impl EditorView {
                 self.last_sidecar_modified = metadata.modified().ok();
             }
         }
+    }
+
+    /// Calculate the scale factor and offset for rendering annotations
+    /// Returns (scale, offset_x, offset_y) where scale is uniform and offsets center the image
+    fn calculate_scale_and_offset(&self) -> (f32, f32, f32) {
+        let scale_x = self.canvas_width / self.image_width as f32;
+        let scale_y = self.canvas_height / self.image_height as f32;
+        let scale = scale_x.min(scale_y);
+
+        // Calculate offset to center the image
+        let scaled_img_width = self.image_width as f32 * scale;
+        let scaled_img_height = self.image_height as f32 * scale;
+        let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
+        let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
+
+        (scale, offset_x, offset_y)
+    }
+
+    /// Scale image coordinates to screen coordinates for rendering
+    /// Takes (x, y, w, h) in image pixels and returns (sx, sy, sw, sh) in screen pixels
+    fn scale_coords(&self, x: f64, y: f64, w: f64, h: f64) -> (f32, f32, f32, f32) {
+        let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
+
+        (
+            (x as f32 * scale) + offset_x,
+            (y as f32 * scale) + offset_y,
+            w as f32 * scale,
+            h as f32 * scale,
+        )
+    }
+
+    /// Scale a single point from image coordinates to screen coordinates
+    fn scale_point(&self, x: f64, y: f64) -> (f32, f32) {
+        let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
+        (
+            (x as f32 * scale) + offset_x,
+            (y as f32 * scale) + offset_y,
+        )
+    }
+
+    /// Convert screen coordinates back to image coordinates for annotation creation
+    fn screen_to_image_coords(&self, screen_x: f32, screen_y: f32) -> (f64, f64) {
+        let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
+
+        let image_x = (screen_x - offset_x) / scale;
+        let image_y = (screen_y - offset_y) / scale;
+
+        (image_x as f64, image_y as f64)
     }
 
     /// Check if the sidecar file has been modified and reload annotations if needed
@@ -488,21 +563,25 @@ impl EditorView {
         match self.active_tool {
             Tool::Rectangle | Tool::Arrow | Tool::Line | Tool::Ellipse | Tool::Highlight | Tool::Blur => {
                 let position = event.position;
-                let x: f32 = position.x.into();
-                let y: f32 = position.y.into();
+                let screen_x: f32 = position.x.into();
+                let screen_y: f32 = position.y.into();
+                // Convert screen coordinates to image coordinates
+                let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
                 self.drag_state = Some(DragState {
                     tool: self.active_tool,
-                    start_point: QuillPoint::new(x as f64, y as f64),
-                    current_point: QuillPoint::new(x as f64, y as f64),
+                    start_point: QuillPoint::new(img_x, img_y),
+                    current_point: QuillPoint::new(img_x, img_y),
                 });
                 cx.notify();
             }
             Tool::Text | Tool::Number => {
                 // For text/number, we place at click position
                 let position = event.position;
-                let x: f32 = position.x.into();
-                let y: f32 = position.y.into();
-                let point = QuillPoint::new(x as f64, y as f64);
+                let screen_x: f32 = position.x.into();
+                let screen_y: f32 = position.y.into();
+                // Convert screen coordinates to image coordinates
+                let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
+                let point = QuillPoint::new(img_x, img_y);
 
                 match self.active_tool {
                     Tool::Text => {
@@ -548,11 +627,16 @@ impl EditorView {
 
     /// Handle mouse move event on canvas
     fn handle_mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        if let Some(ref mut drag_state) = self.drag_state {
+        if self.drag_state.is_some() {
             let position = event.position;
-            let x: f32 = position.x.into();
-            let y: f32 = position.y.into();
-            drag_state.current_point = QuillPoint::new(x as f64, y as f64);
+            let screen_x: f32 = position.x.into();
+            let screen_y: f32 = position.y.into();
+            // Convert screen coordinates to image coordinates
+            let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
+            // Now we can safely update the drag state
+            if let Some(ref mut drag_state) = self.drag_state {
+                drag_state.current_point = QuillPoint::new(img_x, img_y);
+            }
             cx.notify();
         }
     }
@@ -698,14 +782,19 @@ impl EditorView {
             color.b as u32
         );
 
+        // Get scale factor for stroke width scaling
+        let (scale, _, _) = self.calculate_scale_and_offset();
+
         match &annotation.annotation_type {
             AnnotationType::Box { region, filled, corner_radius, .. } => {
+                // Scale coordinates from image space to screen space
+                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
                 let mut element = div()
                     .absolute()
-                    .left(px(region.x as f32))
-                    .top(px(region.y as f32))
-                    .w(px(region.width as f32))
-                    .h(px(region.height as f32))
+                    .left(px(sx))
+                    .top(px(sy))
+                    .w(px(sw))
+                    .h(px(sh))
                     .border_2()
                     .border_color(border_color);
 
@@ -722,44 +811,55 @@ impl EditorView {
             AnnotationType::Arrow { start, end, .. } => {
                 // For arrows, we render a simple line indicator
                 // GPUI doesn't have native line drawing, so we use a rotated div
-                let dx = end.x - start.x;
-                let dy = end.y - start.y;
+                // Scale start and end points
+                let (start_sx, start_sy) = self.scale_point(start.x, start.y);
+                let (end_sx, end_sy) = self.scale_point(end.x, end.y);
+                let dx = end_sx - start_sx;
+                let dy = end_sy - start_sy;
                 let length = (dx * dx + dy * dy).sqrt();
-                let min_x = start.x.min(end.x);
-                let min_y = start.y.min(end.y);
+                let min_x = start_sx.min(end_sx);
+                let min_y = start_sy.min(end_sy);
 
                 div()
                     .absolute()
-                    .left(px(min_x as f32))
-                    .top(px(min_y as f32))
-                    .w(px(length.max(2.0) as f32))
+                    .left(px(min_x))
+                    .top(px(min_y))
+                    .w(px(length.max(2.0)))
                     .h(px(3.))
                     .bg(border_color)
                     .into_any_element()
             }
             AnnotationType::Line { start, end, .. } => {
-                let dx = end.x - start.x;
-                let dy = end.y - start.y;
+                // Scale start and end points
+                let (start_sx, start_sy) = self.scale_point(start.x, start.y);
+                let (end_sx, end_sy) = self.scale_point(end.x, end.y);
+                let dx = end_sx - start_sx;
+                let dy = end_sy - start_sy;
                 let length = (dx * dx + dy * dy).sqrt();
-                let min_x = start.x.min(end.x);
-                let min_y = start.y.min(end.y);
+                let min_x = start_sx.min(end_sx);
+                let min_y = start_sy.min(end_sy);
 
                 div()
                     .absolute()
-                    .left(px(min_x as f32))
-                    .top(px(min_y as f32))
-                    .w(px(length.max(2.0) as f32))
+                    .left(px(min_x))
+                    .top(px(min_y))
+                    .w(px(length.max(2.0)))
                     .h(px(2.))
                     .bg(border_color)
                     .into_any_element()
             }
             AnnotationType::Ellipse { center, radius_x, radius_y, filled, .. } => {
+                // Scale center and radii
+                let (center_sx, center_sy) = self.scale_point(center.x, center.y);
+                let scaled_radius_x = *radius_x as f32 * scale;
+                let scaled_radius_y = *radius_y as f32 * scale;
+
                 let mut element = div()
                     .absolute()
-                    .left(px((center.x - radius_x) as f32))
-                    .top(px((center.y - radius_y) as f32))
-                    .w(px((*radius_x * 2.0) as f32))
-                    .h(px((*radius_y * 2.0) as f32))
+                    .left(px(center_sx - scaled_radius_x))
+                    .top(px(center_sy - scaled_radius_y))
+                    .w(px(scaled_radius_x * 2.0))
+                    .h(px(scaled_radius_y * 2.0))
                     .border_2()
                     .border_color(border_color)
                     .rounded_full();
@@ -771,22 +871,30 @@ impl EditorView {
                 element.into_any_element()
             }
             AnnotationType::Text { position, content, font_size, .. } => {
+                // Scale position and font size
+                let (sx, sy) = self.scale_point(position.x, position.y);
+                let scaled_font_size = *font_size as f32 * scale;
+
                 div()
                     .absolute()
-                    .left(px(position.x as f32))
-                    .top(px(position.y as f32))
+                    .left(px(sx))
+                    .top(px(sy))
                     .text_color(border_color)
-                    .text_size(px(*font_size as f32))
+                    .text_size(px(scaled_font_size))
                     .child(content.clone())
                     .into_any_element()
             }
             AnnotationType::Number { position, value, radius } => {
+                // Scale position and radius
+                let (sx, sy) = self.scale_point(position.x, position.y);
+                let scaled_radius = *radius as f32 * scale;
+
                 div()
                     .absolute()
-                    .left(px((position.x - radius) as f32))
-                    .top(px((position.y - radius) as f32))
-                    .w(px((*radius * 2.0) as f32))
-                    .h(px((*radius * 2.0) as f32))
+                    .left(px(sx - scaled_radius))
+                    .top(px(sy - scaled_radius))
+                    .w(px(scaled_radius * 2.0))
+                    .h(px(scaled_radius * 2.0))
                     .rounded_full()
                     .bg(border_color)
                     .flex()
@@ -805,34 +913,43 @@ impl EditorView {
                     0x60  // Semi-transparent
                 );
 
+                // Scale coordinates
+                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
+
                 div()
                     .absolute()
-                    .left(px(region.x as f32))
-                    .top(px(region.y as f32))
-                    .w(px(region.width as f32))
-                    .h(px(region.height as f32))
+                    .left(px(sx))
+                    .top(px(sy))
+                    .w(px(sw))
+                    .h(px(sh))
                     .bg(highlight_color)
                     .into_any_element()
             }
             AnnotationType::Blur { region, .. } => {
+                // Scale coordinates
+                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
+
                 // Blur is represented as a dark semi-transparent overlay
                 div()
                     .absolute()
-                    .left(px(region.x as f32))
-                    .top(px(region.y as f32))
-                    .w(px(region.width as f32))
-                    .h(px(region.height as f32))
+                    .left(px(sx))
+                    .top(px(sy))
+                    .w(px(sw))
+                    .h(px(sh))
                     .bg(rgba(0x00000080))
                     .into_any_element()
             }
             AnnotationType::Crop { region } => {
+                // Scale coordinates
+                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
+
                 // Crop region shown as dashed border
                 div()
                     .absolute()
-                    .left(px(region.x as f32))
-                    .top(px(region.y as f32))
-                    .w(px(region.width as f32))
-                    .h(px(region.height as f32))
+                    .left(px(sx))
+                    .top(px(sy))
+                    .w(px(sw))
+                    .h(px(sh))
                     .border_2()
                     .border_color(rgb(0x00ff00))
                     .into_any_element()
@@ -843,6 +960,7 @@ impl EditorView {
     /// Render the in-progress drag preview
     fn render_drag_preview(&self) -> Option<impl IntoElement> {
         let drag_state = self.drag_state.as_ref()?;
+        // drag_state stores image coordinates, convert to screen coordinates for display
         let start = drag_state.start_point;
         let end = drag_state.current_point;
 
@@ -852,45 +970,57 @@ impl EditorView {
         let element = match drag_state.tool {
             Tool::Rectangle | Tool::Highlight | Tool::Blur => {
                 let region = Region::from_points(start, end);
+                // Scale region to screen coordinates
+                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
                 div()
                     .absolute()
-                    .left(px(region.x as f32))
-                    .top(px(region.y as f32))
-                    .w(px(region.width as f32))
-                    .h(px(region.height as f32))
+                    .left(px(sx))
+                    .top(px(sy))
+                    .w(px(sw))
+                    .h(px(sh))
                     .border_2()
                     .border_color(preview_color)
                     .bg(preview_bg)
                     .into_any_element()
             }
             Tool::Arrow | Tool::Line => {
-                let dx = end.x - start.x;
-                let dy = end.y - start.y;
+                // Scale start and end points to screen coordinates
+                let (start_sx, start_sy) = self.scale_point(start.x, start.y);
+                let (end_sx, end_sy) = self.scale_point(end.x, end.y);
+                let dx = end_sx - start_sx;
+                let dy = end_sy - start_sy;
                 let length = (dx * dx + dy * dy).sqrt();
-                let min_x = start.x.min(end.x);
-                let min_y = start.y.min(end.y);
+                let min_x = start_sx.min(end_sx);
+                let min_y = start_sy.min(end_sy);
 
                 div()
                     .absolute()
-                    .left(px(min_x as f32))
-                    .top(px(min_y as f32))
-                    .w(px(length.max(2.0) as f32))
+                    .left(px(min_x))
+                    .top(px(min_y))
+                    .w(px(length.max(2.0)))
                     .h(px(3.))
                     .bg(preview_color)
                     .into_any_element()
             }
             Tool::Ellipse => {
+                // Calculate ellipse in image coordinates
                 let center_x = (start.x + end.x) / 2.0;
                 let center_y = (start.y + end.y) / 2.0;
                 let radius_x = (end.x - start.x).abs() / 2.0;
                 let radius_y = (end.y - start.y).abs() / 2.0;
 
+                // Scale to screen coordinates
+                let (center_sx, center_sy) = self.scale_point(center_x, center_y);
+                let (scale, _, _) = self.calculate_scale_and_offset();
+                let scaled_radius_x = radius_x as f32 * scale;
+                let scaled_radius_y = radius_y as f32 * scale;
+
                 div()
                     .absolute()
-                    .left(px((center_x - radius_x) as f32))
-                    .top(px((center_y - radius_y) as f32))
-                    .w(px((radius_x * 2.0) as f32))
-                    .h(px((radius_y * 2.0) as f32))
+                    .left(px(center_sx - scaled_radius_x))
+                    .top(px(center_sy - scaled_radius_y))
+                    .w(px(scaled_radius_x * 2.0))
+                    .h(px(scaled_radius_y * 2.0))
                     .border_2()
                     .border_color(preview_color)
                     .rounded_full()
@@ -1006,7 +1136,14 @@ impl EditorView {
 }
 
 impl Render for EditorView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        // Update canvas dimensions from actual window size
+        let viewport = window.viewport_size();
+        let viewport_width: f32 = viewport.width.into();
+        let viewport_height: f32 = viewport.height.into();
+        self.canvas_width = viewport_width;
+        self.canvas_height = viewport_height - 66.0; // Subtract toolbar (44px) + status bar (22px)
+
         // Check if sidecar file has changed and reload annotations if needed
         self.check_and_reload_annotations();
 
