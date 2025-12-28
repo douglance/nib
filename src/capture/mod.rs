@@ -4,10 +4,14 @@
 //! - Full screen capture
 //! - Region selection capture
 //! - Window capture (platform-specific)
+//! - Tiled capture for large images
 
 pub mod region;
 pub mod screen;
+pub mod tiled;
 pub mod window;
+
+pub use tiled::{generate_tiles, TiledCapture};
 
 use crate::core::{CaptureError, ImageSource, QuillImage};
 use std::time::SystemTime;

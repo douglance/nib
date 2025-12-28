@@ -34,6 +34,7 @@ pub mod cli;
 pub mod collab;
 pub mod core;
 pub mod gui;
+pub mod ocr;
 pub mod storage;
 
 /// Re-export commonly used types
