@@ -3,11 +3,11 @@
 //! This module provides the main GPUI-based graphical interface for Quill.
 
 use gpui::{
-    div, img, px, rgb, rgba, size, svg, App, AppContext, Application, AssetSource, Bounds, Context,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Point, Render,
-    Result as GpuiResult, SharedString, Size, StatefulInteractiveElement, Styled, StyledImage,
-    Window, WindowBounds, WindowOptions,
+    canvas, div, img, point, px, rgb, rgba, size, svg, App, AppContext, Application, AssetSource,
+    Bounds, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Point,
+    Render, Result as GpuiResult, SharedString, Size, StatefulInteractiveElement, Styled,
+    StyledImage, Window, WindowBounds, WindowOptions,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -43,6 +43,10 @@ impl AssetSource for Assets {
 use crate::core::types::{Annotation, AnnotationId, AnnotationType, Color, Region};
 use crate::core::types::Point as QuillPoint;
 use crate::gui::toolbar::Tool;
+use crate::gui::tools::{
+    Modifiers, MouseButton as ToolMouseButton, ToolContext, ToolEvent, ToolId, ToolManager,
+    ToolMode, ToolPreview, ToolResult,
+};
 
 /// Version string for the annotations file format
 const ANNOTATIONS_FILE_VERSION: &str = "1.0";
@@ -424,6 +428,8 @@ pub struct EditorView {
     focus_handle: FocusHandle,
     /// Text input state for creating/editing text annotations
     text_input_state: Option<TextInputState>,
+    /// Tool manager for trait-based tool dispatch
+    tool_manager: ToolManager,
 }
 
 impl EditorView {
@@ -460,6 +466,7 @@ impl EditorView {
             canvas_height,
             focus_handle,
             text_input_state: None,
+            tool_manager: ToolManager::with_all_tools(),
         };
         // Load existing annotations if available
         view.load_annotations();
@@ -510,13 +517,11 @@ impl EditorView {
     }
 
     /// Scale a single point from image coordinates to canvas coordinates
-    /// Note: Y is adjusted by TOOLBAR_HEIGHT because annotations are positioned
-    /// absolutely within the canvas, but the canvas itself sits below the toolbar
     fn scale_point(&self, x: f64, y: f64) -> (f32, f32) {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
         (
             (x as f32 * scale) + offset_x,
-            (y as f32 * scale) + offset_y - TOOLBAR_HEIGHT,
+            (y as f32 * scale) + offset_y,
         )
     }
 
@@ -532,6 +537,85 @@ impl EditorView {
         let image_y = (canvas_y - offset_y) / scale;
 
         (image_x as f64, image_y as f64)
+    }
+
+    /// Build a ToolContext for tool event handling
+    fn build_tool_context(&self) -> ToolContext<'_> {
+        let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
+        ToolContext {
+            color: self.current_color,
+            stroke_width: 2.0,
+            fill_enabled: false,
+            image_size: (self.image_width, self.image_height),
+            scale,
+            offset: (offset_x, offset_y),
+            annotations: &self.annotations,
+            min_drag_distance: 5.0,
+        }
+    }
+
+    /// Process a ToolResult and update EditorView state accordingly
+    fn process_tool_result(&mut self, result: ToolResult, cx: &mut Context<Self>) {
+        match result {
+            ToolResult::Created(annotation) => {
+                self.annotations.push(annotation);
+                self.save_annotations();
+                cx.notify();
+            }
+            ToolResult::Updated(id) => {
+                // Simple update without content - tool should handle internally
+                tracing::debug!("Annotation {:?} updated", id);
+                cx.notify();
+            }
+            ToolResult::UpdatedText(id, new_content) => {
+                // Update text annotation content
+                if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
+                    if let AnnotationType::Text { ref mut content, .. } = ann.annotation_type {
+                        *content = new_content;
+                    }
+                }
+                self.save_annotations();
+                cx.notify();
+            }
+            ToolResult::Deleted(id) => {
+                self.annotations.retain(|a| a.id != id);
+                self.save_annotations();
+                cx.notify();
+            }
+            ToolResult::EnterMode(mode) => {
+                match mode {
+                    ToolMode::TextInput { position, initial_content, editing_annotation_id } => {
+                        // Convert image position to screen position
+                        let (screen_x, screen_y) = self.scale_point(position.x, position.y);
+                        // Adjust for font height (text is drawn with baseline at position)
+                        let (scale, _, _) = self.calculate_scale_and_offset();
+                        let adjusted_screen_y = screen_y + (16.0 * scale); // font_size * scale
+                        self.text_input_state = Some(TextInputState {
+                            screen_x,
+                            screen_y: adjusted_screen_y,
+                            content: initial_content,
+                            editing_annotation_id,
+                        });
+                    }
+                }
+                cx.notify();
+            }
+            ToolResult::ExitMode => {
+                self.text_input_state = None;
+                cx.notify();
+            }
+            ToolResult::Batch(results) => {
+                for r in results {
+                    self.process_tool_result(r, cx);
+                }
+            }
+            ToolResult::Handled => {
+                cx.notify();
+            }
+            ToolResult::Ignored => {
+                // Nothing to do
+            }
+        }
     }
 
     /// Check if the sidecar file has been modified and reload annotations if needed
@@ -935,44 +1019,85 @@ impl EditorView {
                 element.into_any_element()
             }
             AnnotationType::Arrow { start, end, .. } => {
-                // For arrows, we render a simple line indicator
-                // GPUI doesn't have native line drawing, so we use a rotated div
-                // Scale start and end points
+                // Scale start and end points to screen coordinates
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
+
+                // Calculate arrowhead points
                 let dx = end_sx - start_sx;
                 let dy = end_sy - start_sy;
-                let length = (dx * dx + dy * dy).sqrt();
-                let min_x = start_sx.min(end_sx);
-                let min_y = start_sy.min(end_sy);
+                let angle = dy.atan2(dx);
+                let arrow_size: f32 = 12.0;
+                let arrow_angle: f32 = 0.5; // ~28 degrees
 
-                div()
-                    .absolute()
-                    .left(px(min_x))
-                    .top(px(min_y))
-                    .w(px(length.max(2.0)))
-                    .h(px(3.))
-                    .bg(border_color)
-                    .into_any_element()
+                let ax1 = end_sx - arrow_size * (angle + arrow_angle).cos();
+                let ay1 = end_sy - arrow_size * (angle + arrow_angle).sin();
+                let ax2 = end_sx - arrow_size * (angle - arrow_angle).cos();
+                let ay2 = end_sy - arrow_size * (angle - arrow_angle).sin();
+
+                canvas(
+                    move |_bounds, _window, _cx| {
+                        // Prepaint: return line data for paint phase
+                        (
+                            point(px(start_sx), px(start_sy)),
+                            point(px(end_sx), px(end_sy)),
+                            point(px(ax1), px(ay1)),
+                            point(px(ax2), px(ay2)),
+                        )
+                    },
+                    move |_bounds, (p_start, p_end, p_arrow1, p_arrow2), window, _cx| {
+                        // Paint: draw line from start to end using PathBuilder stroke
+                        let mut builder = PathBuilder::stroke(px(2.0));
+                        builder.move_to(p_start);
+                        builder.line_to(p_end);
+                        if let Ok(path) = builder.build() {
+                            window.paint_path(path, border_color);
+                        }
+
+                        // Draw arrowhead lines
+                        let mut arrow_builder1 = PathBuilder::stroke(px(2.0));
+                        arrow_builder1.move_to(p_end);
+                        arrow_builder1.line_to(p_arrow1);
+                        if let Ok(path) = arrow_builder1.build() {
+                            window.paint_path(path, border_color);
+                        }
+
+                        let mut arrow_builder2 = PathBuilder::stroke(px(2.0));
+                        arrow_builder2.move_to(p_end);
+                        arrow_builder2.line_to(p_arrow2);
+                        if let Ok(path) = arrow_builder2.build() {
+                            window.paint_path(path, border_color);
+                        }
+                    },
+                )
+                .size_full()
+                .into_any_element()
             }
             AnnotationType::Line { start, end, .. } => {
-                // Scale start and end points
+                // Scale start and end points to screen coordinates
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
-                let dx = end_sx - start_sx;
-                let dy = end_sy - start_sy;
-                let length = (dx * dx + dy * dy).sqrt();
-                let min_x = start_sx.min(end_sx);
-                let min_y = start_sy.min(end_sy);
 
-                div()
-                    .absolute()
-                    .left(px(min_x))
-                    .top(px(min_y))
-                    .w(px(length.max(2.0)))
-                    .h(px(2.))
-                    .bg(border_color)
-                    .into_any_element()
+                canvas(
+                    move |_bounds, _window, _cx| {
+                        // Prepaint: return line endpoints for paint phase
+                        (
+                            point(px(start_sx), px(start_sy)),
+                            point(px(end_sx), px(end_sy)),
+                        )
+                    },
+                    move |_bounds, (p_start, p_end), window, _cx| {
+                        // Paint: draw line from start to end using PathBuilder stroke
+                        let mut builder = PathBuilder::stroke(px(2.0));
+                        builder.move_to(p_start);
+                        builder.line_to(p_end);
+                        if let Ok(path) = builder.build() {
+                            window.paint_path(path, border_color);
+                        }
+                    },
+                )
+                .size_full()
+                .into_any_element()
             }
             AnnotationType::Ellipse { center, radius_x, radius_y, filled, .. } => {
                 // Scale center and radii
@@ -1113,20 +1238,25 @@ impl EditorView {
                 // Scale start and end points to screen coordinates
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
-                let dx = end_sx - start_sx;
-                let dy = end_sy - start_sy;
-                let length = (dx * dx + dy * dy).sqrt();
-                let min_x = start_sx.min(end_sx);
-                let min_y = start_sy.min(end_sy);
 
-                div()
-                    .absolute()
-                    .left(px(min_x))
-                    .top(px(min_y))
-                    .w(px(length.max(2.0)))
-                    .h(px(3.))
-                    .bg(preview_color)
-                    .into_any_element()
+                canvas(
+                    move |_bounds, _window, _cx| {
+                        (
+                            point(px(start_sx), px(start_sy)),
+                            point(px(end_sx), px(end_sy)),
+                        )
+                    },
+                    move |_bounds, (p_start, p_end), window, _cx| {
+                        let mut builder = PathBuilder::stroke(px(2.0));
+                        builder.move_to(p_start);
+                        builder.line_to(p_end);
+                        if let Ok(path) = builder.build() {
+                            window.paint_path(path, preview_color);
+                        }
+                    },
+                )
+                .size_full()
+                .into_any_element()
             }
             Tool::Ellipse => {
                 // Calculate ellipse in image coordinates
