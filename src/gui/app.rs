@@ -47,6 +47,7 @@ use crate::gui::tools::{
     Modifiers, MouseButton as ToolMouseButton, TextTool, ToolContext, ToolEvent, ToolId,
     ToolManager, ToolMode, ToolPreview, ToolResult,
 };
+use crate::storage::nib_file::NibFile;
 
 /// Version string for the annotations file format
 const ANNOTATIONS_FILE_VERSION: &str = "1.0";
@@ -393,7 +394,7 @@ impl Default for NibApp {
 
 /// Main editor view that displays the image and annotations
 pub struct EditorView {
-    /// Path to the image file being edited
+    /// Path to the image file being edited (for .nib files, this is the extracted temp image)
     file_path: Option<PathBuf>,
     /// List of completed annotations
     annotations: Vec<Annotation>,
@@ -420,20 +421,81 @@ pub struct EditorView {
     text_input_state: Option<TextInputState>,
     /// Tool manager for trait-based tool dispatch
     tool_manager: ToolManager,
+    /// NibFile handle for .nib format (SQLite-based storage)
+    nib_file: Option<NibFile>,
+    /// Original .nib file path (file_path points to extracted temp image for rendering)
+    /// Kept for future use (e.g., window title, status bar display)
+    #[allow(dead_code)]
+    nib_path: Option<PathBuf>,
+    /// Last annotation modification timestamp in .nib file (for file watching)
+    last_nib_modified: Option<i64>,
 }
 
 impl EditorView {
     /// Create a new editor view
     pub fn new(file_path: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
-        // Load image dimensions if file path is provided
-        let (image_width, image_height) = if let Some(ref path) = file_path {
-            if let Ok(img) = image::open(path) {
-                (img.width(), img.height())
+        // Check if this is a .nib file
+        let is_nib_file = file_path
+            .as_ref()
+            .map(|p| p.extension().map(|e| e == "nib").unwrap_or(false))
+            .unwrap_or(false);
+
+        // For .nib files, we need to extract the image and open the NibFile
+        let (actual_file_path, nib_file, nib_path, image_width, image_height) = if is_nib_file {
+            if let Some(ref path) = file_path {
+                match NibFile::open(path) {
+                    Ok(nib) => {
+                        match nib.get_image() {
+                            Ok((image_data, image_info)) => {
+                                // Create a temp file for the extracted image
+                                let temp_dir = std::env::temp_dir();
+                                let temp_filename = format!(
+                                    "nib_extracted_{}.{}",
+                                    std::process::id(),
+                                    image_info.format
+                                );
+                                let temp_path = temp_dir.join(temp_filename);
+
+                                // Write image data to temp file
+                                if let Err(e) = std::fs::write(&temp_path, &image_data) {
+                                    tracing::error!("Failed to write extracted image to temp file: {}", e);
+                                    (file_path.clone(), None, None, 1920, 1080)
+                                } else {
+                                    (
+                                        Some(temp_path),
+                                        Some(nib),
+                                        file_path.clone(),
+                                        image_info.width,
+                                        image_info.height,
+                                    )
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to get image from .nib file: {}", e);
+                                (file_path.clone(), None, None, 1920, 1080)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to open .nib file: {}", e);
+                        (file_path.clone(), None, None, 1920, 1080)
+                    }
+                }
             } else {
-                (1920, 1080) // default fallback
+                (None, None, None, 1920, 1080)
             }
         } else {
-            (1920, 1080) // default for no image
+            // Standard image file - load dimensions directly
+            let (width, height) = if let Some(ref path) = file_path {
+                if let Ok(img) = image::open(path) {
+                    (img.width(), img.height())
+                } else {
+                    (1920, 1080) // default fallback
+                }
+            } else {
+                (1920, 1080) // default for no image
+            };
+            (file_path.clone(), None, None, width, height)
         };
 
         // Estimate canvas size (window 1200x800 minus toolbar ~44px and statusbar ~22px)
@@ -444,7 +506,7 @@ impl EditorView {
         let focus_handle = cx.focus_handle();
 
         let mut view = Self {
-            file_path,
+            file_path: actual_file_path,
             annotations: Vec::new(),
             active_tool: Tool::Rectangle,
             current_color: Color::RED,
@@ -456,11 +518,18 @@ impl EditorView {
             focus_handle,
             text_input_state: None,
             tool_manager: ToolManager::with_all_tools(),
+            nib_file,
+            nib_path,
+            last_nib_modified: None,
         };
         // Load existing annotations if available
         view.load_annotations();
         // Record initial modification time
         view.update_sidecar_modified_time();
+        // For .nib files, also record the annotation modification timestamp
+        if view.nib_file.is_some() {
+            view.update_nib_modified_time();
+        }
         view
     }
 
@@ -470,6 +539,15 @@ impl EditorView {
             let sidecar_path = annotations_file_path(path);
             if let Ok(metadata) = std::fs::metadata(&sidecar_path) {
                 self.last_sidecar_modified = metadata.modified().ok();
+            }
+        }
+    }
+
+    /// Update the stored modification time for .nib file annotations
+    fn update_nib_modified_time(&mut self) {
+        if let Some(ref nib) = self.nib_file {
+            if let Ok(Some(modified_at)) = nib.latest_annotation_modified_at() {
+                self.last_nib_modified = Some(modified_at);
             }
         }
     }
@@ -703,8 +781,29 @@ impl EditorView {
         }
     }
 
-    /// Check if the sidecar file has been modified and reload annotations if needed
+    /// Check if the sidecar file or .nib file has been modified and reload annotations if needed
     fn check_and_reload_annotations(&mut self) {
+        // For .nib files, check the annotation modification timestamp
+        if let Some(ref nib) = self.nib_file {
+            match nib.latest_annotation_modified_at() {
+                Ok(Some(current_modified)) => {
+                    if self.last_nib_modified != Some(current_modified) {
+                        tracing::debug!(".nib file changed, reloading annotations");
+                        self.load_annotations();
+                        self.last_nib_modified = Some(current_modified);
+                    }
+                }
+                Ok(None) => {
+                    // No annotations yet, nothing to reload
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to check .nib modification time: {}", e);
+                }
+            }
+            return;
+        }
+
+        // For regular image files, check sidecar modification time
         let Some(ref path) = self.file_path else {
             return;
         };
@@ -728,8 +827,47 @@ impl EditorView {
         }
     }
 
-    /// Save annotations to a sidecar JSON file
+    /// Save annotations to a sidecar JSON file or .nib file
     fn save_annotations(&mut self) {
+        // For .nib files, save to NibFile
+        if let Some(ref nib) = self.nib_file {
+            // Strategy: delete all existing annotations, then add all current ones
+            // This is simpler than tracking individual changes and ensures consistency
+
+            // First, get existing annotation IDs and delete them
+            match nib.list_annotations() {
+                Ok(existing) => {
+                    for ann in existing {
+                        let id = format!("a{}", ann.id.0);
+                        if let Err(e) = nib.delete_annotation(&id) {
+                            tracing::warn!("Failed to delete annotation {}: {}", id, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to list existing annotations: {}", e);
+                }
+            }
+
+            // Now add all current annotations
+            for annotation in &self.annotations {
+                if let Err(e) = nib.add_annotation(annotation) {
+                    tracing::warn!("Failed to add annotation: {}", e);
+                }
+            }
+
+            // Flush changes to disk
+            if let Err(e) = nib.save() {
+                tracing::warn!("Failed to save .nib file: {}", e);
+            } else {
+                tracing::debug!("Saved {} annotations to .nib file", self.annotations.len());
+                // Update modification time to avoid reloading our own changes
+                self.update_nib_modified_time();
+            }
+            return;
+        }
+
+        // For regular image files, save to sidecar JSON
         let Some(ref image_path) = self.file_path else {
             return;
         };
@@ -761,8 +899,23 @@ impl EditorView {
         }
     }
 
-    /// Load annotations from a sidecar JSON file
+    /// Load annotations from a sidecar JSON file or .nib file
     fn load_annotations(&mut self) {
+        // For .nib files, load from NibFile
+        if let Some(ref nib) = self.nib_file {
+            match nib.list_annotations() {
+                Ok(annotations) => {
+                    self.annotations = annotations;
+                    tracing::info!("Loaded {} annotations from .nib file", self.annotations.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load annotations from .nib file: {}", e);
+                }
+            }
+            return;
+        }
+
+        // For regular image files, load from sidecar JSON
         let Some(ref image_path) = self.file_path else {
             return;
         };

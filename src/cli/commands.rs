@@ -9,7 +9,9 @@ use crate::collab::{
 };
 use crate::core::{qml, NibImage, Result};
 use crate::gui::{NibApp, annotations_file_path, AnnotationsFile};
-use crate::storage::{self, export, index::Index, qml_file};
+use crate::storage::{
+    self, convert, export, index::Index, nib_file::NibFile, qml_file, sessions::SessionRegistry,
+};
 use arboard::Clipboard;
 use chrono::{DateTime, Local};
 use std::path::PathBuf;
@@ -419,6 +421,14 @@ pub fn run_list(args: &ListArgs) -> Result<()> {
     let index = Index::open()?;
     let entries = index.list_recent(args.limit)?;
 
+    // Load session registry to check which files are open
+    let registry = SessionRegistry::load()?;
+    let active_sessions = registry.list_active()?;
+    let open_paths: std::collections::HashSet<PathBuf> = active_sessions
+        .iter()
+        .map(|s| s.path.clone())
+        .collect();
+
     if entries.is_empty() {
         println!("No captures found.");
         println!("Use 'nib capture' to take a screenshot.");
@@ -426,30 +436,46 @@ pub fn run_list(args: &ListArgs) -> Result<()> {
     }
 
     println!("Recent captures ({}):", entries.len());
-    println!("{}", "─".repeat(60));
+    println!("{}", "─".repeat(70));
 
-    for entry in &entries {
-        let created = DateTime::<Local>::from(
-            UNIX_EPOCH + Duration::from_secs(entry.created_at as u64),
-        );
-        let date_str = created.format("%Y-%m-%d %H:%M").to_string();
-
+    for (i, entry) in entries.iter().enumerate() {
         let path = std::path::Path::new(&entry.path);
         let filename = path.file_name().unwrap_or_default().to_string_lossy();
 
         let annotations = if entry.annotation_count > 0 {
-            format!(" ({} annotations)", entry.annotation_count)
+            format!(", {} annotations", entry.annotation_count)
         } else {
             String::new()
         };
 
+        // Check if this file is open in the session registry
+        let is_open = open_paths.contains(path);
+
+        // Also check embedded session for .nib files
+        let is_nib_open = if path.extension().map(|e| e == "nib").unwrap_or(false) && path.exists() {
+            get_nib_session_info(&path.to_path_buf()).ok().flatten().is_some()
+        } else {
+            false
+        };
+
+        let open_indicator = if is_open || is_nib_open {
+            " [OPEN]"
+        } else {
+            ""
+        };
+
         println!(
-            "  {} │ {}x{} │ {}{}",
-            date_str, entry.width, entry.height, filename, annotations
+            "  {}. {} ({}x{}{}){}",
+            i + 1,
+            filename,
+            entry.width,
+            entry.height,
+            annotations,
+            open_indicator
         );
     }
 
-    println!("{}", "─".repeat(60));
+    println!("{}", "─".repeat(70));
     println!("Storage: {}", storage::captures_dir().display());
 
     Ok(())
@@ -499,32 +525,90 @@ pub fn run_folder() -> Result<()> {
 pub fn run_gui(args: &GuiArgs) -> Result<()> {
     tracing::info!(?args, "Launching GUI");
 
-    let app = if let Some(ref file_path) = args.file {
-        // Verify file exists
-        if !file_path.exists() {
+    let file_path = args.file.clone();
+    let is_nib_file = file_path
+        .as_ref()
+        .map(|p| p.extension().map(|e| e == "nib").unwrap_or(false))
+        .unwrap_or(false);
+
+    // Verify file exists
+    if let Some(ref path) = file_path {
+        if !path.exists() {
             return Err(crate::core::NibError::Storage(
                 crate::core::StorageError::NotFound(format!(
                     "File not found: {}",
-                    file_path.display()
+                    path.display()
                 )),
             ));
         }
-        println!("Opening {} in Nib editor...", file_path.display());
-        NibApp::with_file(file_path.clone())
+        println!("Opening {} in Nib editor...", path.display());
     } else {
         println!("Launching Nib editor...");
-        NibApp::new()
+    }
+
+    // Register session for .nib files
+    let pid = std::process::id();
+    if is_nib_file {
+        if let Some(ref path) = file_path {
+            // Register in SessionRegistry
+            if let Ok(mut registry) = SessionRegistry::load() {
+                if let Err(e) = registry.register(path, pid) {
+                    tracing::warn!("Failed to register session in registry: {}", e);
+                }
+            }
+
+            // Update session in .nib file itself
+            if let Ok(nib) = NibFile::open(path) {
+                if let Err(e) = nib.update_session(Some(pid)) {
+                    tracing::warn!("Failed to update session in .nib file: {}", e);
+                }
+            }
+        }
+    }
+
+    // Create and run the app
+    let app = match file_path.clone() {
+        Some(path) => NibApp::with_file(path),
+        None => NibApp::new(),
     };
 
-    app.run().map_err(|e| crate::core::NibError::Other(e.to_string()))?;
+    let result = app.run().map_err(|e| crate::core::NibError::Other(e.to_string()));
 
-    Ok(())
+    // Unregister session for .nib files when GUI closes
+    if is_nib_file {
+        if let Some(ref path) = file_path {
+            // Unregister from SessionRegistry
+            if let Ok(mut registry) = SessionRegistry::load() {
+                if let Err(e) = registry.unregister(path) {
+                    tracing::warn!("Failed to unregister session from registry: {}", e);
+                }
+            }
+
+            // Clear session in .nib file itself
+            if let Ok(nib) = NibFile::open(path) {
+                if let Err(e) = nib.clear_session() {
+                    tracing::warn!("Failed to clear session in .nib file: {}", e);
+                }
+            }
+        }
+    }
+
+    result
 }
 
-/// Execute the annotations command (read annotations from sidecar JSON file)
+/// Execute the annotations command (read annotations from sidecar JSON file or .nib file)
 pub fn run_annotations(args: &AnnotationsArgs) -> Result<()> {
     tracing::info!(?args, "Running annotations");
 
+    // Check if this is a .nib file
+    let is_nib_file = args.file.extension().map(|e| e == "nib").unwrap_or(false);
+
+    if is_nib_file {
+        // Handle .nib file with SQLite storage
+        return run_annotations_nib(args);
+    }
+
+    // Legacy: handle sidecar JSON file
     let annotations_path = annotations_file_path(&args.file);
 
     if !annotations_path.exists() {
@@ -601,6 +685,97 @@ pub fn run_annotations(args: &AnnotationsArgs) -> Result<()> {
                     "Failed to parse annotations: {}",
                     e
                 )));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Execute the annotations command for .nib files (with --since support)
+fn run_annotations_nib(args: &AnnotationsArgs) -> Result<()> {
+    // Verify the file exists
+    if !args.file.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    // Open the .nib file
+    let nib = NibFile::open(&args.file)?;
+
+    // Get annotations, optionally filtered by --since
+    let annotations = if let Some(since_unix) = args.since {
+        nib.list_annotations_since(since_unix)?
+    } else {
+        nib.list_annotations()?
+    };
+
+    if args.json {
+        // JSON output
+        let annotations_json: Vec<serde_json::Value> = annotations
+            .iter()
+            .map(|a| {
+                let modified_unix = a
+                    .modified_at
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let created_unix = a
+                    .created_at
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+
+                serde_json::json!({
+                    "id": format!("a{}", a.id.0),
+                    "type": a.annotation_type.type_name(),
+                    "color": format!("#{:02x}{:02x}{:02x}", a.color.r, a.color.g, a.color.b),
+                    "visible": a.visible,
+                    "locked": a.locked,
+                    "z_index": a.z_index,
+                    "created_at": created_unix,
+                    "modified_at": modified_unix
+                })
+            })
+            .collect();
+
+        let output = serde_json::json!({
+            "file": args.file.to_string_lossy(),
+            "since": args.since,
+            "count": annotations.len(),
+            "annotations": annotations_json
+        });
+
+        println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+    } else {
+        // Human-readable output
+        println!("Annotations for: {}", args.file.display());
+        if let Some(since) = args.since {
+            println!("Since: {} (Unix timestamp)", since);
+        }
+        println!("{}", "─".repeat(50));
+
+        if annotations.is_empty() {
+            println!("No annotations found.");
+        } else {
+            println!("Found {} annotation(s):\n", annotations.len());
+
+            for (i, annotation) in annotations.iter().enumerate() {
+                let modified = DateTime::<Local>::from(annotation.modified_at);
+                println!(
+                    "  {}. [a{}] {} [#{:02x}{:02x}{:02x}] (modified: {})",
+                    i + 1,
+                    annotation.id.0,
+                    annotation.annotation_type.type_name().to_uppercase(),
+                    annotation.color.r,
+                    annotation.color.g,
+                    annotation.color.b,
+                    modified.format("%Y-%m-%d %H:%M:%S")
+                );
             }
         }
     }
@@ -1324,6 +1499,378 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
     Ok(())
 }
 
+/// Execute the info command (show .nib file info)
+pub fn run_info(args: &super::args::InfoArgs) -> Result<()> {
+    tracing::info!(?args, "Running info");
+
+    // Verify the file exists
+    if !args.file.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    // Open the .nib file
+    let nib = NibFile::open(&args.file)?;
+
+    // Get image info
+    let (_image_data, image_info) = nib.get_image()?;
+
+    // Get annotations
+    let annotations = nib.list_annotations()?;
+    let annotation_count = annotations.len();
+
+    // Count annotations by type
+    let mut type_counts = std::collections::HashMap::new();
+    for ann in &annotations {
+        *type_counts
+            .entry(ann.annotation_type.type_name().to_string())
+            .or_insert(0usize) += 1;
+    }
+
+    // Check OCR cache (query directly from connection since NibFile doesn't expose this)
+    // For now, we'll get this info from a separate query
+    let ocr_cached = nib_has_ocr_cache(&args.file)?;
+
+    // Check session status
+    let session_info = get_nib_session_info(&args.file)?;
+
+    if args.json {
+        // JSON output
+        let by_type: serde_json::Map<String, serde_json::Value> = type_counts
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::Value::Number(v.into())))
+            .collect();
+
+        let json_output = serde_json::json!({
+            "path": args.file.canonicalize().unwrap_or_else(|_| args.file.clone()).to_string_lossy(),
+            "dimensions": {
+                "width": image_info.width,
+                "height": image_info.height
+            },
+            "format": image_info.format,
+            "annotations": {
+                "count": annotation_count,
+                "by_type": by_type
+            },
+            "ocr": {
+                "cached": ocr_cached.0,
+                "text_regions": ocr_cached.1
+            },
+            "session": session_info
+        });
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_output).unwrap_or_default()
+        );
+    } else {
+        // Text output
+        let canonical_path = args
+            .file
+            .canonicalize()
+            .unwrap_or_else(|_| args.file.clone());
+
+        println!("Path: {}", canonical_path.display());
+        println!("Dimensions: {}x{}", image_info.width, image_info.height);
+        println!("Format: {}", image_info.format);
+
+        // Annotations summary
+        if annotation_count == 0 {
+            println!("Annotations: 0");
+        } else {
+            let type_summary: Vec<String> = type_counts
+                .iter()
+                .map(|(t, c)| format!("{} {}", c, t))
+                .collect();
+            println!("Annotations: {} ({})", annotation_count, type_summary.join(", "));
+        }
+
+        // OCR cache status
+        if ocr_cached.0 {
+            println!("OCR cached: yes ({} regions)", ocr_cached.1);
+        } else {
+            println!("OCR cached: no");
+        }
+
+        // Session status
+        if let Some(ref info) = session_info {
+            if let Some(pid) = info.get("pid").and_then(|p| p.as_u64()) {
+                println!("Session: open in GUI (PID {})", pid);
+            }
+        } else {
+            println!("Session: not open");
+        }
+    }
+
+    Ok(())
+}
+
+/// Execute the open command (import image, create .nib, open in GUI)
+pub fn run_open(args: &super::args::OpenArgs) -> Result<()> {
+    tracing::info!(?args, "Running open");
+
+    // Import the image to create .nib file
+    let nib_path = import_image_to_nib(&args.file, args.output.as_ref())?;
+
+    println!("Created: {}", nib_path.display());
+
+    // Register session
+    let pid = std::process::id();
+    let mut registry = SessionRegistry::load()?;
+    registry.register(&nib_path, pid)?;
+
+    println!("Opening in GUI...");
+
+    // Launch GUI with the .nib file
+    let gui_args = super::args::GuiArgs {
+        file: Some(nib_path.clone()),
+    };
+    run_gui(&gui_args)?;
+
+    // Unregister session when GUI exits (run_gui is blocking)
+    let mut registry = SessionRegistry::load()?;
+    registry.unregister(&nib_path)?;
+
+    Ok(())
+}
+
+/// Execute the import command (create .nib file without opening GUI)
+pub fn run_import(args: &super::args::ImportArgs) -> Result<()> {
+    tracing::info!(?args, "Running import");
+
+    let nib_path = import_image_to_nib(&args.file, args.output.as_ref())?;
+
+    println!("Created: {}", nib_path.display());
+
+    Ok(())
+}
+
+/// Execute the watch command (stream annotation changes in real-time)
+pub async fn run_watch(args: &super::args::WatchArgs) -> Result<()> {
+    tracing::info!(?args, "Running watch");
+
+    // Verify the file exists
+    if !args.file.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    // Verify it's a .nib file
+    if args.file.extension().map(|e| e != "nib").unwrap_or(true) {
+        return Err(crate::core::NibError::Other(format!(
+            "Expected a .nib file, got: {}",
+            args.file.display()
+        )));
+    }
+
+    // Open the .nib file to get initial state
+    let nib = NibFile::open(&args.file)?;
+    let mut last_modified_at = nib.latest_annotation_modified_at()?.unwrap_or(0);
+    let initial_count = nib.annotation_count()?;
+    drop(nib);
+
+    if !args.json {
+        println!("Watching: {}", args.file.display());
+        println!("Initial annotations: {}", initial_count);
+        println!("Poll interval: {}ms", args.interval);
+        println!("Press Ctrl+C to stop.\n");
+    }
+
+    let poll_duration = Duration::from_millis(args.interval);
+
+    // Watch loop
+    loop {
+        tokio::time::sleep(poll_duration).await;
+
+        // Reopen the file to check for changes (WAL mode allows concurrent access)
+        let nib = match NibFile::open(&args.file) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("Error opening .nib file: {}", e);
+                continue;
+            }
+        };
+
+        // Check for new/modified annotations since last check
+        let new_annotations = match nib.list_annotations_since(last_modified_at) {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!("Error listing annotations: {}", e);
+                continue;
+            }
+        };
+
+        if !new_annotations.is_empty() {
+            // Update the high-water mark
+            if let Some(latest) = nib.latest_annotation_modified_at()? {
+                last_modified_at = latest;
+            }
+
+            for annotation in &new_annotations {
+                if args.json {
+                    // JSON output for each change
+                    let modified_unix = annotation
+                        .modified_at
+                        .duration_since(UNIX_EPOCH)
+                        .map(|d| d.as_secs() as i64)
+                        .unwrap_or(0);
+
+                    let json_output = serde_json::json!({
+                        "event": "annotation_changed",
+                        "id": format!("a{}", annotation.id.0),
+                        "type": annotation.annotation_type.type_name(),
+                        "color": format!("#{:02x}{:02x}{:02x}", annotation.color.r, annotation.color.g, annotation.color.b),
+                        "modified_at": modified_unix,
+                        "visible": annotation.visible,
+                        "locked": annotation.locked
+                    });
+                    println!("{}", serde_json::to_string(&json_output).unwrap_or_default());
+                } else {
+                    // Human-readable output
+                    let timestamp = DateTime::<Local>::from(annotation.modified_at);
+                    println!(
+                        "[{}] a{} {} updated",
+                        timestamp.format("%H:%M:%S"),
+                        annotation.id.0,
+                        annotation.annotation_type.type_name()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Import an image file to create a .nib file
+fn import_image_to_nib(image_path: &PathBuf, output: Option<&PathBuf>) -> Result<PathBuf> {
+    // Verify the image file exists
+    if !image_path.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                image_path.display()
+            )),
+        ));
+    }
+
+    // Read the image
+    let image_data = std::fs::read(image_path)?;
+    let img = image::load_from_memory(&image_data).map_err(|e| {
+        crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+    })?;
+
+    // Determine format from extension
+    let extension = image_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+
+    let format = match extension.as_str() {
+        "jpg" | "jpeg" => "jpeg",
+        "webp" => "webp",
+        _ => "png",
+    };
+
+    // Determine output path
+    let nib_path = output.cloned().unwrap_or_else(|| {
+        let stem = image_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        image_path.with_file_name(format!("{}.nib", stem))
+    });
+
+    // Check if .nib file already exists
+    if nib_path.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::InvalidFormat(format!(
+                "File already exists: {}. Use `nib info` to inspect or delete and retry.",
+                nib_path.display()
+            )),
+        ));
+    }
+
+    // Create the .nib file
+    let nib = NibFile::create(
+        &nib_path,
+        &image_data,
+        format,
+        img.width(),
+        img.height(),
+    )?;
+
+    // Set original path metadata
+    if let Ok(canonical) = image_path.canonicalize() {
+        nib.set_original_path(&canonical.to_string_lossy())?;
+    }
+
+    // Save to ensure all data is written
+    nib.save()?;
+
+    Ok(nib_path)
+}
+
+/// Check if a .nib file has OCR cache entries
+/// Returns (has_cache, count)
+fn nib_has_ocr_cache(path: &PathBuf) -> Result<(bool, usize)> {
+    use rusqlite::Connection;
+
+    let conn = Connection::open(path).map_err(|e| {
+        crate::core::NibError::Storage(crate::core::StorageError::Database(e.to_string()))
+    })?;
+
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM ocr_cache", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    Ok((count > 0, count as usize))
+}
+
+/// Get session info for a .nib file
+fn get_nib_session_info(path: &PathBuf) -> Result<Option<serde_json::Value>> {
+    use rusqlite::{Connection, OptionalExtension};
+
+    let conn = Connection::open(path).map_err(|e| {
+        crate::core::NibError::Storage(crate::core::StorageError::Database(e.to_string()))
+    })?;
+
+    let result: Option<(Option<i64>, Option<i64>, Option<i64>)> = conn
+        .query_row(
+            "SELECT gui_pid, opened_at, last_activity FROM session WHERE id = 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| {
+            crate::core::NibError::Storage(crate::core::StorageError::Database(e.to_string()))
+        })?;
+
+    match result {
+        Some((Some(pid), opened_at, last_activity)) => {
+            // Check if the process is still alive
+            if crate::storage::sessions::is_process_alive(pid as u32) {
+                Ok(Some(serde_json::json!({
+                    "open_in_gui": true,
+                    "pid": pid,
+                    "opened_at": opened_at,
+                    "last_activity": last_activity
+                })))
+            } else {
+                Ok(None)
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Parse a grid region string in "x1,y1,x2,y2" format
 fn parse_grid_region(region_str: &str) -> Result<crate::core::tile::TileBounds> {
     use crate::core::tile::TileBounds;
@@ -1350,4 +1897,291 @@ fn parse_grid_region(region_str: &str) -> Result<crate::core::tile::TileBounds> 
     })?;
 
     Ok(TileBounds::from_corners(x1, y1, x2, y2))
+}
+
+/// Execute the migrate command (convert JSON sidecar to .nib SQLite format)
+pub fn run_migrate(args: &super::args::MigrateArgs) -> Result<()> {
+    tracing::info!(?args, "Running migrate");
+
+    // Verify the path exists
+    if !args.path.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "Path not found: {}",
+                args.path.display()
+            )),
+        ));
+    }
+
+    if args.path.is_dir() {
+        // Migrate all images in directory
+        migrate_directory(&args.path, args.recursive, args.delete_sidecar)?;
+    } else {
+        // Migrate single file
+        migrate_single_file(&args.path, args.output.as_ref(), args.delete_sidecar)?;
+    }
+
+    Ok(())
+}
+
+/// Migrate a single image file to .nib format
+fn migrate_single_file(
+    image_path: &PathBuf,
+    output: Option<&PathBuf>,
+    delete_sidecar: bool,
+) -> Result<()> {
+    // Verify it's an image file (not already a .nib)
+    let extension = image_path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+
+    if extension == "nib" {
+        println!("Skipping {}: already a .nib file", image_path.display());
+        return Ok(());
+    }
+
+    if !["png", "jpg", "jpeg", "webp"].contains(&extension.as_str()) {
+        return Err(crate::core::NibError::Other(format!(
+            "Unsupported image format: {}. Supported: png, jpg, jpeg, webp",
+            extension
+        )));
+    }
+
+    // Read the image
+    let image_data = std::fs::read(image_path)?;
+    let img = image::load_from_memory(&image_data).map_err(|e| {
+        crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+    })?;
+
+    // Determine format from extension
+    let format = match extension.as_str() {
+        "jpg" | "jpeg" => "jpeg",
+        "webp" => "webp",
+        _ => "png",
+    };
+
+    // Determine output path
+    let nib_path = output.cloned().unwrap_or_else(|| {
+        let stem = image_path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        image_path.with_file_name(format!("{}.nib", stem))
+    });
+
+    // Check if .nib file already exists
+    if nib_path.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::InvalidFormat(format!(
+                "Output file already exists: {}",
+                nib_path.display()
+            )),
+        ));
+    }
+
+    // Create the .nib file
+    let nib = NibFile::create(&nib_path, &image_data, format, img.width(), img.height())?;
+
+    // Set original path metadata
+    if let Ok(canonical) = image_path.canonicalize() {
+        nib.set_original_path(&canonical.to_string_lossy())?;
+    }
+
+    // Load annotations from sidecar file if it exists
+    let sidecar_path = convert::sidecar_path_for_image(image_path);
+    let mut annotation_count = 0;
+
+    if sidecar_path.exists() {
+        let annotations = convert::load_sidecar_annotations(image_path);
+        annotation_count = annotations.len();
+
+        for annotation in annotations {
+            nib.add_annotation(&annotation)?;
+        }
+    }
+
+    // Save to ensure all data is written
+    nib.save()?;
+
+    println!(
+        "Migrated: {} -> {} ({} annotations)",
+        image_path.display(),
+        nib_path.display(),
+        annotation_count
+    );
+
+    // Delete sidecar file if requested and migration was successful
+    if delete_sidecar && sidecar_path.exists() {
+        std::fs::remove_file(&sidecar_path)?;
+        println!("  Deleted sidecar: {}", sidecar_path.display());
+    }
+
+    Ok(())
+}
+
+/// Migrate all images in a directory to .nib format
+fn migrate_directory(dir: &PathBuf, recursive: bool, delete_sidecar: bool) -> Result<()> {
+    let entries = std::fs::read_dir(dir)?;
+
+    let mut migrated = 0;
+    let mut skipped = 0;
+    let mut errors = 0;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            if recursive {
+                println!("Entering directory: {}", path.display());
+                migrate_directory(&path, recursive, delete_sidecar)?;
+            }
+            continue;
+        }
+
+        // Check if it's an image file
+        let extension = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        // Skip non-image files and sidecar files
+        if !["png", "jpg", "jpeg", "webp"].contains(&extension.as_str()) {
+            continue;
+        }
+
+        // Check if sidecar exists (only migrate files with annotations)
+        let sidecar_path = convert::sidecar_path_for_image(&path);
+        if !sidecar_path.exists() {
+            skipped += 1;
+            continue;
+        }
+
+        match migrate_single_file(&path, None, delete_sidecar) {
+            Ok(_) => migrated += 1,
+            Err(e) => {
+                eprintln!("Error migrating {}: {}", path.display(), e);
+                errors += 1;
+            }
+        }
+    }
+
+    println!(
+        "\nMigration complete: {} migrated, {} skipped (no sidecar), {} errors",
+        migrated, skipped, errors
+    );
+
+    Ok(())
+}
+
+/// Execute the export command (export .nib to PNG/JSON/QML)
+pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
+    use super::args::ExportFormat as CliExportFormat;
+
+    tracing::info!(?args, "Running export");
+
+    // Verify the file exists
+    if !args.file.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    // Verify it's a .nib file
+    if args.file.extension().map(|e| e != "nib").unwrap_or(true) {
+        return Err(crate::core::NibError::Other(format!(
+            "Expected a .nib file, got: {}",
+            args.file.display()
+        )));
+    }
+
+    // Open the .nib file
+    let nib = NibFile::open(&args.file)?;
+
+    // Get the image and annotations
+    let (image_data, image_info) = nib.get_image()?;
+    let annotations = nib.list_annotations()?;
+
+    // Determine output path
+    let output_path = args.output.clone().unwrap_or_else(|| {
+        let stem = args.file.file_stem().unwrap_or_default().to_string_lossy();
+        args.file.with_file_name(format!("{}.png", stem))
+    });
+
+    match args.export_format {
+        CliExportFormat::Rendered => {
+            // Export with annotations baked onto the image
+            let nib_image = NibImage {
+                image_data,
+                width: image_info.width,
+                height: image_info.height,
+                source: crate::core::ImageSource::File(args.file.clone()),
+                annotations,
+                title: None,
+                description: None,
+                tags: Vec::new(),
+                file_path: Some(args.file.clone()),
+                created_at: SystemTime::now(),
+                modified_at: SystemTime::now(),
+            };
+
+            let options = export::ExportOptions {
+                bake_annotations: true,
+                ..Default::default()
+            };
+            export::export_image(&nib_image, &output_path, &options)?;
+
+            println!(
+                "Exported (rendered): {} ({} annotations baked)",
+                output_path.display(),
+                nib_image.annotations.len()
+            );
+        }
+        CliExportFormat::Json => {
+            // Export PNG + JSON sidecar file
+            // First, save the raw image data
+            std::fs::write(&output_path, &image_data)?;
+
+            // Then save the annotations as a sidecar
+            convert::save_sidecar_annotations(&output_path, &annotations)?;
+
+            let sidecar_path = convert::sidecar_path_for_image(&output_path);
+            println!("Exported (json):");
+            println!("  Image: {}", output_path.display());
+            println!("  Sidecar: {}", sidecar_path.display());
+            println!("  Annotations: {}", annotations.len());
+        }
+        CliExportFormat::Qml => {
+            // Export PNG with embedded QML tEXt chunk
+            let nib_image = NibImage {
+                image_data,
+                width: image_info.width,
+                height: image_info.height,
+                source: crate::core::ImageSource::File(args.file.clone()),
+                annotations,
+                title: None,
+                description: None,
+                tags: Vec::new(),
+                file_path: Some(args.file.clone()),
+                created_at: SystemTime::now(),
+                modified_at: SystemTime::now(),
+            };
+
+            qml_file::save_qml_image(&nib_image, &output_path)?;
+
+            println!(
+                "Exported (qml): {} ({} annotations embedded)",
+                output_path.display(),
+                nib_image.annotations.len()
+            );
+        }
+    }
+
+    Ok(())
 }

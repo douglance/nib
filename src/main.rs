@@ -51,5 +51,11 @@ async fn run() -> Result<()> {
         Command::RemoveAnnotation(args) => cli::run_remove_annotation(args),
         Command::ClearAnnotations(args) => cli::run_clear_annotations(args),
         Command::Grid(args) => cli::run_grid(args),
+        Command::Info(args) => cli::run_info(args),
+        Command::Open(args) => cli::run_open(args),
+        Command::Import(args) => cli::run_import(args),
+        Command::Watch(args) => cli::run_watch(args).await,
+        Command::Migrate(args) => cli::run_migrate(args),
+        Command::Export(args) => cli::run_export(args),
     }
 }

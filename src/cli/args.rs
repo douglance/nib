@@ -69,6 +69,24 @@ pub enum Command {
 
     /// Overlay a coordinate grid on an image for precise positioning
     Grid(GridArgs),
+
+    /// Show comprehensive info about a .nib file
+    Info(InfoArgs),
+
+    /// Import an image, create .nib file, and open in GUI
+    Open(OpenArgs),
+
+    /// Create .nib file from image without opening GUI
+    Import(ImportArgs),
+
+    /// Watch a .nib file for annotation changes in real-time
+    Watch(WatchArgs),
+
+    /// Migrate from JSON sidecar format to .nib SQLite format
+    Migrate(MigrateArgs),
+
+    /// Export .nib file to PNG (with annotations baked, as sidecar JSON, or as QML)
+    Export(ExportArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -79,6 +97,10 @@ pub struct AnnotationsArgs {
     /// Output as raw JSON instead of formatted text
     #[arg(long)]
     pub json: bool,
+
+    /// Only show annotations modified after this Unix timestamp
+    #[arg(long)]
+    pub since: Option<i64>,
 }
 
 #[derive(Parser, Debug)]
@@ -339,4 +361,90 @@ pub struct GridArgs {
     /// Output grid metadata as JSON instead of rendering image
     #[arg(long)]
     pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct InfoArgs {
+    /// The .nib file to inspect
+    pub file: PathBuf,
+
+    /// Output as JSON instead of formatted text
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct OpenArgs {
+    /// Image file to import (PNG, JPEG, WebP)
+    pub file: PathBuf,
+
+    /// Output .nib file path (default: same name with .nib extension)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct ImportArgs {
+    /// Image file to import (PNG, JPEG, WebP)
+    pub file: PathBuf,
+
+    /// Output .nib file path (default: same name with .nib extension)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct WatchArgs {
+    /// .nib file to watch for annotation changes
+    pub file: PathBuf,
+
+    /// Output changes as JSON instead of formatted text
+    #[arg(long)]
+    pub json: bool,
+
+    /// Poll interval in milliseconds
+    #[arg(long, default_value = "100")]
+    pub interval: u64,
+}
+
+#[derive(Parser, Debug)]
+pub struct MigrateArgs {
+    /// Image file or directory to migrate
+    pub path: PathBuf,
+
+    /// Output .nib file (for single file migration)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Delete sidecar JSON files after successful migration
+    #[arg(long)]
+    pub delete_sidecar: bool,
+
+    /// Migrate recursively (for directories)
+    #[arg(short, long)]
+    pub recursive: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ExportArgs {
+    /// .nib file to export
+    pub file: PathBuf,
+
+    /// Output file path (default: same name with .png extension)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Export format: "rendered" (baked), "json" (PNG + sidecar), "qml" (PNG + embedded QML)
+    #[arg(short = 'F', long = "export-format", default_value = "rendered")]
+    pub export_format: ExportFormat,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum ExportFormat {
+    /// Render annotations directly onto the image
+    Rendered,
+    /// Export PNG + JSON sidecar file
+    Json,
+    /// Export PNG with embedded QML tEXt chunk
+    Qml,
 }
