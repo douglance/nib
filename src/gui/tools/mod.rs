@@ -4,10 +4,12 @@
 //! enabling composable, testable tool implementations.
 
 mod context;
+mod manager;
 mod state;
 mod r#trait;
 
 pub use context::*;
+pub use manager::*;
 pub use state::*;
 pub use r#trait::*;
 
