@@ -1,6 +1,6 @@
 //! Core Tool trait definition
 
-use super::{ToolEvent, ToolPreview, ToolResult};
+use super::{ToolContext, ToolEvent, ToolPreview, ToolResult};
 use std::any::Any;
 
 /// Tool identifier enum
@@ -34,11 +34,6 @@ impl ToolId {
             ToolId::Crop,
         ]
     }
-}
-
-/// Forward declaration for ToolContext (will be in context.rs)
-pub struct ToolContext<'a> {
-    _phantom: std::marker::PhantomData<&'a ()>,
 }
 
 /// Core trait for all annotation tools

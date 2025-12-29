@@ -3,9 +3,12 @@
 //! This module provides a trait-based abstraction for annotation tools,
 //! enabling composable, testable tool implementations.
 
+mod context;
+mod state;
 mod r#trait;
-// Future modules will be added here
 
+pub use context::*;
+pub use state::*;
 pub use r#trait::*;
 
 use crate::core::types::{Annotation, AnnotationId, Color, Point, Region};
