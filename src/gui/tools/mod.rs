@@ -5,11 +5,13 @@
 
 mod context;
 mod manager;
+mod rectangle;
 mod state;
 mod r#trait;
 
 pub use context::*;
 pub use manager::*;
+pub use rectangle::*;
 pub use state::*;
 pub use r#trait::*;
 
