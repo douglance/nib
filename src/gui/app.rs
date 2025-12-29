@@ -44,8 +44,8 @@ use crate::core::types::{Annotation, AnnotationId, AnnotationType, Color, Region
 use crate::core::types::Point as QuillPoint;
 use crate::gui::toolbar::Tool;
 use crate::gui::tools::{
-    Modifiers, MouseButton as ToolMouseButton, ToolContext, ToolEvent, ToolId, ToolManager,
-    ToolMode, ToolPreview, ToolResult,
+    Modifiers, MouseButton as ToolMouseButton, TextTool, ToolContext, ToolEvent, ToolId,
+    ToolManager, ToolMode, ToolPreview, ToolResult,
 };
 
 /// Version string for the annotations file format
@@ -318,17 +318,6 @@ pub fn annotations_file_path(image_path: &PathBuf) -> PathBuf {
     path
 }
 
-/// Drag state for in-progress annotation drawing
-#[derive(Debug, Clone)]
-pub struct DragState {
-    /// Tool being used for this drag operation
-    pub tool: Tool,
-    /// Starting point of the drag (in screen coordinates)
-    pub start_point: QuillPoint,
-    /// Current point of the drag (in screen coordinates)
-    pub current_point: QuillPoint,
-}
-
 /// Text input state for creating/editing text annotations
 #[derive(Debug, Clone)]
 pub struct TextInputState {
@@ -410,8 +399,6 @@ pub struct EditorView {
     annotations: Vec<Annotation>,
     /// Currently selected tool
     active_tool: Tool,
-    /// In-progress drag state for drawing annotations
-    drag_state: Option<DragState>,
     /// Current drawing color
     current_color: Color,
     /// Last modification time of the sidecar annotations file (for file watching)
@@ -427,6 +414,9 @@ pub struct EditorView {
     /// Focus handle for keyboard input
     focus_handle: FocusHandle,
     /// Text input state for creating/editing text annotations
+    /// NOTE: Content is synced from TextTool after key events. The TextTool is the source
+    /// of truth for content; this is kept for screen-space rendering coordinates.
+    /// Could be removed in a future refactor by computing screen coords during render.
     text_input_state: Option<TextInputState>,
     /// Tool manager for trait-based tool dispatch
     tool_manager: ToolManager,
@@ -457,7 +447,6 @@ impl EditorView {
             file_path,
             annotations: Vec::new(),
             active_tool: Tool::Rectangle,
-            drag_state: None,
             current_color: Color::RED,
             last_sidecar_modified: None,
             image_width,
@@ -709,7 +698,41 @@ impl EditorView {
     }
 
     /// Handle tool selection from toolbar
-    fn select_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+    fn select_tool(&mut self, tool: ToolId, cx: &mut Context<Self>) {
+        // Set the active tool in the tool manager, which handles:
+        // - Deactivating the old tool (may produce pending results)
+        // - Activating the new tool
+        // We inline context building to enable split borrows (annotations vs tool_manager)
+        let deactivation_result = {
+            let (scale, offset_x, offset_y) = {
+                let scale_x = self.canvas_width / self.image_width as f32;
+                let scale_y = self.canvas_height / self.image_height as f32;
+                let scale = scale_x.min(scale_y);
+                let scaled_img_width = self.image_width as f32 * scale;
+                let scaled_img_height = self.image_height as f32 * scale;
+                let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
+                let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
+                (scale, offset_x, offset_y)
+            };
+            let ctx = ToolContext {
+                color: self.current_color,
+                stroke_width: 2.0,
+                fill_enabled: false,
+                image_size: (self.image_width, self.image_height),
+                scale,
+                offset: (offset_x, offset_y),
+                annotations: &self.annotations,
+                min_drag_distance: 5.0,
+            };
+            self.tool_manager.set_active_tool(tool, &ctx)
+        };
+
+        // Process any result from deactivating the old tool (e.g., pending text)
+        if let Some(result) = deactivation_result {
+            self.process_tool_result(result, cx);
+        }
+
+        // Update UI state
         self.active_tool = tool;
         cx.notify();
     }
@@ -723,193 +746,145 @@ impl EditorView {
             return;
         }
 
-        // Only start drawing for tools that support drag-to-draw
-        match self.active_tool {
-            Tool::Rectangle | Tool::Arrow | Tool::Line | Tool::Ellipse | Tool::Highlight | Tool::Blur => {
-                let position = event.position;
-                let click_x: f32 = position.x.into();
-                let click_y: f32 = position.y.into();
+        // Convert screen coordinates to image coordinates
+        let position = event.position;
+        let screen_x: f32 = position.x.into();
+        let screen_y: f32 = position.y.into();
+        let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
 
-                // Convert screen coordinates to image coordinates
-                let (img_x, img_y) = self.screen_to_image_coords(click_x, click_y);
-                self.drag_state = Some(DragState {
-                    tool: self.active_tool,
-                    start_point: QuillPoint::new(img_x, img_y),
-                    current_point: QuillPoint::new(img_x, img_y),
-                });
-                cx.notify();
-            }
-            Tool::Text => {
-                // For text, enter text input mode at click position
-                let position = event.position;
-                let screen_x: f32 = position.x.into();
-                let screen_y: f32 = position.y.into();
+        // Map GPUI mouse button to tool mouse button
+        let button = match event.button {
+            MouseButton::Left => ToolMouseButton::Left,
+            MouseButton::Right => ToolMouseButton::Right,
+            MouseButton::Middle => ToolMouseButton::Middle,
+            MouseButton::Navigate(_) => ToolMouseButton::Left, // Fallback
+        };
 
-                // Store raw screen coordinates - render directly there
-                // Convert to image coords only when saving
-                self.text_input_state = Some(TextInputState {
-                    screen_x,
-                    screen_y,
-                    content: String::new(),
-                    editing_annotation_id: None,
-                });
-                cx.notify();
-            }
-            Tool::Number => {
-                // For number, we place at click position immediately
-                let position = event.position;
-                let screen_x: f32 = position.x.into();
-                let screen_y: f32 = position.y.into();
-                // Convert screen coordinates to image coordinates
-                let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
-                let point = QuillPoint::new(img_x, img_y);
+        // Build tool event
+        let tool_event = ToolEvent::MouseDown {
+            position: QuillPoint::new(img_x, img_y),
+            button,
+            modifiers: Modifiers::default(),
+        };
 
-                let next_number = self.annotations.iter()
-                    .filter_map(|a| match &a.annotation_type {
-                        AnnotationType::Number { value, .. } => Some(*value),
-                        _ => None,
-                    })
-                    .max()
-                    .unwrap_or(0) + 1;
-
-                let annotation = Annotation::new(AnnotationType::Number {
-                    position: point,
-                    value: next_number,
-                    radius: 14.0,
-                }).with_color(self.current_color);
-                self.annotations.push(annotation);
-                // Save annotations to disk after adding
-                self.save_annotations();
-                cx.notify();
-            }
-            Tool::Select => {
-                // Check if clicking on a text annotation to edit it
-                let position = event.position;
-                let screen_x: f32 = position.x.into();
-                let screen_y: f32 = position.y.into();
-                let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
-                let click_point = QuillPoint::new(img_x, img_y);
-
-                // Find text annotation at click position
-                if let Some(annotation) = self.find_text_annotation_at(click_point) {
-                    if let AnnotationType::Text { position, content, font_size, .. } = &annotation.annotation_type {
-                        // Convert annotation's image position to screen position
-                        let (ann_screen_x, ann_screen_y) = self.scale_point(position.x, position.y);
-                        // Add back the font height offset that we subtract when rendering
-                        let (scale, _, _) = self.calculate_scale_and_offset();
-                        let scaled_font_size = (*font_size as f32) * scale;
-                        let adjusted_screen_y = ann_screen_y + scaled_font_size;
-
-                        // Enter edit mode for this annotation
-                        self.text_input_state = Some(TextInputState {
-                            screen_x: ann_screen_x,
-                            screen_y: adjusted_screen_y,
-                            content: content.clone(),
-                            editing_annotation_id: Some(annotation.id),
-                        });
-                        cx.notify();
-                    }
-                }
-            }
-            Tool::Crop => {
-                // Crop has different behavior
-            }
-        }
+        // Dispatch to tool manager
+        // We inline context building to enable split borrows (annotations vs tool_manager)
+        let result = {
+            let (scale, offset_x, offset_y) = {
+                let scale_x = self.canvas_width / self.image_width as f32;
+                let scale_y = self.canvas_height / self.image_height as f32;
+                let scale = scale_x.min(scale_y);
+                let scaled_img_width = self.image_width as f32 * scale;
+                let scaled_img_height = self.image_height as f32 * scale;
+                let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
+                let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
+                (scale, offset_x, offset_y)
+            };
+            let ctx = ToolContext {
+                color: self.current_color,
+                stroke_width: 2.0,
+                fill_enabled: false,
+                image_size: (self.image_width, self.image_height),
+                scale,
+                offset: (offset_x, offset_y),
+                annotations: &self.annotations,
+                min_drag_distance: 5.0,
+            };
+            self.tool_manager.handle_event(tool_event, &ctx)
+        };
+        self.process_tool_result(result, cx);
     }
 
     /// Handle mouse move event on canvas
     fn handle_mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
-        if self.drag_state.is_some() {
-            let position = event.position;
-            let screen_x: f32 = position.x.into();
-            let screen_y: f32 = position.y.into();
-            // Convert screen coordinates to image coordinates
-            let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
-            // Now we can safely update the drag state
-            if let Some(ref mut drag_state) = self.drag_state {
-                drag_state.current_point = QuillPoint::new(img_x, img_y);
-            }
-            cx.notify();
-        }
+        // Convert screen coordinates to image coordinates
+        let position = event.position;
+        let screen_x: f32 = position.x.into();
+        let screen_y: f32 = position.y.into();
+        let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
+
+        // Build tool event
+        let tool_event = ToolEvent::MouseMove {
+            position: QuillPoint::new(img_x, img_y),
+            modifiers: Modifiers::default(),
+        };
+
+        // Dispatch to tool manager
+        // We inline context building to enable split borrows (annotations vs tool_manager)
+        let result = {
+            let (scale, offset_x, offset_y) = {
+                let scale_x = self.canvas_width / self.image_width as f32;
+                let scale_y = self.canvas_height / self.image_height as f32;
+                let scale = scale_x.min(scale_y);
+                let scaled_img_width = self.image_width as f32 * scale;
+                let scaled_img_height = self.image_height as f32 * scale;
+                let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
+                let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
+                (scale, offset_x, offset_y)
+            };
+            let ctx = ToolContext {
+                color: self.current_color,
+                stroke_width: 2.0,
+                fill_enabled: false,
+                image_size: (self.image_width, self.image_height),
+                scale,
+                offset: (offset_x, offset_y),
+                annotations: &self.annotations,
+                min_drag_distance: 5.0,
+            };
+            self.tool_manager.handle_event(tool_event, &ctx)
+        };
+        self.process_tool_result(result, cx);
     }
 
     /// Handle mouse up event on canvas
-    fn handle_mouse_up(&mut self, _event: &MouseUpEvent, cx: &mut Context<Self>) {
-        if let Some(drag_state) = self.drag_state.take() {
-            // Create the annotation based on drag state
-            let annotation = self.create_annotation_from_drag(&drag_state);
-            if let Some(annotation) = annotation {
-                self.annotations.push(annotation);
-                // Save annotations to disk after adding
-                self.save_annotations();
-            }
-            cx.notify();
-        }
-    }
+    fn handle_mouse_up(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) {
+        // Convert screen coordinates to image coordinates
+        let position = event.position;
+        let screen_x: f32 = position.x.into();
+        let screen_y: f32 = position.y.into();
+        let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
 
-    /// Create an annotation from completed drag state
-    fn create_annotation_from_drag(&self, drag_state: &DragState) -> Option<Annotation> {
-        let start = drag_state.start_point;
-        let end = drag_state.current_point;
-
-        // Ignore very small drags (accidental clicks)
-        if start.distance_to(end) < 5.0 {
-            return None;
-        }
-
-        let annotation_type = match drag_state.tool {
-            Tool::Rectangle => AnnotationType::Box {
-                region: Region::from_points(start, end),
-                stroke_width: 2.0,
-                stroke_style: crate::core::types::StrokeStyle::Solid,
-                filled: false,
-                corner_radius: 0.0,
-            },
-            Tool::Arrow => AnnotationType::Arrow {
-                start,
-                end,
-                head: crate::core::types::ArrowHead::End,
-                stroke_width: 2.0,
-            },
-            Tool::Line => AnnotationType::Line {
-                start,
-                end,
-                stroke_width: 2.0,
-                stroke_style: crate::core::types::StrokeStyle::Solid,
-            },
-            Tool::Ellipse => {
-                let center = QuillPoint::new(
-                    (start.x + end.x) / 2.0,
-                    (start.y + end.y) / 2.0,
-                );
-                let radius_x = (end.x - start.x).abs() / 2.0;
-                let radius_y = (end.y - start.y).abs() / 2.0;
-                AnnotationType::Ellipse {
-                    center,
-                    radius_x,
-                    radius_y,
-                    stroke_width: 2.0,
-                    filled: false,
-                }
-            }
-            Tool::Highlight => {
-                let region = Region::from_points(start, end);
-                // DEBUG: Print annotation coordinates in image space
-                eprintln!("HIGHLIGHT CREATED: x={:.0}, y={:.0}, w={:.0}, h={:.0}",
-                         region.x, region.y, region.width, region.height);
-                AnnotationType::Highlight {
-                    region,
-                    corner_radius: 0.0,
-                }
-            }
-            Tool::Blur => AnnotationType::Blur {
-                region: Region::from_points(start, end),
-                intensity: crate::core::types::BlurIntensity::Medium,
-            },
-            _ => return None,
+        // Map GPUI mouse button to tool mouse button
+        let button = match event.button {
+            MouseButton::Left => ToolMouseButton::Left,
+            MouseButton::Right => ToolMouseButton::Right,
+            MouseButton::Middle => ToolMouseButton::Middle,
+            MouseButton::Navigate(_) => ToolMouseButton::Left, // Fallback
         };
 
-        Some(Annotation::new(annotation_type).with_color(self.current_color))
+        // Build tool event
+        let tool_event = ToolEvent::MouseUp {
+            position: QuillPoint::new(img_x, img_y),
+            button,
+        };
+
+        // Dispatch to tool manager
+        // We inline context building to enable split borrows (annotations vs tool_manager)
+        let result = {
+            let (scale, offset_x, offset_y) = {
+                let scale_x = self.canvas_width / self.image_width as f32;
+                let scale_y = self.canvas_height / self.image_height as f32;
+                let scale = scale_x.min(scale_y);
+                let scaled_img_width = self.image_width as f32 * scale;
+                let scaled_img_height = self.image_height as f32 * scale;
+                let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
+                let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
+                (scale, offset_x, offset_y)
+            };
+            let ctx = ToolContext {
+                color: self.current_color,
+                stroke_width: 2.0,
+                fill_enabled: false,
+                image_size: (self.image_width, self.image_height),
+                scale,
+                offset: (offset_x, offset_y),
+                annotations: &self.annotations,
+                min_drag_distance: 5.0,
+            };
+            self.tool_manager.handle_event(tool_event, &ctx)
+        };
+        self.process_tool_result(result, cx);
     }
 
     /// Render the toolbar
@@ -1208,84 +1183,101 @@ impl EditorView {
         }
     }
 
-    /// Render the in-progress drag preview
-    fn render_drag_preview(&self) -> Option<impl IntoElement> {
-        let drag_state = self.drag_state.as_ref()?;
-        // drag_state stores image coordinates, convert to screen coordinates for display
-        let start = drag_state.start_point;
-        let end = drag_state.current_point;
+    /// Render the tool preview from the tool manager
+    fn render_tool_preview(&self) -> Option<impl IntoElement> {
+        let ctx = self.build_tool_context();
+        let preview = self.tool_manager.preview(&ctx);
 
-        let preview_color = rgb(0x0078d4);
-        let preview_bg = rgba(0x0078d440);
+        match preview {
+            ToolPreview::None => None,
+            ToolPreview::Rectangle { region, color } => {
+                let preview_color = rgb(
+                    color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32,
+                );
+                let preview_bg = rgba(
+                    color.r as u32 * 0x1000000
+                        + color.g as u32 * 0x10000
+                        + color.b as u32 * 0x100
+                        + 0x40, // Semi-transparent
+                );
 
-        let element = match drag_state.tool {
-            Tool::Rectangle | Tool::Highlight | Tool::Blur => {
-                let region = Region::from_points(start, end);
                 // Scale region to screen coordinates
-                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
-                div()
-                    .absolute()
-                    .left(px(sx))
-                    .top(px(sy))
-                    .w(px(sw))
-                    .h(px(sh))
-                    .border_2()
-                    .border_color(preview_color)
-                    .bg(preview_bg)
-                    .into_any_element()
+                let (sx, sy, sw, sh) =
+                    self.scale_coords(region.x, region.y, region.width, region.height);
+
+                Some(
+                    div()
+                        .absolute()
+                        .left(px(sx))
+                        .top(px(sy))
+                        .w(px(sw))
+                        .h(px(sh))
+                        .border_2()
+                        .border_color(preview_color)
+                        .bg(preview_bg)
+                        .into_any_element(),
+                )
             }
-            Tool::Arrow | Tool::Line => {
+            ToolPreview::Line { start, end, color } => {
+                let preview_color = rgb(
+                    color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32,
+                );
+
                 // Scale start and end points to screen coordinates
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
 
-                canvas(
-                    move |_bounds, _window, _cx| {
-                        (
-                            point(px(start_sx), px(start_sy)),
-                            point(px(end_sx), px(end_sy)),
-                        )
-                    },
-                    move |_bounds, (p_start, p_end), window, _cx| {
-                        let mut builder = PathBuilder::stroke(px(2.0));
-                        builder.move_to(p_start);
-                        builder.line_to(p_end);
-                        if let Ok(path) = builder.build() {
-                            window.paint_path(path, preview_color);
-                        }
-                    },
+                Some(
+                    canvas(
+                        move |_bounds, _window, _cx| {
+                            (
+                                point(px(start_sx), px(start_sy)),
+                                point(px(end_sx), px(end_sy)),
+                            )
+                        },
+                        move |_bounds, (p_start, p_end), window, _cx| {
+                            let mut builder = PathBuilder::stroke(px(2.0));
+                            builder.move_to(p_start);
+                            builder.line_to(p_end);
+                            if let Ok(path) = builder.build() {
+                                window.paint_path(path, preview_color);
+                            }
+                        },
+                    )
+                    .size_full()
+                    .into_any_element(),
                 )
-                .size_full()
-                .into_any_element()
             }
-            Tool::Ellipse => {
-                // Calculate ellipse in image coordinates
-                let center_x = (start.x + end.x) / 2.0;
-                let center_y = (start.y + end.y) / 2.0;
-                let radius_x = (end.x - start.x).abs() / 2.0;
-                let radius_y = (end.y - start.y).abs() / 2.0;
+            ToolPreview::Ellipse {
+                center,
+                radius_x,
+                radius_y,
+                color,
+            } => {
+                let preview_color = rgb(
+                    color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32,
+                );
 
                 // Scale to screen coordinates
-                let (center_sx, center_sy) = self.scale_point(center_x, center_y);
+                let (center_sx, center_sy) = self.scale_point(center.x, center.y);
                 let (scale, _, _) = self.calculate_scale_and_offset();
                 let scaled_radius_x = radius_x as f32 * scale;
                 let scaled_radius_y = radius_y as f32 * scale;
 
-                div()
-                    .absolute()
-                    .left(px(center_sx - scaled_radius_x))
-                    .top(px(center_sy - scaled_radius_y))
-                    .w(px(scaled_radius_x * 2.0))
-                    .h(px(scaled_radius_y * 2.0))
-                    .border_2()
-                    .border_color(preview_color)
-                    .rounded_full()
-                    .into_any_element()
+                Some(
+                    div()
+                        .absolute()
+                        .left(px(center_sx - scaled_radius_x))
+                        .top(px(center_sy - scaled_radius_y))
+                        .w(px(scaled_radius_x * 2.0))
+                        .h(px(scaled_radius_y * 2.0))
+                        .border_2()
+                        .border_color(preview_color)
+                        .rounded_full()
+                        .into_any_element(),
+                )
             }
-            _ => return None,
-        };
-
-        Some(element)
+        }
     }
 
     /// Render the canvas area with image and annotations
@@ -1366,8 +1358,8 @@ impl EditorView {
             }
         }
 
-        // Add drag preview if actively drawing
-        if let Some(preview) = self.render_drag_preview() {
+        // Add tool preview if actively drawing
+        if let Some(preview) = self.render_tool_preview() {
             canvas = canvas.child(preview);
         }
 
@@ -1387,11 +1379,15 @@ impl EditorView {
         let status_text = if self.text_input_state.is_some() {
             "Typing text... (Enter to confirm, Escape to cancel)".to_string()
         } else {
+            let is_drawing = !matches!(
+                self.tool_manager.preview(&self.build_tool_context()),
+                ToolPreview::None
+            );
             format!(
                 "Tool: {} | Annotations: {} | {}",
                 self.active_tool.name(),
                 self.annotations.len(),
-                if self.drag_state.is_some() { "Drawing..." } else { "Ready" }
+                if is_drawing { "Drawing..." } else { "Ready" }
             )
         };
 
@@ -1407,17 +1403,6 @@ impl EditorView {
             .child(status_text)
     }
 
-    /// Find a text annotation at the given point (in image coordinates)
-    fn find_text_annotation_at(&self, point: QuillPoint) -> Option<&Annotation> {
-        self.annotations.iter().find(|a| {
-            if let AnnotationType::Text { .. } = &a.annotation_type {
-                a.contains_point(point)
-            } else {
-                false
-            }
-        })
-    }
-
     /// Handle keyboard input
     fn handle_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         // Only handle if we're in text input mode
@@ -1426,39 +1411,48 @@ impl EditorView {
         }
 
         let keystroke = &event.keystroke;
-        let key = &keystroke.key;
 
-        match key.as_str() {
-            "enter" => {
-                // Confirm the text input
-                self.confirm_text_input(cx);
-            }
-            "escape" => {
-                // Cancel text input
-                self.cancel_text_input(cx);
-            }
-            "backspace" => {
-                // Delete last character
-                if let Some(ref mut state) = self.text_input_state {
-                    state.content.pop();
-                    cx.notify();
-                }
-            }
-            _ => {
-                // Add typed character - use key_char if available, otherwise key
-                if let Some(ref mut state) = self.text_input_state {
-                    if let Some(ref char) = keystroke.key_char {
-                        // Only add printable characters
-                        if !char.is_empty() {
-                            state.content.push_str(char);
-                            cx.notify();
-                        }
-                    } else if key.len() == 1 {
-                        // Single character key (like 'a', 'b', etc.)
-                        state.content.push_str(key);
-                        cx.notify();
-                    }
-                }
+        // Build ToolEvent::KeyDown
+        let tool_event = ToolEvent::KeyDown {
+            key: keystroke.key.clone(),
+            key_char: keystroke.key_char.as_ref().and_then(|s| s.chars().next()),
+            modifiers: Modifiers::default(),
+        };
+
+        // Dispatch to tool manager
+        // We inline context building to enable split borrows (annotations vs tool_manager)
+        let result = {
+            let (scale, offset_x, offset_y) = {
+                let scale_x = self.canvas_width / self.image_width as f32;
+                let scale_y = self.canvas_height / self.image_height as f32;
+                let scale = scale_x.min(scale_y);
+                let scaled_img_width = self.image_width as f32 * scale;
+                let scaled_img_height = self.image_height as f32 * scale;
+                let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
+                let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
+                (scale, offset_x, offset_y)
+            };
+            let ctx = ToolContext {
+                color: self.current_color,
+                stroke_width: 2.0,
+                fill_enabled: false,
+                image_size: (self.image_width, self.image_height),
+                scale,
+                offset: (offset_x, offset_y),
+                annotations: &self.annotations,
+                min_drag_distance: 5.0,
+            };
+            self.tool_manager.handle_event(tool_event, &ctx)
+        };
+
+        // Process the result
+        self.process_tool_result(result, cx);
+
+        // Sync content from TextTool to EditorView's text_input_state for rendering
+        // (TextTool is the source of truth for content)
+        if let Some(ref mut state) = self.text_input_state {
+            if let Some(text_tool) = self.tool_manager.get_tool_as::<TextTool>(ToolId::Text) {
+                state.content = text_tool.text_state().content.clone();
             }
         }
     }
@@ -1510,12 +1504,6 @@ impl EditorView {
 
         // Save annotations to disk
         self.save_annotations();
-        cx.notify();
-    }
-
-    /// Cancel text input without creating annotation
-    fn cancel_text_input(&mut self, cx: &mut Context<Self>) {
-        self.text_input_state = None;
         cx.notify();
     }
 

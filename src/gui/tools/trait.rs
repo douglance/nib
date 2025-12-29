@@ -4,8 +4,9 @@ use super::{ToolContext, ToolEvent, ToolPreview, ToolResult};
 use std::any::Any;
 
 /// Tool identifier enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ToolId {
+    #[default]
     Select,
     Arrow,
     Rectangle,
@@ -33,6 +34,54 @@ impl ToolId {
             ToolId::Line,
             ToolId::Crop,
         ]
+    }
+
+    /// Returns the display name
+    pub fn name(&self) -> &'static str {
+        match self {
+            ToolId::Select => "Select",
+            ToolId::Arrow => "Arrow",
+            ToolId::Rectangle => "Rectangle",
+            ToolId::Ellipse => "Ellipse",
+            ToolId::Text => "Text",
+            ToolId::Number => "Number",
+            ToolId::Blur => "Blur",
+            ToolId::Highlight => "Highlight",
+            ToolId::Line => "Line",
+            ToolId::Crop => "Crop",
+        }
+    }
+
+    /// Returns the keyboard shortcut
+    pub fn shortcut(&self) -> char {
+        match self {
+            ToolId::Select => 'v',
+            ToolId::Arrow => 'a',
+            ToolId::Rectangle => 'r',
+            ToolId::Ellipse => 'e',
+            ToolId::Text => 't',
+            ToolId::Number => 'n',
+            ToolId::Blur => 'b',
+            ToolId::Highlight => 'h',
+            ToolId::Line => 'l',
+            ToolId::Crop => 'c',
+        }
+    }
+
+    /// Returns the icon file path for this tool (Lucide icons, ISC license)
+    pub fn icon_path(&self) -> &'static str {
+        match self {
+            ToolId::Select => "assets/icons/select.svg",
+            ToolId::Arrow => "assets/icons/arrow.svg",
+            ToolId::Rectangle => "assets/icons/rectangle.svg",
+            ToolId::Ellipse => "assets/icons/ellipse.svg",
+            ToolId::Text => "assets/icons/text.svg",
+            ToolId::Number => "assets/icons/number.svg",
+            ToolId::Blur => "assets/icons/blur.svg",
+            ToolId::Highlight => "assets/icons/highlight.svg",
+            ToolId::Line => "assets/icons/line.svg",
+            ToolId::Crop => "assets/icons/crop.svg",
+        }
     }
 }
 

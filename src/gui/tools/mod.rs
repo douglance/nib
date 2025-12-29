@@ -18,6 +18,9 @@ mod state;
 mod text;
 mod r#trait;
 
+#[cfg(test)]
+mod tests;
+
 pub use arrow::*;
 pub use blur::*;
 pub use context::*;

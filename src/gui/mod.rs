@@ -14,3 +14,9 @@ pub mod window;
 
 pub use app::QuillApp;
 pub use app::{annotations_file_path, deserialize_annotation, AnnotationsFile, AnnotationGeometry, SerializedAnnotation};
+
+// Re-export commonly used tool types for convenience
+pub use tools::{
+    Modifiers, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolManager, ToolMode,
+    ToolPreview, ToolResult,
+};
