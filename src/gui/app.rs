@@ -53,7 +53,7 @@ const ANNOTATIONS_FILE_VERSION: &str = "1.0";
 
 /// Height of the toolbar in pixels (used for coordinate offset)
 /// Mouse events are window-relative, so we subtract this to get canvas-relative coords
-const TOOLBAR_HEIGHT: f32 = 44.0;
+const TOOLBAR_HEIGHT: f32 = 0.0; // Toolbar floats inside canvas, doesn't offset coordinates
 
 /// Serializable annotation data for JSON persistence
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -997,24 +997,33 @@ impl EditorView {
             Tool::Blur,
         ];
 
-        let toolbar_bg = rgb(0x2d2d2d);
         let button_bg = rgb(0x3d3d3d);
         let button_active_bg = rgb(0x0078d4);
         let text_color = rgb(0xcccccc);
         let icon_color = rgb(0xffffff);
 
+        // Outer wrapper for centering at bottom
         div()
+            .absolute()
+            .bottom_4()
+            .left_0()
+            .right_0()
             .flex()
-            .flex_row()
-            .w_full()
-            .h(px(100.))
-            .bg(toolbar_bg)
-            .border_b_1()
-            .border_color(rgb(0x1e1e1e))
-            .px_4()
-            .gap_3()
-            .items_center()
-            .children(tools_to_show.iter().map(|tool| {
+            .justify_center()
+            .child(
+                // Actual toolbar container
+                div()
+                    .flex()
+                    .flex_row()
+                    .h(px(72.))
+                    .bg(rgba(0x2d2d2dee)) // Semi-transparent background
+                    .rounded_xl()
+                    .border_1()
+                    .border_color(rgba(0x00000044))
+                    .px_3()
+                    .gap_1()
+                    .items_center()
+                    .children(tools_to_show.iter().map(|tool| {
                 let is_active = *tool == self.active_tool;
                 let tool_copy = *tool;
 
@@ -1024,28 +1033,30 @@ impl EditorView {
                     .flex_col()
                     .items_center()
                     .justify_center()
-                    .w(px(72.))
-                    .h(px(80.))
-                    .gap_2()
-                    .rounded_lg()
+                    .w(px(56.))
+                    .h(px(64.))
+                    .gap_1()
+                    .rounded_md()
                     .cursor_pointer()
-                    .bg(if is_active { button_active_bg } else { button_bg })
+                    .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
+                    .hover(|style| style.bg(button_bg))
                     .child(
                         svg()
                             .path(tool.icon_path())
-                            .size(px(36.))
+                            .size(px(28.))
                             .text_color(icon_color)
                     )
                     .child(
                         div()
                             .text_color(text_color)
-                            .text_xs()
+                            .text_size(px(10.))
                             .child(tool.name())
                     )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.select_tool(tool_copy, cx);
                     }))
-            }))
+            })),
+            ) // Close inner toolbar container
     }
 
     /// Render a single annotation as an overlay element
@@ -1296,8 +1307,7 @@ impl EditorView {
 
         let mut canvas = div()
             .id("canvas")
-            .flex_1()
-            .w_full()
+            .size_full()
             .bg(background_color)
             .relative()
             .overflow_hidden()
@@ -1578,7 +1588,7 @@ impl Render for EditorView {
         let viewport_width: f32 = viewport.width.into();
         let viewport_height: f32 = viewport.height.into();
         self.canvas_width = viewport_width;
-        self.canvas_height = viewport_height - 66.0; // Subtract toolbar (44px) + status bar (22px)
+        self.canvas_height = viewport_height; // Toolbar floats inside canvas
 
         // Check if sidecar file has changed and reload annotations if needed
         self.check_and_reload_annotations();
@@ -1588,14 +1598,12 @@ impl Render for EditorView {
         div()
             .id("editor-container")
             .size_full()
-            .flex()
-            .flex_col()
+            .relative()
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))
-            .child(self.render_toolbar(cx))
             .child(self.render_canvas(cx))
-            .child(self.render_status_bar())
+            .child(self.render_toolbar(cx)) // Toolbar floats over canvas
     }
 }
