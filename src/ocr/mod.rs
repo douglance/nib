@@ -191,6 +191,11 @@ pub fn extract_text_regions(image_path: &std::path::Path) -> Result<Vec<TextRegi
     // Collect results with word-level bounding boxes
     let mut regions = Vec::new();
 
+    // Add padding to bounding boxes to ensure full text coverage
+    // OCR returns tight boxes that often clip ascenders/descenders
+    const PADDING_X: i32 = 3;
+    const PADDING_Y: i32 = 4;
+
     for line in line_texts.iter().flatten() {
         for word in line.words() {
             let rect = word.bounding_rect();
@@ -200,12 +205,18 @@ pub fn extract_text_regions(image_path: &std::path::Path) -> Result<Vec<TextRegi
                 continue;
             }
 
+            // Expand bounding box with padding (clamped to >= 0)
+            let x = (rect.left() - PADDING_X).max(0);
+            let y = (rect.top() - PADDING_Y).max(0);
+            let width = rect.width() as i32 + (PADDING_X * 2);
+            let height = rect.height() as i32 + (PADDING_Y * 2);
+
             regions.push(TextRegion {
                 text,
-                x: rect.left(),
-                y: rect.top(),
-                width: rect.width() as i32,
-                height: rect.height() as i32,
+                x,
+                y,
+                width,
+                height,
                 confidence: 1.0, // OCRS doesn't provide per-word confidence
             });
         }

@@ -12,7 +12,6 @@ use gpui::{
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -51,17 +50,6 @@ const ANNOTATIONS_FILE_VERSION: &str = "1.0";
 /// Height of the toolbar in pixels (used for coordinate offset)
 /// Mouse events are window-relative, so we subtract this to get canvas-relative coords
 const TOOLBAR_HEIGHT: f32 = 44.0;
-
-/// Debug log to file (eprintln doesn't flush reliably)
-fn debug_log(msg: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/quill-debug.log")
-    {
-        let _ = writeln!(f, "{}", msg);
-    }
-}
 
 /// Serializable annotation data for JSON persistence
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -508,30 +496,28 @@ impl EditorView {
 
     /// Scale image coordinates to canvas coordinates for rendering
     /// Takes (x, y, w, h) in image pixels and returns (sx, sy, sw, sh) in canvas pixels
-    /// Note: coordinates are relative to the canvas container, not the window
+    /// Note: Y is adjusted by TOOLBAR_HEIGHT because annotations are positioned
+    /// absolutely within the canvas, but the canvas itself sits below the toolbar
     fn scale_coords(&self, x: f64, y: f64, w: f64, h: f64) -> (f32, f32, f32, f32) {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
 
-        let out_x = (x as f32 * scale) + offset_x;
-        let out_y = (y as f32 * scale) + offset_y;
-        let out_w = w as f32 * scale;
-        let out_h = h as f32 * scale;
-
-        debug_log(&format!("scale_coords: image=({:.1}, {:.1}, {:.1}, {:.1}) scale={:.3} offset=({:.1}, {:.1}) -> canvas=({:.1}, {:.1}, {:.1}, {:.1})",
-                 x, y, w, h, scale, offset_x, offset_y, out_x, out_y, out_w, out_h));
-
-        (out_x, out_y, out_w, out_h)
+        (
+            (x as f32 * scale) + offset_x,
+            (y as f32 * scale) + offset_y - TOOLBAR_HEIGHT,
+            w as f32 * scale,
+            h as f32 * scale,
+        )
     }
 
     /// Scale a single point from image coordinates to canvas coordinates
-    /// Note: coordinates are relative to the canvas container, not the window
+    /// Note: Y is adjusted by TOOLBAR_HEIGHT because annotations are positioned
+    /// absolutely within the canvas, but the canvas itself sits below the toolbar
     fn scale_point(&self, x: f64, y: f64) -> (f32, f32) {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
-        let out_x = (x as f32 * scale) + offset_x;
-        let out_y = (y as f32 * scale) + offset_y;
-        debug_log(&format!("scale_point: image=({:.1}, {:.1}) scale={:.3} offset=({:.1}, {:.1}) -> canvas=({:.1}, {:.1})",
-                 x, y, scale, offset_x, offset_y, out_x, out_y));
-        (out_x, out_y)
+        (
+            (x as f32 * scale) + offset_x,
+            (y as f32 * scale) + offset_y - TOOLBAR_HEIGHT,
+        )
     }
 
     /// Convert window coordinates to image coordinates for annotation creation
@@ -544,9 +530,6 @@ impl EditorView {
 
         let image_x = (window_x - offset_x) / scale;
         let image_y = (canvas_y - offset_y) / scale;
-
-        debug_log(&format!("screen_to_image_coords: window=({:.1}, {:.1}) canvas_y={:.1} scale={:.3} offset=({:.1}, {:.1}) -> image=({:.1}, {:.1})",
-                 window_x, window_y, canvas_y, scale, offset_x, offset_y, image_x, image_y));
 
         (image_x as f64, image_y as f64)
     }
@@ -662,12 +645,6 @@ impl EditorView {
                 let position = event.position;
                 let click_x: f32 = position.x.into();
                 let click_y: f32 = position.y.into();
-
-                // DEBUG: Print dimensions and click info
-                debug_log("=== MOUSE DOWN ===");
-                debug_log(&format!("  canvas_size=({:.0}, {:.0}) image_size=({}, {})",
-                         self.canvas_width, self.canvas_height, self.image_width, self.image_height));
-                debug_log(&format!("  event.position=({:.1}, {:.1})", click_x, click_y));
 
                 // Convert screen coordinates to image coordinates
                 let (img_x, img_y) = self.screen_to_image_coords(click_x, click_y);
@@ -938,9 +915,6 @@ impl EditorView {
             AnnotationType::Box { region, filled, corner_radius, .. } => {
                 // Scale coordinates from image space to screen space
                 let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
-                debug_log(&format!("=== RENDER BOX ==="));
-                debug_log(&format!("  image region: x={:.1} y={:.1} w={:.1} h={:.1}", region.x, region.y, region.width, region.height));
-                debug_log(&format!("  final CSS: .left(px({:.1})) .top(px({:.1})) .w(px({:.1})) .h(px({:.1}))", sx, sy, sw, sh));
                 let mut element = div()
                     .absolute()
                     .left(px(sx))
