@@ -3,3 +3,9 @@ Cargo.lock
 *.swp
 *.swo
 .DS_Store
+
+# Demo/test artifacts
+demo.png
+demo.*.png
+*.rendered.png
+*.annotations.json
