@@ -61,12 +61,19 @@ impl ToolManager {
     }
 
     /// Set the active tool, handling activation/deactivation events
-    pub fn set_active_tool(&mut self, id: ToolId, ctx: &ToolContext) {
+    /// Returns any result from deactivating the old tool (e.g., pending text)
+    pub fn set_active_tool(&mut self, id: ToolId, ctx: &ToolContext) -> Option<ToolResult> {
         if id != self.active_tool_id {
-            // Deactivate old tool
-            if let Some(old_tool) = self.tools.get_mut(&self.active_tool_id) {
-                let _ = old_tool.handle_event(ToolEvent::Deactivated, ctx);
-            }
+            // Deactivate old tool and capture any result
+            let deactivation_result = if let Some(old_tool) = self.tools.get_mut(&self.active_tool_id) {
+                let result = old_tool.handle_event(ToolEvent::Deactivated, ctx);
+                match result {
+                    ToolResult::Ignored | ToolResult::Handled => None,
+                    other => Some(other),
+                }
+            } else {
+                None
+            };
 
             self.active_tool_id = id;
 
@@ -74,7 +81,10 @@ impl ToolManager {
             if let Some(new_tool) = self.tools.get_mut(&id) {
                 let _ = new_tool.handle_event(ToolEvent::Activated, ctx);
             }
+
+            return deactivation_result;
         }
+        None
     }
 
     /// Dispatch an event to the active tool

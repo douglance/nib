@@ -74,11 +74,16 @@ impl Tool for HighlightTool {
 
                     let region = Region::from_points(start, position);
 
+                    // Reject degenerate shapes where both dimensions are too small
+                    if region.width < ctx.min_drag_distance && region.height < ctx.min_drag_distance {
+                        return ToolResult::Ignored;
+                    }
+
                     let annotation = Annotation::new(AnnotationType::Highlight {
                         region,
                         corner_radius: 0.0,
                     })
-                    .with_color(Self::HIGHLIGHT_COLOR);
+                    .with_color(ctx.color);
 
                     return ToolResult::Created(annotation);
                 }
@@ -92,11 +97,11 @@ impl Tool for HighlightTool {
         }
     }
 
-    fn preview(&self, _ctx: &ToolContext) -> ToolPreview {
+    fn preview(&self, ctx: &ToolContext) -> ToolPreview {
         if let (Some(start), Some(current)) = (self.drag.start, self.drag.current) {
             ToolPreview::Rectangle {
                 region: Region::from_points(start, current),
-                color: Self::HIGHLIGHT_COLOR,
+                color: ctx.color,
             }
         } else {
             ToolPreview::None

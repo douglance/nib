@@ -70,6 +70,11 @@ impl Tool for RectangleTool {
 
                     let region = Region::from_points(start, position);
 
+                    // Reject degenerate shapes where both dimensions are too small
+                    if region.width < ctx.min_drag_distance && region.height < ctx.min_drag_distance {
+                        return ToolResult::Ignored;
+                    }
+
                     let annotation = Annotation::new(AnnotationType::Box {
                         region,
                         stroke_width: ctx.stroke_width,

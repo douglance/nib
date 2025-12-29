@@ -41,13 +41,14 @@ impl TextTool {
             }
         };
 
-        let content = std::mem::take(&mut self.state.content);
+        // Clone content before reset to preserve it for the result
+        let content = self.state.content.clone();
         let editing_id = self.state.editing_id;
         self.state.reset();
 
         if let Some(id) = editing_id {
-            // Return update result - EditorView handles the actual update
-            ToolResult::Batch(vec![ToolResult::Updated(id), ToolResult::ExitMode])
+            // Return update result with content - EditorView handles the actual update
+            ToolResult::Batch(vec![ToolResult::UpdatedText(id, content), ToolResult::ExitMode])
         } else {
             let annotation = Annotation::new(AnnotationType::Text {
                 position,

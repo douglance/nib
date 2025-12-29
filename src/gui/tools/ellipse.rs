@@ -18,12 +18,15 @@ impl EllipseTool {
         }
     }
 
-    /// Calculate ellipse parameters from drag points
-    /// Start point becomes center, drag distance determines radii
-    fn calculate_ellipse(start: Point, current: Point) -> (Point, f64, f64) {
-        let center = start;
-        let radius_x = (current.x - start.x).abs();
-        let radius_y = (current.y - start.y).abs();
+    /// Calculate ellipse parameters from drag points using bounding-box model
+    /// Center is midpoint, radii are half the width/height of bounding box
+    fn calculate_ellipse(start: Point, end: Point) -> (Point, f64, f64) {
+        let center = Point::new(
+            (start.x + end.x) / 2.0,
+            (start.y + end.y) / 2.0,
+        );
+        let radius_x = (end.x - start.x).abs() / 2.0;
+        let radius_y = (end.y - start.y).abs() / 2.0;
         (center, radius_x, radius_y)
     }
 }
@@ -78,6 +81,12 @@ impl Tool for EllipseTool {
                     }
 
                     let (center, radius_x, radius_y) = Self::calculate_ellipse(start, position);
+
+                    // Reject degenerate ellipses where both radii are too small
+                    let min_radius = ctx.min_drag_distance / 2.0;
+                    if radius_x < min_radius && radius_y < min_radius {
+                        return ToolResult::Ignored;
+                    }
 
                     let annotation = Annotation::new(AnnotationType::Ellipse {
                         center,

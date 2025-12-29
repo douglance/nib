@@ -98,6 +98,9 @@ pub enum ToolResult {
     /// Tool updated an existing annotation
     Updated(AnnotationId),
 
+    /// Tool updated a text annotation with new content
+    UpdatedText(AnnotationId, String),
+
     /// Tool deleted an annotation
     Deleted(AnnotationId),
 
