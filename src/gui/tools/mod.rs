@@ -13,6 +13,7 @@ mod manager;
 mod number;
 mod rectangle;
 mod state;
+mod text;
 mod r#trait;
 
 pub use arrow::*;
@@ -25,6 +26,7 @@ pub use manager::*;
 pub use number::*;
 pub use rectangle::*;
 pub use state::*;
+pub use text::*;
 pub use r#trait::*;
 
 use crate::core::types::{Annotation, AnnotationId, Color, Point, Region};
