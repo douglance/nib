@@ -9,6 +9,7 @@ pub mod color_picker;
 pub mod elements;
 pub mod sidebar;
 pub mod toolbar;
+pub mod tools;
 pub mod window;
 
 pub use app::QuillApp;
