@@ -492,14 +492,13 @@ impl EditorView {
 
     /// Scale image coordinates to canvas coordinates for rendering
     /// Takes (x, y, w, h) in image pixels and returns (sx, sy, sw, sh) in canvas pixels
-    /// Note: Y is adjusted by TOOLBAR_HEIGHT because annotations are positioned
-    /// absolutely within the canvas, but the canvas itself sits below the toolbar
+    /// Coordinates are canvas-relative (canvas div is already below toolbar)
     fn scale_coords(&self, x: f64, y: f64, w: f64, h: f64) -> (f32, f32, f32, f32) {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
 
         (
             (x as f32 * scale) + offset_x,
-            (y as f32 * scale) + offset_y - TOOLBAR_HEIGHT,
+            (y as f32 * scale) + offset_y,
             w as f32 * scale,
             h as f32 * scale,
         )
@@ -512,6 +511,103 @@ impl EditorView {
             (x as f32 * scale) + offset_x,
             (y as f32 * scale) + offset_y,
         )
+    }
+
+    /// Create a line element using paint_path with proper bounds adjustment
+    /// paint_path uses window coordinates, so we adjust by bounds origin
+    fn render_line_element(
+        start_sx: f32,
+        start_sy: f32,
+        end_sx: f32,
+        end_sy: f32,
+        stroke_width: f32,
+        color: gpui::Hsla,
+    ) -> impl IntoElement {
+        canvas(
+            move |bounds, _window, _cx| {
+                let origin_x: f32 = bounds.origin.x.into();
+                let origin_y: f32 = bounds.origin.y.into();
+                (
+                    point(px(start_sx + origin_x), px(start_sy + origin_y)),
+                    point(px(end_sx + origin_x), px(end_sy + origin_y)),
+                )
+            },
+            move |_bounds, (p_start, p_end), window, _cx| {
+                let mut builder = PathBuilder::stroke(px(stroke_width));
+                builder.move_to(p_start);
+                builder.line_to(p_end);
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, color);
+                }
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
+    /// Create an arrow element using paint_path with proper bounds adjustment
+    fn render_arrow_element(
+        start_sx: f32,
+        start_sy: f32,
+        end_sx: f32,
+        end_sy: f32,
+        stroke_width: f32,
+        color: gpui::Hsla,
+    ) -> impl IntoElement {
+        // Calculate arrowhead geometry
+        let dx = end_sx - start_sx;
+        let dy = end_sy - start_sy;
+        let angle = dy.atan2(dx);
+        let arrow_size: f32 = 12.0;
+        let arrow_angle: f32 = 0.5; // ~28 degrees
+
+        let ax1_offset = -arrow_size * (angle + arrow_angle).cos();
+        let ay1_offset = -arrow_size * (angle + arrow_angle).sin();
+        let ax2_offset = -arrow_size * (angle - arrow_angle).cos();
+        let ay2_offset = -arrow_size * (angle - arrow_angle).sin();
+
+        canvas(
+            move |bounds, _window, _cx| {
+                let origin_x: f32 = bounds.origin.x.into();
+                let origin_y: f32 = bounds.origin.y.into();
+                let start_wx = start_sx + origin_x;
+                let start_wy = start_sy + origin_y;
+                let end_wx = end_sx + origin_x;
+                let end_wy = end_sy + origin_y;
+                (
+                    point(px(start_wx), px(start_wy)),
+                    point(px(end_wx), px(end_wy)),
+                    point(px(end_wx + ax1_offset), px(end_wy + ay1_offset)),
+                    point(px(end_wx + ax2_offset), px(end_wy + ay2_offset)),
+                )
+            },
+            move |_bounds, (p_start, p_end, p_arrow1, p_arrow2), window, _cx| {
+                // Draw main line
+                let mut builder = PathBuilder::stroke(px(stroke_width));
+                builder.move_to(p_start);
+                builder.line_to(p_end);
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, color);
+                }
+
+                // Draw arrowhead
+                let mut arrow1 = PathBuilder::stroke(px(stroke_width));
+                arrow1.move_to(p_end);
+                arrow1.line_to(p_arrow1);
+                if let Ok(path) = arrow1.build() {
+                    window.paint_path(path, color);
+                }
+
+                let mut arrow2 = PathBuilder::stroke(px(stroke_width));
+                arrow2.move_to(p_end);
+                arrow2.line_to(p_arrow2);
+                if let Ok(path) = arrow2.build() {
+                    window.paint_path(path, color);
+                }
+            },
+        )
+        .absolute()
+        .size_full()
     }
 
     /// Convert window coordinates to image coordinates for annotation creation
@@ -994,85 +1090,16 @@ impl EditorView {
                 element.into_any_element()
             }
             AnnotationType::Arrow { start, end, .. } => {
-                // Scale start and end points to screen coordinates
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
-
-                // Calculate arrowhead points
-                let dx = end_sx - start_sx;
-                let dy = end_sy - start_sy;
-                let angle = dy.atan2(dx);
-                let arrow_size: f32 = 12.0;
-                let arrow_angle: f32 = 0.5; // ~28 degrees
-
-                let ax1 = end_sx - arrow_size * (angle + arrow_angle).cos();
-                let ay1 = end_sy - arrow_size * (angle + arrow_angle).sin();
-                let ax2 = end_sx - arrow_size * (angle - arrow_angle).cos();
-                let ay2 = end_sy - arrow_size * (angle - arrow_angle).sin();
-
-                canvas(
-                    move |_bounds, _window, _cx| {
-                        // Prepaint: return line data for paint phase
-                        (
-                            point(px(start_sx), px(start_sy)),
-                            point(px(end_sx), px(end_sy)),
-                            point(px(ax1), px(ay1)),
-                            point(px(ax2), px(ay2)),
-                        )
-                    },
-                    move |_bounds, (p_start, p_end, p_arrow1, p_arrow2), window, _cx| {
-                        // Paint: draw line from start to end using PathBuilder stroke
-                        let mut builder = PathBuilder::stroke(px(2.0));
-                        builder.move_to(p_start);
-                        builder.line_to(p_end);
-                        if let Ok(path) = builder.build() {
-                            window.paint_path(path, border_color);
-                        }
-
-                        // Draw arrowhead lines
-                        let mut arrow_builder1 = PathBuilder::stroke(px(2.0));
-                        arrow_builder1.move_to(p_end);
-                        arrow_builder1.line_to(p_arrow1);
-                        if let Ok(path) = arrow_builder1.build() {
-                            window.paint_path(path, border_color);
-                        }
-
-                        let mut arrow_builder2 = PathBuilder::stroke(px(2.0));
-                        arrow_builder2.move_to(p_end);
-                        arrow_builder2.line_to(p_arrow2);
-                        if let Ok(path) = arrow_builder2.build() {
-                            window.paint_path(path, border_color);
-                        }
-                    },
-                )
-                .size_full()
-                .into_any_element()
+                Self::render_arrow_element(start_sx, start_sy, end_sx, end_sy, 2.0, border_color.into())
+                    .into_any_element()
             }
             AnnotationType::Line { start, end, .. } => {
-                // Scale start and end points to screen coordinates
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
-
-                canvas(
-                    move |_bounds, _window, _cx| {
-                        // Prepaint: return line endpoints for paint phase
-                        (
-                            point(px(start_sx), px(start_sy)),
-                            point(px(end_sx), px(end_sy)),
-                        )
-                    },
-                    move |_bounds, (p_start, p_end), window, _cx| {
-                        // Paint: draw line from start to end using PathBuilder stroke
-                        let mut builder = PathBuilder::stroke(px(2.0));
-                        builder.move_to(p_start);
-                        builder.line_to(p_end);
-                        if let Ok(path) = builder.build() {
-                            window.paint_path(path, border_color);
-                        }
-                    },
-                )
-                .size_full()
-                .into_any_element()
+                Self::render_line_element(start_sx, start_sy, end_sx, end_sy, 2.0, border_color.into())
+                    .into_any_element()
             }
             AnnotationType::Ellipse { center, radius_x, radius_y, filled, .. } => {
                 // Scale center and radii
@@ -1222,30 +1249,12 @@ impl EditorView {
                 let preview_color = rgb(
                     color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32,
                 );
-
-                // Scale start and end points to screen coordinates
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
 
                 Some(
-                    canvas(
-                        move |_bounds, _window, _cx| {
-                            (
-                                point(px(start_sx), px(start_sy)),
-                                point(px(end_sx), px(end_sy)),
-                            )
-                        },
-                        move |_bounds, (p_start, p_end), window, _cx| {
-                            let mut builder = PathBuilder::stroke(px(2.0));
-                            builder.move_to(p_start);
-                            builder.line_to(p_end);
-                            if let Ok(path) = builder.build() {
-                                window.paint_path(path, preview_color);
-                            }
-                        },
-                    )
-                    .size_full()
-                    .into_any_element(),
+                    Self::render_line_element(start_sx, start_sy, end_sx, end_sy, 2.0, preview_color.into())
+                        .into_any_element(),
                 )
             }
             ToolPreview::Ellipse {
@@ -1302,18 +1311,22 @@ impl EditorView {
                 this.handle_mouse_up(event, cx);
             }));
 
-        // Add image if we have one
+        // Add image if we have one - use explicit positioning to match annotation coordinates
         if let Some(path) = &self.file_path {
+            let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
+            let scaled_width = self.image_width as f32 * scale;
+            let scaled_height = self.image_height as f32 * scale;
+
             canvas = canvas.child(
                 div()
-                    .size_full()
-                    .flex()
-                    .items_center()
-                    .justify_center()
+                    .absolute()
+                    .left(px(offset_x))
+                    .top(px(offset_y))
+                    .w(px(scaled_width))
+                    .h(px(scaled_height))
                     .child(
                         img(path.clone())
-                            .max_w_full()
-                            .max_h_full()
+                            .size_full()
                             .with_fallback(move || {
                                 div()
                                     .text_color(rgb(0xff6666))
