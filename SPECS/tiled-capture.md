@@ -2,7 +2,7 @@
 
 ## Overview
 
-This specification defines a spatial tiling system for Quill that captures and stores screenshots as a hierarchy of tiles, similar to web map tiles (e.g., Google Maps, OpenStreetMap). The system solves the fundamental problem of **losing fine details when working with large screenshots** by enabling:
+This specification defines a spatial tiling system for Nib that captures and stores screenshots as a hierarchy of tiles, similar to web map tiles (e.g., Google Maps, OpenStreetMap). The system solves the fundamental problem of **losing fine details when working with large screenshots** by enabling:
 
 1. Full-resolution capture regardless of image size
 2. Spatial queries: "What's at coordinates X,Y?" returns the relevant tile at full resolution
@@ -14,7 +14,7 @@ This specification defines a spatial tiling system for Quill that captures and s
 
 ### Current Limitations
 
-The existing `QuillImage` structure stores the entire screenshot as a single PNG blob. For large captures (e.g., 4K monitors, multi-monitor setups, or scrolling captures), this creates problems:
+The existing `NibImage` structure stores the entire screenshot as a single PNG blob. For large captures (e.g., 4K monitors, multi-monitor setups, or scrolling captures), this creates problems:
 
 1. **Memory pressure**: A 4K screenshot is ~33MB uncompressed RGBA
 2. **Context window inefficiency**: AI models receive the entire image even when discussing a small region
@@ -34,7 +34,7 @@ The existing `QuillImage` structure stores the entire screenshot as a single PNG
 ### Directory Layout
 
 ```
-quill/
+nib/
   captures/
     screenshot_20241228_143052/           # Capture session directory
       manifest.json                       # Tile metadata and spatial index
@@ -503,7 +503,7 @@ pub struct OcrConfig {
     pub engine: String,
 }
 
-/// A tiled capture session (like QuillImage but tiled)
+/// A tiled capture session (like NibImage but tiled)
 pub struct TiledCapture {
     /// Root directory for this capture
     pub root_dir: PathBuf,
@@ -537,7 +537,7 @@ impl TiledCapture {
         };
 
         // Default cache size: 64 tiles (~64MB for 512px RGBA tiles)
-        let cache_size = std::env::var("QUILL_TILE_CACHE_SIZE")
+        let cache_size = std::env::var("NIB_TILE_CACHE_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(64);
@@ -1105,31 +1105,31 @@ pub struct TextMatch {
 
 ```bash
 # Capture with tiling enabled (default for large captures)
-quill capture --tiled -o screenshot.tiles/
-quill capture --tiled --tile-size 256 --zoom-levels 5
+nib capture --tiled -o screenshot.tiles/
+nib capture --tiled --tile-size 256 --zoom-levels 5
 
 # Query a specific region (returns tile info + extracted data)
-quill query screenshot.tiles/ --point 1920,1080
-quill query screenshot.tiles/ --region 100,200,400,300
+nib query screenshot.tiles/ --point 1920,1080
+nib query screenshot.tiles/ --region 100,200,400,300
 
 # Extract a region at full resolution
-quill extract screenshot.tiles/ --region 100,200,400,300 -o region.png
+nib extract screenshot.tiles/ --region 100,200,400,300 -o region.png
 
 # List tiles at a zoom level
-quill tiles screenshot.tiles/ --zoom 2
+nib tiles screenshot.tiles/ --zoom 2
 
 # Run OCR on tiles (background or on-demand)
-quill ocr screenshot.tiles/ --tiles all
-quill ocr screenshot.tiles/ --tiles z3/2_1,z3/2_2
+nib ocr screenshot.tiles/ --tiles all
+nib ocr screenshot.tiles/ --tiles z3/2_1,z3/2_2
 
 # Find text across tiles
-quill find-text screenshot.tiles/ -s "error message"
+nib find-text screenshot.tiles/ -s "error message"
 
 # View tile info
-quill tile-info screenshot.tiles/z2/1_0.png
+nib tile-info screenshot.tiles/z2/1_0.png
 
 # Render tiles to single image (for export)
-quill stitch screenshot.tiles/ -o full.png --zoom 2
+nib stitch screenshot.tiles/ -o full.png --zoom 2
 ```
 
 ### Full CLI Command Implementations
@@ -1739,13 +1739,13 @@ pub struct AiContext {
    - Auto-tiling for large captures
 
 2. **New query commands**
-   - `quill query`
-   - `quill extract`
-   - `quill tiles`
+   - `nib query`
+   - `nib extract`
+   - `nib tiles`
 
 3. **Update existing commands**
-   - `quill render` works with tiled captures
-   - `quill find-text` uses per-tile OCR
+   - `nib render` works with tiled captures
+   - `nib find-text` uses per-tile OCR
 
 ### Phase 4: OCR Integration (Week 4)
 
@@ -1870,7 +1870,7 @@ fn test_end_to_end_tiled_capture() {
 ### Memory Budget
 
 - Default tile cache: 64 tiles (512x512 RGBA = 1MB each = 64MB max)
-- Configurable via `QUILL_TILE_CACHE_SIZE` env var
+- Configurable via `NIB_TILE_CACHE_SIZE` env var
 - LRU eviction for least-recently-used tiles
 
 ### Disk I/O

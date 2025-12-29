@@ -1,4 +1,4 @@
-//! QML (Quill Markup Language) parser and serializer
+//! QML (Nib Markup Language) parser and serializer
 //!
 //! QML is a lightweight markup format for encoding annotations.
 //! It can be embedded in PNG tEXt chunks or rendered visually.
@@ -492,10 +492,7 @@ impl<R: Read> QmlParser<R> {
         }
 
         if nums.len() < 4 {
-            return Err(self.parse_error(format!(
-                "Region requires x,y,width,height, got: {}",
-                s
-            )));
+            return Err(self.parse_error(format!("Region requires x,y,width,height, got: {}", s)));
         }
 
         let x = self.parse_f64(&nums[0])?;
@@ -516,9 +513,9 @@ impl<R: Read> QmlParser<R> {
 
     fn parse_f64(&self, s: &str) -> QmlResult<f64> {
         let trimmed = s.trim();
-        trimmed.parse().map_err(|_| {
-            self.parse_error(format!("Invalid number: '{}'", trimmed))
-        })
+        trimmed
+            .parse()
+            .map_err(|_| self.parse_error(format!("Invalid number: '{}'", trimmed)))
     }
 
     fn parse_error(&self, message: impl Into<String>) -> QmlError {
@@ -578,8 +575,7 @@ impl<W: Write> QmlSerializer<W> {
                     region.x, region.y, region.width, region.height
                 )
             }
-            AnnotationType::Text { position, .. }
-            | AnnotationType::Number { position, .. } => {
+            AnnotationType::Text { position, .. } | AnnotationType::Number { position, .. } => {
                 format!("{:.0},{:.0}", position.x, position.y)
             }
             AnnotationType::Line { start, end, .. } => {
@@ -728,7 +724,10 @@ mod tests {
         let annotations = parse_qml_str(qml).unwrap();
         assert_eq!(annotations.len(), 1);
 
-        if let AnnotationType::Number { position, value, .. } = &annotations[0].annotation_type {
+        if let AnnotationType::Number {
+            position, value, ..
+        } = &annotations[0].annotation_type
+        {
             assert_eq!(position.x, 50.0);
             assert_eq!(position.y, 60.0);
             assert_eq!(*value, 3);

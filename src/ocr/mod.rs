@@ -62,7 +62,7 @@ impl Region {
 fn models_dir() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("quill")
+        .join("nib")
         .join("ocr-models")
 }
 
@@ -99,12 +99,12 @@ fn ureq_download(url: &str) -> Result<Vec<u8>> {
         .arg(url)
         .output()
         .map_err(|e| {
-            crate::core::QuillError::Other(format!("Failed to run curl: {}", e))
+            crate::core::NibError::Other(format!("Failed to run curl: {}", e))
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(crate::core::QuillError::Other(format!(
+        return Err(crate::core::NibError::Other(format!(
             "Failed to download model: {}",
             stderr
         )));
@@ -119,11 +119,11 @@ fn init_engine() -> Result<OcrEngine> {
     let recognition_path = ensure_model(RECOGNITION_MODEL_URL, "text-recognition.rten")?;
 
     let detection_model = Model::load_file(&detection_path).map_err(|e| {
-        crate::core::QuillError::Other(format!("Failed to load detection model: {}", e))
+        crate::core::NibError::Other(format!("Failed to load detection model: {}", e))
     })?;
 
     let recognition_model = Model::load_file(&recognition_path).map_err(|e| {
-        crate::core::QuillError::Other(format!("Failed to load recognition model: {}", e))
+        crate::core::NibError::Other(format!("Failed to load recognition model: {}", e))
     })?;
 
     let engine = OcrEngine::new(OcrEngineParams {
@@ -131,7 +131,7 @@ fn init_engine() -> Result<OcrEngine> {
         recognition_model: Some(recognition_model),
         ..Default::default()
     })
-    .map_err(|e| crate::core::QuillError::Other(format!("Failed to create OCR engine: {}", e)))?;
+    .map_err(|e| crate::core::NibError::Other(format!("Failed to create OCR engine: {}", e)))?;
 
     Ok(engine)
 }
@@ -139,7 +139,7 @@ fn init_engine() -> Result<OcrEngine> {
 /// Get or initialize the global OCR engine.
 fn get_or_init_engine() -> Result<()> {
     let mut guard = OCR_ENGINE.lock().map_err(|e| {
-        crate::core::QuillError::Other(format!("Failed to lock OCR engine: {}", e))
+        crate::core::NibError::Other(format!("Failed to lock OCR engine: {}", e))
     })?;
 
     if guard.is_none() {
@@ -155,29 +155,29 @@ pub fn extract_text_regions(image_path: &std::path::Path) -> Result<Vec<TextRegi
     get_or_init_engine()?;
 
     let guard = OCR_ENGINE.lock().map_err(|e| {
-        crate::core::QuillError::Other(format!("Failed to lock OCR engine: {}", e))
+        crate::core::NibError::Other(format!("Failed to lock OCR engine: {}", e))
     })?;
 
     let engine = guard.as_ref().ok_or_else(|| {
-        crate::core::QuillError::Other("OCR engine not initialized".to_string())
+        crate::core::NibError::Other("OCR engine not initialized".to_string())
     })?;
 
     // Load and prepare image
     let img = image::open(image_path)
-        .map_err(|e| crate::core::QuillError::Other(format!("Failed to open image: {}", e)))?
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to open image: {}", e)))?
         .into_rgb8();
 
     let img_source = ImageSource::from_bytes(img.as_raw(), img.dimensions()).map_err(|e| {
-        crate::core::QuillError::Other(format!("Failed to create image source: {}", e))
+        crate::core::NibError::Other(format!("Failed to create image source: {}", e))
     })?;
 
     let ocr_input = engine.prepare_input(img_source).map_err(|e| {
-        crate::core::QuillError::Other(format!("Failed to prepare OCR input: {}", e))
+        crate::core::NibError::Other(format!("Failed to prepare OCR input: {}", e))
     })?;
 
     // Step 1: Detect word bounding boxes
     let word_rects = engine.detect_words(&ocr_input).map_err(|e| {
-        crate::core::QuillError::Other(format!("Failed to detect words: {}", e))
+        crate::core::NibError::Other(format!("Failed to detect words: {}", e))
     })?;
 
     // Step 2: Group words into lines
@@ -185,7 +185,7 @@ pub fn extract_text_regions(image_path: &std::path::Path) -> Result<Vec<TextRegi
 
     // Step 3: Recognize text in each line
     let line_texts = engine.recognize_text(&ocr_input, &line_rects).map_err(|e| {
-        crate::core::QuillError::Other(format!("Failed to recognize text: {}", e))
+        crate::core::NibError::Other(format!("Failed to recognize text: {}", e))
     })?;
 
     // Collect results with word-level bounding boxes
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn test_models_dir() {
         let dir = models_dir();
-        assert!(dir.to_string_lossy().contains("quill"));
+        assert!(dir.to_string_lossy().contains("nib"));
         assert!(dir.to_string_lossy().contains("ocr-models"));
     }
 

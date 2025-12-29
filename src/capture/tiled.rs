@@ -255,7 +255,7 @@ impl TiledCapture {
         };
 
         // Get cache size from environment or use default
-        let cache_size = std::env::var("QUILL_TILE_CACHE_SIZE")
+        let cache_size = std::env::var("NIB_TILE_CACHE_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(Self::DEFAULT_CACHE_SIZE);

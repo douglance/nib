@@ -3,7 +3,7 @@
 //! Allows user to select a rectangular region of the screen to capture.
 
 use super::CaptureResult;
-use crate::core::{CaptureError, ImageSource, Point, QuillImage, Region};
+use crate::core::{CaptureError, ImageSource, Point, NibImage, Region};
 use std::time::SystemTime;
 
 /// State for region selection
@@ -71,7 +71,7 @@ impl RegionSelector {
 }
 
 /// Capture a specific region of the screen
-pub fn capture_region(display_id: u32, region: Region) -> CaptureResult<QuillImage> {
+pub fn capture_region(display_id: u32, region: Region) -> CaptureResult<NibImage> {
     let screens = screenshots::Screen::all()
         .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 
@@ -104,7 +104,7 @@ pub fn capture_region(display_id: u32, region: Region) -> CaptureResult<QuillIma
     )
     .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 
-    Ok(QuillImage::new(
+    Ok(NibImage::new(
         png_data,
         width,
         height,

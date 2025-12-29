@@ -1,4 +1,4 @@
-//! Error types for Quill operations
+//! Error types for Nib operations
 
 use std::io;
 use thiserror::Error;
@@ -93,7 +93,7 @@ impl From<rusqlite::Error> for StorageError {
 
 /// Top-level application error
 #[derive(Error, Debug)]
-pub enum QuillError {
+pub enum NibError {
     #[error("QML error: {0}")]
     Qml(#[from] QmlError),
 
@@ -116,4 +116,4 @@ pub enum QuillError {
     Other(String),
 }
 
-pub type Result<T> = std::result::Result<T, QuillError>;
+pub type Result<T> = std::result::Result<T, NibError>;

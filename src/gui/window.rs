@@ -1,12 +1,12 @@
 //! Main window management
 
-use crate::core::{QuillImage, Result};
+use crate::core::{NibImage, Result};
 use std::path::PathBuf;
 
 /// State for the main editor window
 pub struct EditorWindow {
     /// Current document being edited
-    pub document: Option<QuillImage>,
+    pub document: Option<NibImage>,
     /// File path if saved
     pub file_path: Option<PathBuf>,
     /// Whether document has unsaved changes

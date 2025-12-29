@@ -1,5 +1,5 @@
 [package]
-name = "quill"
+name = "nib"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
@@ -9,11 +9,11 @@ keywords = ["screenshot", "annotation", "image", "tool"]
 categories = ["graphics", "gui", "command-line-utilities"]
 
 [[bin]]
-name = "quill"
+name = "nib"
 path = "src/main.rs"
 
 [lib]
-name = "quill"
+name = "nib"
 path = "src/lib.rs"
 
 [dependencies]

@@ -3,7 +3,7 @@
 //! Renders annotations onto the image and exports as PNG/JPEG/WebP.
 
 use super::StorageResult;
-use crate::core::{Annotation, AnnotationType, Color, QuillImage, Region, StorageError};
+use crate::core::{Annotation, AnnotationType, Color, NibImage, Region, StorageError};
 use image::{DynamicImage, Rgba, RgbaImage};
 use imageproc::drawing::{
     draw_filled_circle_mut, draw_filled_rect_mut, draw_hollow_rect_mut, draw_line_segment_mut,
@@ -53,7 +53,7 @@ impl Default for ExportOptions {
 
 /// Export image with annotations
 pub fn export_image(
-    image: &QuillImage,
+    image: &NibImage,
     path: impl AsRef<Path>,
     options: &ExportOptions,
 ) -> StorageResult<()> {
@@ -423,7 +423,7 @@ fn draw_ellipse_outline(
 }
 
 /// Export to clipboard
-pub fn export_to_clipboard(image: &QuillImage, options: &ExportOptions) -> StorageResult<()> {
+pub fn export_to_clipboard(image: &NibImage, options: &ExportOptions) -> StorageResult<()> {
     use arboard::Clipboard;
 
     // Load and render image

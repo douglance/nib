@@ -25,7 +25,7 @@
 
 ## Prerequisite
 
-This spec assumes the rename from "quill" to "nib" is complete. See `SPECS/rename-to-nib.md`.
+This spec assumes the rename from "nib" to "nib" is complete. See `SPECS/rename-to-nib.md`.
 
 ## SQLite Schema
 

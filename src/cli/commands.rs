@@ -7,8 +7,8 @@ use crate::collab::{
     session::Session,
     types::ClientType,
 };
-use crate::core::{qml, QuillImage, Result};
-use crate::gui::{QuillApp, annotations_file_path, AnnotationsFile};
+use crate::core::{qml, NibImage, Result};
+use crate::gui::{NibApp, annotations_file_path, AnnotationsFile};
 use crate::storage::{self, export, index::Index, qml_file};
 use arboard::Clipboard;
 use chrono::{DateTime, Local};
@@ -84,7 +84,7 @@ pub fn run_annotate(args: &AnnotateArgs) -> Result<()> {
     } else if let Some(ref path) = args.file {
         qml_file::load_qml_image(path)?
     } else {
-        return Err(crate::core::QuillError::Storage(
+        return Err(crate::core::NibError::Storage(
             crate::core::StorageError::NotFound("No input specified".into()),
         ));
     };
@@ -150,7 +150,7 @@ pub async fn run_edit(args: &EditArgs) -> Result<()> {
     // Open session (checks for existing sessions and connects if found)
     let session = Session::open(&args.file, ClientType::Cli)
         .await
-        .map_err(|e| crate::core::QuillError::Other(e))?;
+        .map_err(|e| crate::core::NibError::Other(e))?;
 
     let is_owner = session.is_owner();
     println!(
@@ -165,7 +165,7 @@ pub async fn run_edit(args: &EditArgs) -> Result<()> {
         for annotation in new_annotations {
             session
                 .add_annotation(annotation)
-                .map_err(|e| crate::core::QuillError::Other(e))?;
+                .map_err(|e| crate::core::NibError::Other(e))?;
         }
         println!("Added annotations from: {}", qml_path.display());
     }
@@ -176,7 +176,7 @@ pub async fn run_edit(args: &EditArgs) -> Result<()> {
         for annotation in new_annotations {
             session
                 .add_annotation(annotation)
-                .map_err(|e| crate::core::QuillError::Other(e))?;
+                .map_err(|e| crate::core::NibError::Other(e))?;
         }
         println!("Added annotations from command line");
     }
@@ -222,7 +222,7 @@ pub async fn run_edit(args: &EditArgs) -> Result<()> {
         // Reload annotations (may have been modified)
         let annotations = session.annotations();
 
-        // Create QuillImage with updated annotations
+        // Create NibImage with updated annotations
         let mut updated_image = image.clone();
         updated_image.annotations = annotations;
 
@@ -243,7 +243,7 @@ pub async fn run_edit(args: &EditArgs) -> Result<()> {
         // Close session
         session
             .close()
-            .map_err(|e| crate::core::QuillError::Other(e))?;
+            .map_err(|e| crate::core::NibError::Other(e))?;
     }
 
     Ok(())
@@ -254,15 +254,15 @@ pub fn run_sessions() -> Result<()> {
     tracing::info!("Running sessions");
 
     let manager = SessionManager::new(SessionManager::default_dir())
-        .map_err(|e| crate::core::QuillError::Other(e.to_string()))?;
+        .map_err(|e| crate::core::NibError::Other(e.to_string()))?;
 
     let sessions = manager
         .list_sessions()
-        .map_err(|e| crate::core::QuillError::Other(e.to_string()))?;
+        .map_err(|e| crate::core::NibError::Other(e.to_string()))?;
 
     if sessions.is_empty() {
         println!("No active collaboration sessions.");
-        println!("\nStart a session with: quill edit <image.png> --watch");
+        println!("\nStart a session with: nib edit <image.png> --watch");
         return Ok(());
     }
 
@@ -421,7 +421,7 @@ pub fn run_list(args: &ListArgs) -> Result<()> {
 
     if entries.is_empty() {
         println!("No captures found.");
-        println!("Use 'quill capture' to take a screenshot.");
+        println!("Use 'nib capture' to take a screenshot.");
         return Ok(());
     }
 
@@ -459,19 +459,19 @@ pub fn run_list(args: &ListArgs) -> Result<()> {
 pub fn run_folder() -> Result<()> {
     tracing::info!("Running folder");
 
-    let quill_dir = storage::storage_dir();
+    let nib_dir = storage::storage_dir();
 
-    println!("Quill storage folder:");
-    println!("  {}", quill_dir.display());
+    println!("Nib storage folder:");
+    println!("  {}", nib_dir.display());
     println!();
     println!("Contents:");
     println!("  captures/  - Screenshot files");
-    println!("  quill.db   - Search index");
+    println!("  nib.db     - Search index");
 
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
-            .arg(&quill_dir)
+            .arg(&nib_dir)
             .spawn()
             .ok();
     }
@@ -479,7 +479,7 @@ pub fn run_folder() -> Result<()> {
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open")
-            .arg(&quill_dir)
+            .arg(&nib_dir)
             .spawn()
             .ok();
     }
@@ -487,7 +487,7 @@ pub fn run_folder() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")
-            .arg(&quill_dir)
+            .arg(&nib_dir)
             .spawn()
             .ok();
     }
@@ -502,21 +502,21 @@ pub fn run_gui(args: &GuiArgs) -> Result<()> {
     let app = if let Some(ref file_path) = args.file {
         // Verify file exists
         if !file_path.exists() {
-            return Err(crate::core::QuillError::Storage(
+            return Err(crate::core::NibError::Storage(
                 crate::core::StorageError::NotFound(format!(
                     "File not found: {}",
                     file_path.display()
                 )),
             ));
         }
-        println!("Opening {} in Quill editor...", file_path.display());
-        QuillApp::with_file(file_path.clone())
+        println!("Opening {} in Nib editor...", file_path.display());
+        NibApp::with_file(file_path.clone())
     } else {
-        println!("Launching Quill editor...");
-        QuillApp::new()
+        println!("Launching Nib editor...");
+        NibApp::new()
     };
 
-    app.run().map_err(|e| crate::core::QuillError::Other(e.to_string()))?;
+    app.run().map_err(|e| crate::core::NibError::Other(e.to_string()))?;
 
     Ok(())
 }
@@ -597,7 +597,7 @@ pub fn run_annotations(args: &AnnotationsArgs) -> Result<()> {
             }
             Err(e) => {
                 println!("Error parsing annotations file: {}", e);
-                return Err(crate::core::QuillError::Other(format!(
+                return Err(crate::core::NibError::Other(format!(
                     "Failed to parse annotations: {}",
                     e
                 )));
@@ -614,7 +614,7 @@ pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
 
     // Verify the image file exists
     if !args.file.exists() {
-        return Err(crate::core::QuillError::Storage(
+        return Err(crate::core::NibError::Storage(
             crate::core::StorageError::NotFound(format!(
                 "File not found: {}",
                 args.file.display()
@@ -688,7 +688,7 @@ pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
             }
         }
         _ => {
-            return Err(crate::core::QuillError::Other(format!(
+            return Err(crate::core::NibError::Other(format!(
                 "Unknown annotation type: {}. Valid types: rectangle, arrow, line, ellipse, highlight, blur, text, number",
                 args.annotation_type
             )));
@@ -708,7 +708,7 @@ pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
 
     // Write back to sidecar file
     let json = serde_json::to_string_pretty(&annotations_file).map_err(|e| {
-        crate::core::QuillError::Other(format!("Failed to serialize annotations: {}", e))
+        crate::core::NibError::Other(format!("Failed to serialize annotations: {}", e))
     })?;
 
     std::fs::write(&annotations_path, json)?;
@@ -731,12 +731,12 @@ pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
 /// Generate a unique filename for captures
 fn generate_filename() -> PathBuf {
     let now = chrono::Local::now();
-    let filename = format!("quill_{}.png", now.format("%Y%m%d_%H%M%S"));
+    let filename = format!("nib_{}.png", now.format("%Y%m%d_%H%M%S"));
     storage::captures_dir().join(filename)
 }
 
 /// Save a capture to disk
-fn save_capture(image: &QuillImage, path: &PathBuf) -> Result<()> {
+fn save_capture(image: &NibImage, path: &PathBuf) -> Result<()> {
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -747,14 +747,14 @@ fn save_capture(image: &QuillImage, path: &PathBuf) -> Result<()> {
 }
 
 /// Copy image to clipboard
-fn copy_to_clipboard(image: &QuillImage) -> Result<()> {
+fn copy_to_clipboard(image: &NibImage) -> Result<()> {
     let mut clipboard = Clipboard::new().map_err(|e| {
-        crate::core::QuillError::Capture(crate::core::CaptureError::CaptureFailed(e.to_string()))
+        crate::core::NibError::Capture(crate::core::CaptureError::CaptureFailed(e.to_string()))
     })?;
 
     // Load image to get raw RGBA data
     let img = image::load_from_memory(&image.image_data).map_err(|e| {
-        crate::core::QuillError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+        crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
     })?;
 
     let rgba = img.to_rgba8();
@@ -767,20 +767,20 @@ fn copy_to_clipboard(image: &QuillImage) -> Result<()> {
     };
 
     clipboard.set_image(img_data).map_err(|e| {
-        crate::core::QuillError::Capture(crate::core::CaptureError::CaptureFailed(e.to_string()))
+        crate::core::NibError::Capture(crate::core::CaptureError::CaptureFailed(e.to_string()))
     })?;
 
     Ok(())
 }
 
 /// Load image from clipboard
-fn load_from_clipboard() -> Result<QuillImage> {
+fn load_from_clipboard() -> Result<NibImage> {
     let mut clipboard = Clipboard::new().map_err(|e| {
-        crate::core::QuillError::Capture(crate::core::CaptureError::CaptureFailed(e.to_string()))
+        crate::core::NibError::Capture(crate::core::CaptureError::CaptureFailed(e.to_string()))
     })?;
 
     let img_data = clipboard.get_image().map_err(|e| {
-        crate::core::QuillError::Capture(crate::core::CaptureError::CaptureFailed(format!(
+        crate::core::NibError::Capture(crate::core::CaptureError::CaptureFailed(format!(
             "No image in clipboard: {}",
             e
         )))
@@ -793,7 +793,7 @@ fn load_from_clipboard() -> Result<QuillImage> {
         img_data.bytes.into_owned(),
     )
     .ok_or_else(|| {
-        crate::core::QuillError::Image(crate::core::ImageError::DecodeError(
+        crate::core::NibError::Image(crate::core::ImageError::DecodeError(
             "Invalid clipboard image data".into(),
         ))
     })?;
@@ -807,9 +807,9 @@ fn load_from_clipboard() -> Result<QuillImage> {
         img_data.height as u32,
         image::ExtendedColorType::Rgba8,
     )
-    .map_err(|e| crate::core::QuillError::Image(crate::core::ImageError::EncodeError(e.to_string())))?;
+    .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::EncodeError(e.to_string())))?;
 
-    Ok(QuillImage::new(
+    Ok(NibImage::new(
         png_data,
         img_data.width as u32,
         img_data.height as u32,
@@ -823,23 +823,23 @@ fn load_from_clipboard() -> Result<QuillImage> {
 fn parse_region(region_str: &str) -> Result<crate::ocr::Region> {
     let parts: Vec<&str> = region_str.split(',').collect();
     if parts.len() != 4 {
-        return Err(crate::core::QuillError::Other(format!(
+        return Err(crate::core::NibError::Other(format!(
             "Invalid region format '{}'. Expected 'x,y,width,height'",
             region_str
         )));
     }
 
     let x = parts[0].trim().parse::<i32>().map_err(|_| {
-        crate::core::QuillError::Other(format!("Invalid x coordinate: {}", parts[0]))
+        crate::core::NibError::Other(format!("Invalid x coordinate: {}", parts[0]))
     })?;
     let y = parts[1].trim().parse::<i32>().map_err(|_| {
-        crate::core::QuillError::Other(format!("Invalid y coordinate: {}", parts[1]))
+        crate::core::NibError::Other(format!("Invalid y coordinate: {}", parts[1]))
     })?;
     let width = parts[2].trim().parse::<i32>().map_err(|_| {
-        crate::core::QuillError::Other(format!("Invalid width: {}", parts[2]))
+        crate::core::NibError::Other(format!("Invalid width: {}", parts[2]))
     })?;
     let height = parts[3].trim().parse::<i32>().map_err(|_| {
-        crate::core::QuillError::Other(format!("Invalid height: {}", parts[3]))
+        crate::core::NibError::Other(format!("Invalid height: {}", parts[3]))
     })?;
 
     Ok(crate::ocr::Region::new(x, y, width, height))
@@ -851,7 +851,7 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
 
     // Verify the image file exists
     if !args.file.exists() {
-        return Err(crate::core::QuillError::Storage(
+        return Err(crate::core::NibError::Storage(
             crate::core::StorageError::NotFound(format!(
                 "File not found: {}",
                 args.file.display()
@@ -982,7 +982,7 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
 
         // Write back to sidecar file
         let json = serde_json::to_string_pretty(&annotations_file).map_err(|e| {
-            crate::core::QuillError::Other(format!("Failed to serialize annotations: {}", e))
+            crate::core::NibError::Other(format!("Failed to serialize annotations: {}", e))
         })?;
 
         std::fs::write(&annotations_path, json)?;
@@ -1004,7 +1004,7 @@ struct TextMatch {
 }
 
 /// Index a capture in the database
-fn index_capture(image: &QuillImage, path: &PathBuf) -> Result<()> {
+fn index_capture(image: &NibImage, path: &PathBuf) -> Result<()> {
     let index = Index::open()?;
 
     let now = SystemTime::now()
@@ -1034,7 +1034,7 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
 
     // Verify the image file exists
     if !args.file.exists() {
-        return Err(crate::core::QuillError::Storage(
+        return Err(crate::core::NibError::Storage(
             crate::core::StorageError::NotFound(format!(
                 "File not found: {}",
                 args.file.display()
@@ -1063,10 +1063,10 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
     // Load the base image
     let image_data = std::fs::read(&args.file)?;
     let img = image::load_from_memory(&image_data)
-        .map_err(|e| crate::core::QuillError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
+        .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
 
-    // Create QuillImage with annotations
-    let quill_image = QuillImage {
+    // Create NibImage with annotations
+    let nib_image = NibImage {
         image_data,
         width: img.width(),
         height: img.height(),
@@ -1092,9 +1092,9 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
         bake_annotations: true,
         ..Default::default()
     };
-    export::export_image(&quill_image, &output_path, &options)?;
+    export::export_image(&nib_image, &output_path, &options)?;
 
-    println!("Rendered {} annotation(s) to: {}", quill_image.annotations.len(), output_path.display());
+    println!("Rendered {} annotation(s) to: {}", nib_image.annotations.len(), output_path.display());
 
     Ok(())
 }
@@ -1105,7 +1105,7 @@ pub fn run_remove_annotation(args: &RemoveAnnotationArgs) -> Result<()> {
 
     // Verify the image file exists
     if !args.file.exists() {
-        return Err(crate::core::QuillError::Storage(
+        return Err(crate::core::NibError::Storage(
             crate::core::StorageError::NotFound(format!(
                 "File not found: {}",
                 args.file.display()
@@ -1117,7 +1117,7 @@ pub fn run_remove_annotation(args: &RemoveAnnotationArgs) -> Result<()> {
 
     // Load existing annotations
     if !annotations_path.exists() {
-        return Err(crate::core::QuillError::Other(format!(
+        return Err(crate::core::NibError::Other(format!(
             "No annotations file found: {}",
             annotations_path.display()
         )));
@@ -1125,14 +1125,14 @@ pub fn run_remove_annotation(args: &RemoveAnnotationArgs) -> Result<()> {
 
     let json_content = std::fs::read_to_string(&annotations_path)?;
     let mut annotations_file = serde_json::from_str::<AnnotationsFile>(&json_content)
-        .map_err(|e| crate::core::QuillError::Other(format!("Failed to parse annotations: {}", e)))?;
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to parse annotations: {}", e)))?;
 
     // Find and remove the annotation
     let original_count = annotations_file.annotations.len();
     annotations_file.annotations.retain(|a| a.id != args.id);
 
     if annotations_file.annotations.len() == original_count {
-        return Err(crate::core::QuillError::Other(format!(
+        return Err(crate::core::NibError::Other(format!(
             "Annotation not found: {}",
             args.id
         )));
@@ -1140,7 +1140,7 @@ pub fn run_remove_annotation(args: &RemoveAnnotationArgs) -> Result<()> {
 
     // Write back to file
     let json = serde_json::to_string_pretty(&annotations_file)
-        .map_err(|e| crate::core::QuillError::Other(format!("Failed to serialize: {}", e)))?;
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to serialize: {}", e)))?;
     std::fs::write(&annotations_path, json)?;
 
     println!("Removed annotation [{}]", args.id);
@@ -1155,7 +1155,7 @@ pub fn run_clear_annotations(args: &ClearAnnotationsArgs) -> Result<()> {
 
     // Verify the image file exists
     if !args.file.exists() {
-        return Err(crate::core::QuillError::Storage(
+        return Err(crate::core::NibError::Storage(
             crate::core::StorageError::NotFound(format!(
                 "File not found: {}",
                 args.file.display()
@@ -1178,7 +1178,7 @@ pub fn run_clear_annotations(args: &ClearAnnotationsArgs) -> Result<()> {
     // Create empty annotations file
     let empty_file = AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new());
     let json = serde_json::to_string_pretty(&empty_file)
-        .map_err(|e| crate::core::QuillError::Other(format!("Failed to serialize: {}", e)))?;
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to serialize: {}", e)))?;
     std::fs::write(&annotations_path, json)?;
 
     println!("Cleared {} annotation(s)", removed_count);
@@ -1197,7 +1197,7 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
 
     // Verify the file exists
     if !args.file.exists() {
-        return Err(crate::core::QuillError::Storage(
+        return Err(crate::core::NibError::Storage(
             crate::core::StorageError::NotFound(format!(
                 "File not found: {}",
                 args.file.display()
@@ -1208,7 +1208,7 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
     // Load the image
     let image_data = std::fs::read(&args.file)?;
     let img = image::load_from_memory(&image_data)
-        .map_err(|e| crate::core::QuillError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
+        .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
     let (width, height) = img.dimensions();
 
     // Parse region if provided
@@ -1220,9 +1220,9 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
 
     // Parse colors
     let color = GridColor::from_hex(&args.color)
-        .map_err(|e| crate::core::QuillError::Other(format!("Invalid color: {}", e)))?;
+        .map_err(|e| crate::core::NibError::Other(format!("Invalid color: {}", e)))?;
     let major_color = GridColor::from_hex(&args.major_color)
-        .map_err(|e| crate::core::QuillError::Other(format!("Invalid major color: {}", e)))?;
+        .map_err(|e| crate::core::NibError::Other(format!("Invalid major color: {}", e)))?;
 
     // Create grid config
     let config = GridConfig {
@@ -1281,7 +1281,7 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
         );
 
         let json = serde_json::to_string_pretty(&metadata)
-            .map_err(|e| crate::core::QuillError::Other(format!("JSON error: {}", e)))?;
+            .map_err(|e| crate::core::NibError::Other(format!("JSON error: {}", e)))?;
         println!("{}", json);
     } else {
         // Image output mode
@@ -1314,7 +1314,7 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
 
         // Save output
         final_img.save(&output_path)
-            .map_err(|e| crate::core::QuillError::Image(crate::core::ImageError::EncodeError(e.to_string())))?;
+            .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::EncodeError(e.to_string())))?;
 
         println!("Grid overlay saved to: {}", output_path.display());
         println!("Image size: {}x{}", final_img.width(), final_img.height());
@@ -1330,23 +1330,23 @@ fn parse_grid_region(region_str: &str) -> Result<crate::core::tile::TileBounds> 
 
     let parts: Vec<&str> = region_str.split(',').collect();
     if parts.len() != 4 {
-        return Err(crate::core::QuillError::Other(format!(
+        return Err(crate::core::NibError::Other(format!(
             "Invalid region format '{}'. Expected 'x1,y1,x2,y2'",
             region_str
         )));
     }
 
     let x1 = parts[0].trim().parse::<f64>().map_err(|_| {
-        crate::core::QuillError::Other(format!("Invalid x1 coordinate: {}", parts[0]))
+        crate::core::NibError::Other(format!("Invalid x1 coordinate: {}", parts[0]))
     })?;
     let y1 = parts[1].trim().parse::<f64>().map_err(|_| {
-        crate::core::QuillError::Other(format!("Invalid y1 coordinate: {}", parts[1]))
+        crate::core::NibError::Other(format!("Invalid y1 coordinate: {}", parts[1]))
     })?;
     let x2 = parts[2].trim().parse::<f64>().map_err(|_| {
-        crate::core::QuillError::Other(format!("Invalid x2 coordinate: {}", parts[2]))
+        crate::core::NibError::Other(format!("Invalid x2 coordinate: {}", parts[2]))
     })?;
     let y2 = parts[3].trim().parse::<f64>().map_err(|_| {
-        crate::core::QuillError::Other(format!("Invalid y2 coordinate: {}", parts[3]))
+        crate::core::NibError::Other(format!("Invalid y2 coordinate: {}", parts[3]))
     })?;
 
     Ok(TileBounds::from_corners(x1, y1, x2, y2))

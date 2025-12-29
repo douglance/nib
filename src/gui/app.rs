@@ -1,6 +1,6 @@
 //! GPUI Application setup
 //!
-//! This module provides the main GPUI-based graphical interface for Quill.
+//! This module provides the main GPUI-based graphical interface for Nib.
 
 use gpui::{
     canvas, div, img, point, px, rgb, rgba, size, svg, App, AppContext, Application, AssetSource,
@@ -41,7 +41,7 @@ impl AssetSource for Assets {
 }
 
 use crate::core::types::{Annotation, AnnotationId, AnnotationType, Color, Region};
-use crate::core::types::Point as QuillPoint;
+use crate::core::types::Point as NibPoint;
 use crate::gui::toolbar::Tool;
 use crate::gui::tools::{
     Modifiers, MouseButton as ToolMouseButton, TextTool, ToolContext, ToolEvent, ToolId,
@@ -245,23 +245,23 @@ pub fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annot
         }
         ("arrow", AnnotationGeometry::Line { start_x, start_y, end_x, end_y }) => {
             AnnotationType::Arrow {
-                start: QuillPoint::new(*start_x, *start_y),
-                end: QuillPoint::new(*end_x, *end_y),
+                start: NibPoint::new(*start_x, *start_y),
+                end: NibPoint::new(*end_x, *end_y),
                 head: crate::core::types::ArrowHead::End,
                 stroke_width: 2.0,
             }
         }
         ("line", AnnotationGeometry::Line { start_x, start_y, end_x, end_y }) => {
             AnnotationType::Line {
-                start: QuillPoint::new(*start_x, *start_y),
-                end: QuillPoint::new(*end_x, *end_y),
+                start: NibPoint::new(*start_x, *start_y),
+                end: NibPoint::new(*end_x, *end_y),
                 stroke_width: 2.0,
                 stroke_style: crate::core::types::StrokeStyle::Solid,
             }
         }
         ("ellipse", AnnotationGeometry::Ellipse { center_x, center_y, radius_x, radius_y }) => {
             AnnotationType::Ellipse {
-                center: QuillPoint::new(*center_x, *center_y),
+                center: NibPoint::new(*center_x, *center_y),
                 radius_x: *radius_x,
                 radius_y: *radius_y,
                 stroke_width: 2.0,
@@ -282,7 +282,7 @@ pub fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annot
         }
         ("text", AnnotationGeometry::Point { x, y, content, .. }) => {
             AnnotationType::Text {
-                position: QuillPoint::new(*x, *y),
+                position: NibPoint::new(*x, *y),
                 content: content.clone().unwrap_or_else(|| "Text".to_string()),
                 font_size: 16.0,
                 align: crate::core::types::TextAlign::Left,
@@ -292,7 +292,7 @@ pub fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annot
         }
         ("number", AnnotationGeometry::Point { x, y, value, .. }) => {
             AnnotationType::Number {
-                position: QuillPoint::new(*x, *y),
+                position: NibPoint::new(*x, *y),
                 value: value.unwrap_or(1),
                 radius: 14.0,
             }
@@ -331,17 +331,17 @@ pub struct TextInputState {
 }
 
 /// Main application struct for GPUI
-pub struct QuillApp {
+pub struct NibApp {
     file_path: Option<PathBuf>,
 }
 
-impl QuillApp {
-    /// Create a new QuillApp instance without a file
+impl NibApp {
+    /// Create a new NibApp instance without a file
     pub fn new() -> Self {
         Self { file_path: None }
     }
 
-    /// Create a new QuillApp instance with a file to display
+    /// Create a new NibApp instance with a file to display
     pub fn with_file(file_path: PathBuf) -> Self {
         Self {
             file_path: Some(file_path),
@@ -385,7 +385,7 @@ impl QuillApp {
     }
 }
 
-impl Default for QuillApp {
+impl Default for NibApp {
     fn default() -> Self {
         Self::new()
     }
@@ -858,7 +858,7 @@ impl EditorView {
 
         // Build tool event
         let tool_event = ToolEvent::MouseDown {
-            position: QuillPoint::new(img_x, img_y),
+            position: NibPoint::new(img_x, img_y),
             button,
             modifiers: Modifiers::default(),
         };
@@ -901,7 +901,7 @@ impl EditorView {
 
         // Build tool event
         let tool_event = ToolEvent::MouseMove {
-            position: QuillPoint::new(img_x, img_y),
+            position: NibPoint::new(img_x, img_y),
             modifiers: Modifiers::default(),
         };
 
@@ -951,7 +951,7 @@ impl EditorView {
 
         // Build tool event
         let tool_event = ToolEvent::MouseUp {
-            position: QuillPoint::new(img_x, img_y),
+            position: NibPoint::new(img_x, img_y),
             button,
         };
 
@@ -1358,12 +1358,12 @@ impl EditorView {
                         div()
                             .text_color(text_color)
                             .text_xl()
-                            .child("Quill Screenshot Annotator"),
+                            .child("Nib Screenshot Annotator"),
                     )
                     .child(
                         div()
                             .text_color(rgb(0x888888))
-                            .child("No image loaded. Use: quill gui <file>"),
+                            .child("No image loaded. Use: nib gui <file>"),
                     ),
             );
         }
@@ -1512,7 +1512,7 @@ impl EditorView {
 
             // Convert to image coordinates
             let (img_x, img_y) = self.screen_to_image_coords(input_state.screen_x, adjusted_screen_y);
-            let position = QuillPoint::new(img_x, img_y);
+            let position = NibPoint::new(img_x, img_y);
 
             let annotation = Annotation::new(AnnotationType::Text {
                 position,

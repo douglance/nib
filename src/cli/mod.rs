@@ -1,4 +1,4 @@
-//! CLI module - command-line interface for Quill
+//! CLI module - command-line interface for Nib
 //!
 //! Provides subcommands for headless operations:
 //! - capture: Screen/region capture

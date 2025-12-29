@@ -1,11 +1,11 @@
-//! Quill CLI entry point
+//! Nib CLI entry point
 
 use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use quill::cli::{self, Cli, Command};
-use quill::core::Result;
-use quill::storage;
+use nib::cli::{self, Cli, Command};
+use nib::core::Result;
+use nib::storage;
 
 #[tokio::main]
 async fn main() {
@@ -20,9 +20,9 @@ async fn run() -> Result<()> {
 
     // Initialize logging
     let filter = if cli.verbose {
-        "quill=debug"
+        "nib=debug"
     } else {
-        "quill=info"
+        "nib=info"
     };
 
     tracing_subscriber::registry()

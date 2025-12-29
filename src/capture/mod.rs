@@ -13,14 +13,14 @@ pub mod window;
 
 pub use tiled::{generate_tiles, TiledCapture};
 
-use crate::core::{CaptureError, ImageSource, QuillImage};
+use crate::core::{CaptureError, ImageSource, NibImage};
 use std::time::SystemTime;
 
 /// Result type for capture operations
 pub type CaptureResult<T> = std::result::Result<T, CaptureError>;
 
 /// Capture the entire screen
-pub fn capture_screen(display_id: u32) -> CaptureResult<QuillImage> {
+pub fn capture_screen(display_id: u32) -> CaptureResult<NibImage> {
     let screens = screenshots::Screen::all()
         .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 
@@ -48,7 +48,7 @@ pub fn capture_screen(display_id: u32) -> CaptureResult<QuillImage> {
     )
     .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 
-    Ok(QuillImage::new(
+    Ok(NibImage::new(
         png_data,
         width,
         height,

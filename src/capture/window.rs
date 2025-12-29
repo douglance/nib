@@ -4,7 +4,7 @@
 //! Currently macOS-only using ScreenCaptureKit.
 
 use super::CaptureResult;
-use crate::core::{CaptureError, QuillImage};
+use crate::core::{CaptureError, NibImage};
 
 /// Information about a capturable window
 #[derive(Debug, Clone)]
@@ -31,7 +31,7 @@ pub fn list_windows() -> CaptureResult<Vec<WindowInfo>> {
 }
 
 /// Capture a specific window by ID
-pub fn capture_window(_window_id: u32, _title: &str) -> CaptureResult<QuillImage> {
+pub fn capture_window(_window_id: u32, _title: &str) -> CaptureResult<NibImage> {
     // TODO: Implement platform-specific window capture
     // macOS: Use ScreenCaptureKit SCContentFilter with window ID
     // Windows: Use PrintWindow or BitBlt
@@ -43,7 +43,7 @@ pub fn capture_window(_window_id: u32, _title: &str) -> CaptureResult<QuillImage
 }
 
 /// Capture window by title (partial match)
-pub fn capture_window_by_title(title: &str) -> CaptureResult<QuillImage> {
+pub fn capture_window_by_title(title: &str) -> CaptureResult<NibImage> {
     let windows = list_windows()?;
 
     let window = windows

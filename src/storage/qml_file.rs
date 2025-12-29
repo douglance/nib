@@ -4,7 +4,7 @@
 //! QML metadata is embedded in PNG tEXt chunks with keyword "QML".
 
 use super::StorageResult;
-use crate::core::{qml, Annotation, ImageSource, QuillImage, StorageError};
+use crate::core::{qml, Annotation, ImageSource, NibImage, StorageError};
 use image::ImageReader;
 use std::io::Write;
 use std::path::Path;
@@ -16,8 +16,8 @@ const PNG_IEND_CHUNK: &[u8; 4] = b"IEND";
 /// QML keyword for tEXt chunks
 const QML_KEYWORD: &str = "QML";
 
-/// Load a QuillImage from a PNG file with embedded QML
-pub fn load_qml_image(path: impl AsRef<Path>) -> StorageResult<QuillImage> {
+/// Load a NibImage from a PNG file with embedded QML
+pub fn load_qml_image(path: impl AsRef<Path>) -> StorageResult<NibImage> {
     let path = path.as_ref();
     let image_data = std::fs::read(path)?;
 
@@ -34,7 +34,7 @@ pub fn load_qml_image(path: impl AsRef<Path>) -> StorageResult<QuillImage> {
     // Extract QML from tEXt chunk
     let annotations = extract_qml_from_png(&image_data)?;
 
-    let mut image = QuillImage::new(
+    let mut image = NibImage::new(
         image_data,
         width,
         height,
@@ -46,8 +46,8 @@ pub fn load_qml_image(path: impl AsRef<Path>) -> StorageResult<QuillImage> {
     Ok(image)
 }
 
-/// Save a QuillImage to a PNG file with embedded QML
-pub fn save_qml_image(image: &QuillImage, path: impl AsRef<Path>) -> StorageResult<()> {
+/// Save a NibImage to a PNG file with embedded QML
+pub fn save_qml_image(image: &NibImage, path: impl AsRef<Path>) -> StorageResult<()> {
     let path = path.as_ref();
 
     // Serialize annotations to QML

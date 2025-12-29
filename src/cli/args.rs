@@ -3,9 +3,9 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-/// Quill - Fast, native screenshot annotation tool
+/// Nib - Fast, native screenshot annotation tool
 #[derive(Parser, Debug)]
-#[command(name = "quill")]
+#[command(name = "nib")]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
     /// Enable verbose output
@@ -43,7 +43,7 @@ pub enum Command {
     /// List active collaboration sessions
     Sessions,
 
-    /// Open the Quill storage folder
+    /// Open the Nib storage folder
     Folder,
 
     /// Launch the GUI editor

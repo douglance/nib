@@ -1,10 +1,10 @@
 //! Full screen capture
 
 use super::CaptureResult;
-use crate::core::{CaptureError, QuillImage};
+use crate::core::{CaptureError, NibImage};
 
 /// Capture the primary display
-pub fn capture_primary() -> CaptureResult<QuillImage> {
+pub fn capture_primary() -> CaptureResult<NibImage> {
     let screens = screenshots::Screen::all()
         .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 
@@ -17,12 +17,12 @@ pub fn capture_primary() -> CaptureResult<QuillImage> {
 }
 
 /// Capture a specific display by ID
-pub fn capture_display(display_id: u32) -> CaptureResult<QuillImage> {
+pub fn capture_display(display_id: u32) -> CaptureResult<NibImage> {
     super::capture_screen(display_id)
 }
 
 /// Capture all displays and stitch into single image
-pub fn capture_all() -> CaptureResult<QuillImage> {
+pub fn capture_all() -> CaptureResult<NibImage> {
     let screens = screenshots::Screen::all()
         .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 

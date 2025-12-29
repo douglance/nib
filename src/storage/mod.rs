@@ -1,6 +1,6 @@
 //! Storage module
 //!
-//! Handles file I/O for Quill documents:
+//! Handles file I/O for Nib documents:
 //! - QML file format
 //! - PNG export with embedded QML
 //! - SQLite index for search
@@ -23,7 +23,7 @@ pub type StorageResult<T> = std::result::Result<T, StorageError>;
 pub fn storage_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("quill")
+        .join("nib")
 }
 
 /// Get the captures directory
@@ -33,7 +33,7 @@ pub fn captures_dir() -> PathBuf {
 
 /// Get the database path
 pub fn database_path() -> PathBuf {
-    storage_dir().join("quill.db")
+    storage_dir().join("nib.db")
 }
 
 /// Initialize storage directories

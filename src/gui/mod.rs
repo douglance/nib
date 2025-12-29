@@ -12,7 +12,7 @@ pub mod toolbar;
 pub mod tools;
 pub mod window;
 
-pub use app::QuillApp;
+pub use app::NibApp;
 pub use app::{annotations_file_path, deserialize_annotation, AnnotationsFile, AnnotationGeometry, SerializedAnnotation};
 
 // Re-export commonly used tool types for convenience

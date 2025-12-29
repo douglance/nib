@@ -1,9 +1,9 @@
-//! Core data types for Quill annotation system
+//! Core data types for Nib annotation system
 //!
-//! This module defines the fundamental types used throughout Quill:
+//! This module defines the fundamental types used throughout Nib:
 //! - Annotations and their variants
 //! - Color, Point, Region primitives
-//! - QuillImage document type
+//! - NibImage document type
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -445,7 +445,7 @@ pub enum ImageSource {
 
 /// A complete annotated image document
 #[derive(Debug, Clone)]
-pub struct QuillImage {
+pub struct NibImage {
     /// Original image data (PNG bytes)
     pub image_data: Vec<u8>,
     /// Image dimensions
@@ -466,7 +466,7 @@ pub struct QuillImage {
     pub modified_at: SystemTime,
 }
 
-impl QuillImage {
+impl NibImage {
     pub fn new(image_data: Vec<u8>, width: u32, height: u32, source: ImageSource) -> Self {
         let now = SystemTime::now();
         Self {

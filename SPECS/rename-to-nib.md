@@ -1,8 +1,8 @@
-# Rename: quill → nib
+# Rename: nib → nib
 
 ## Overview
 
-Rename the project from "quill" to "nib" - the precise point where intention meets surface.
+Rename the project from "nib" to "nib" - the precise point where intention meets surface.
 
 **Scope**: Names only. No format changes, no new features.
 
@@ -14,7 +14,7 @@ cargo clean
 rm Cargo.lock
 
 # Rename directory
-mv quill nib
+mv nib nib
 ```
 
 **Cargo.toml**:
@@ -28,15 +28,15 @@ name = "nib"           # line 16 (library)
 
 | Current | New | Files |
 |---------|-----|-------|
-| `QuillImage` | `NibImage` | 10 files |
-| `QuillError` | `NibError` | 5 files |
-| `QuillApp` | `NibApp` | 3 files |
-| `QuillPoint` | `NibPoint` | 1 file |
+| `NibImage` | `NibImage` | 10 files |
+| `NibError` | `NibError` | 5 files |
+| `NibApp` | `NibApp` | 3 files |
+| `NibPoint` | `NibPoint` | 1 file |
 
 ### Key files:
-- `src/core/types.rs` - `QuillImage` struct
-- `src/core/errors.rs` - `QuillError` enum
-- `src/gui/app.rs` - `QuillApp` struct, `QuillPoint` alias
+- `src/core/types.rs` - `NibImage` struct
+- `src/core/errors.rs` - `NibError` enum
+- `src/gui/app.rs` - `NibApp` struct, `NibPoint` alias
 - `src/lib.rs` - re-exports
 
 ## Phase 3: CLI & Binary
@@ -77,8 +77,8 @@ use nib::storage;
 
 | File | Action |
 |------|--------|
-| `CLAUDE.md` | Replace "quill"→"nib", "Quill"→"Nib" |
-| `.claude/skills/using-quill/` | Rename to `.claude/skills/using-nib/` |
+| `CLAUDE.md` | Replace "nib"→"nib", "Nib"→"Nib" |
+| `.claude/skills/using-nib/` | Rename to `.claude/skills/using-nib/` |
 | `.claude/skills/using-nib/SKILL.md` | Update all references |
 | `SPECS/*.md` | Update references |
 
@@ -94,14 +94,14 @@ use nib::storage;
 
 ```bash
 # 1. Clean
-cd /Users/douglance/Developer/lv/prompt2000/quill
+cd /Users/douglance/Developer/lv/prompt2000/nib
 cargo clean && rm Cargo.lock
 
 # 2. Do all renames (use sed/replace tool)
 
 # 3. Rename directory last
 cd ..
-mv quill nib
+mv nib nib
 
 # 4. Verify
 cd nib
@@ -116,4 +116,4 @@ cargo clippy
 - [ ] `cargo test` passes
 - [ ] `./target/debug/nib --help` shows "nib"
 - [ ] `nib capture` creates `nib_*.png`
-- [ ] No "quill" in `grep -ri quill src/`
+- [ ] No "nib" in `grep -ri nib src/`

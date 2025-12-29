@@ -9,8 +9,8 @@
 //! 6. Verify TiledCapture can open and query the capture
 
 use image::RgbaImage;
-use quill::capture::tiled::{generate_tiles, load_spatial_index, TiledCapture};
-use quill::core::{TileBounds, TileConfig, TileId};
+use nib::capture::tiled::{generate_tiles, load_spatial_index, TiledCapture};
+use nib::core::{TileBounds, TileConfig, TileId};
 use std::fs;
 use tempfile::TempDir;
 
@@ -40,8 +40,8 @@ fn test_full_round_trip_tiled_capture() {
     let source = create_gradient_test_image(2048, 1536);
     let config = TileConfig::for_image(2048, 1536, 512);
 
-    let manifest = generate_tiles(&source, &output_dir, &config)
-        .expect("Failed to generate tiled capture");
+    let manifest =
+        generate_tiles(&source, &output_dir, &config).expect("Failed to generate tiled capture");
 
     // ========================================================
     // STEP 2: Verify manifest.json exists and contains expected metadata
@@ -64,7 +64,12 @@ fn test_full_round_trip_tiled_capture() {
     assert!(parsed_manifest["capture_id"].is_string());
     assert!(parsed_manifest["created_at"].is_string());
     assert!(parsed_manifest["levels"].is_array());
-    assert!(parsed_manifest["tile_config"]["tile_size"].as_u64().unwrap() == 512);
+    assert!(
+        parsed_manifest["tile_config"]["tile_size"]
+            .as_u64()
+            .unwrap()
+            == 512
+    );
 
     // Verify source dimensions in manifest
     let source_section = &parsed_manifest["source"];
@@ -82,8 +87,7 @@ fn test_full_round_trip_tiled_capture() {
     );
 
     // Verify we can load the spatial index
-    let loaded_index =
-        load_spatial_index(&spatial_idx_path).expect("Failed to load spatial index");
+    let loaded_index = load_spatial_index(&spatial_idx_path).expect("Failed to load spatial index");
 
     // Verify entry count matches manifest total tile count
     let expected_tile_count: usize = manifest.levels.iter().map(|l| l.tile_count as usize).sum();
@@ -189,7 +193,9 @@ fn test_full_round_trip_tiled_capture() {
     assert_eq!(tile.height(), 512);
 
     // Load same tile again (should hit cache)
-    let tile_cached = capture.load_tile(tile_id).expect("Failed to load tile from cache");
+    let tile_cached = capture
+        .load_tile(tile_id)
+        .expect("Failed to load tile from cache");
     assert_eq!(tile_cached.width(), 512);
 
     // ========================================================
@@ -238,7 +244,10 @@ fn test_full_round_trip_tiled_capture() {
     // r = (100/2048) * 255 = ~12
     // g = (100/1536) * 255 = ~16
     // Values may vary due to tile boundaries but should be low (dark corner of gradient)
-    assert!(sample_pixel[0] < 50, "Red channel should be low for top-left");
+    assert!(
+        sample_pixel[0] < 50,
+        "Red channel should be low for top-left"
+    );
     assert!(sample_pixel[3] == 255, "Alpha should be fully opaque");
 }
 

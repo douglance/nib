@@ -209,7 +209,7 @@ impl SessionManager {
     pub fn default_dir() -> PathBuf {
         dirs::data_local_dir()
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("quill")
+            .join("nib")
             .join("sessions")
     }
 

@@ -1,6 +1,6 @@
 //! Real-time collaboration between CLI and GUI
 //!
-//! This module enables multiple Quill instances (CLI and GUI) to work on
+//! This module enables multiple Nib instances (CLI and GUI) to work on
 //! the same image simultaneously with sub-millisecond synchronization.
 //!
 //! # Architecture
@@ -10,12 +10,12 @@
 //! - **Operation Log**: Append-only log for persistence and crash recovery
 //! - **Lamport Clocks**: Logical timestamps for deterministic ordering
 
-pub mod types;
+pub mod ipc;
+pub mod log;
 pub mod operation;
 pub mod session;
-pub mod log;
-pub mod ipc;
+pub mod types;
 
-pub use types::*;
 pub use operation::*;
 pub use session::*;
+pub use types::*;
