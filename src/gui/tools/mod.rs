@@ -3,13 +3,23 @@
 //! This module provides a trait-based abstraction for annotation tools,
 //! enabling composable, testable tool implementations.
 
+mod arrow;
+mod blur;
 mod context;
+mod ellipse;
+mod highlight;
+mod line;
 mod manager;
 mod rectangle;
 mod state;
 mod r#trait;
 
+pub use arrow::*;
+pub use blur::*;
 pub use context::*;
+pub use ellipse::*;
+pub use highlight::*;
+pub use line::*;
 pub use manager::*;
 pub use rectangle::*;
 pub use state::*;
