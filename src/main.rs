@@ -46,5 +46,10 @@ async fn run() -> Result<()> {
         Command::Gui(args) => cli::run_gui(args),
         Command::Annotations(args) => cli::run_annotations(args),
         Command::AddAnnotation(args) => cli::run_add_annotation(args),
+        Command::FindText(args) => cli::run_find_text(args),
+        Command::Render(args) => cli::run_render(args),
+        Command::RemoveAnnotation(args) => cli::run_remove_annotation(args),
+        Command::ClearAnnotations(args) => cli::run_clear_annotations(args),
+        Command::Grid(args) => cli::run_grid(args),
     }
 }

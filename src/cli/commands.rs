@@ -819,6 +819,190 @@ fn load_from_clipboard() -> Result<QuillImage> {
     ))
 }
 
+/// Parse a region string in "x,y,width,height" format.
+fn parse_region(region_str: &str) -> Result<crate::ocr::Region> {
+    let parts: Vec<&str> = region_str.split(',').collect();
+    if parts.len() != 4 {
+        return Err(crate::core::QuillError::Other(format!(
+            "Invalid region format '{}'. Expected 'x,y,width,height'",
+            region_str
+        )));
+    }
+
+    let x = parts[0].trim().parse::<i32>().map_err(|_| {
+        crate::core::QuillError::Other(format!("Invalid x coordinate: {}", parts[0]))
+    })?;
+    let y = parts[1].trim().parse::<i32>().map_err(|_| {
+        crate::core::QuillError::Other(format!("Invalid y coordinate: {}", parts[1]))
+    })?;
+    let width = parts[2].trim().parse::<i32>().map_err(|_| {
+        crate::core::QuillError::Other(format!("Invalid width: {}", parts[2]))
+    })?;
+    let height = parts[3].trim().parse::<i32>().map_err(|_| {
+        crate::core::QuillError::Other(format!("Invalid height: {}", parts[3]))
+    })?;
+
+    Ok(crate::ocr::Region::new(x, y, width, height))
+}
+
+/// Execute the find-text command (OCR-based text search with coordinates)
+pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
+    tracing::info!(?args, "Running find-text");
+
+    // Verify the image file exists
+    if !args.file.exists() {
+        return Err(crate::core::QuillError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    // Parse region if provided
+    let region = match &args.region {
+        Some(region_str) => Some(parse_region(region_str)?),
+        None => None,
+    };
+
+    // Use OCRS for text detection
+    let regions = crate::ocr::find_text(&args.file, args.search.as_deref(), region)?;
+
+    // Convert to TextMatch for compatibility with existing output logic
+    let results: Vec<TextMatch> = regions
+        .into_iter()
+        .map(|r| TextMatch {
+            text: r.text,
+            x: r.x,
+            y: r.y,
+            width: r.width,
+            height: r.height,
+            confidence: (r.confidence * 100.0) as i32,
+        })
+        .collect();
+
+    if args.json {
+        // JSON output
+        let region_json = region.map(|r| {
+            serde_json::json!({
+                "x": r.x,
+                "y": r.y,
+                "width": r.width,
+                "height": r.height
+            })
+        });
+        let json_output = serde_json::json!({
+            "file": args.file.to_string_lossy(),
+            "search": args.search,
+            "region": region_json,
+            "matches": results.iter().map(|r| {
+                serde_json::json!({
+                    "text": r.text,
+                    "x": r.x,
+                    "y": r.y,
+                    "width": r.width,
+                    "height": r.height,
+                    "confidence": r.confidence
+                })
+            }).collect::<Vec<_>>()
+        });
+        println!("{}", serde_json::to_string_pretty(&json_output).unwrap_or_default());
+    } else {
+        // Human-readable output
+        if let Some(ref search) = args.search {
+            println!("Searching for \"{}\" in: {}", search, args.file.display());
+        } else {
+            println!("All text found in: {}", args.file.display());
+        }
+        if let Some(r) = region {
+            println!("Region filter: x={}, y={}, width={}, height={}", r.x, r.y, r.width, r.height);
+        }
+        println!("{}", "─".repeat(70));
+
+        if results.is_empty() {
+            println!("No text found matching criteria.");
+        } else {
+            println!("Found {} match(es):\n", results.len());
+            for (i, m) in results.iter().enumerate() {
+                println!(
+                    "  {}. \"{}\"",
+                    i + 1,
+                    m.text
+                );
+                println!(
+                    "     x={}, y={}, width={}, height={} (confidence: {}%)",
+                    m.x, m.y, m.width, m.height, m.confidence
+                );
+                println!();
+            }
+        }
+    }
+
+    // If --highlight flag is set, add annotations for found text
+    if args.highlight && !results.is_empty() {
+        let annotations_path = annotations_file_path(&args.file);
+
+        // Load existing annotations or create empty file
+        let mut annotations_file = if annotations_path.exists() {
+            let json_content = std::fs::read_to_string(&annotations_path)?;
+            serde_json::from_str::<AnnotationsFile>(&json_content).unwrap_or_else(|_| {
+                AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new())
+            })
+        } else {
+            AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new())
+        };
+
+        // Determine next annotation ID
+        let mut next_id = annotations_file
+            .annotations
+            .iter()
+            .filter_map(|a| {
+                a.id.strip_prefix('a')
+                    .and_then(|n| n.parse::<u32>().ok())
+            })
+            .max()
+            .unwrap_or(0) + 1;
+
+        // Add highlight for each match
+        for m in &results {
+            let new_annotation = crate::gui::SerializedAnnotation {
+                id: format!("a{}", next_id),
+                annotation_type: "highlight".to_string(),
+                geometry: crate::gui::AnnotationGeometry::Rectangle {
+                    x: m.x as f64,
+                    y: m.y as f64,
+                    width: m.width as f64,
+                    height: m.height as f64,
+                },
+                color: args.color.clone(),
+            };
+            annotations_file.annotations.push(new_annotation);
+            next_id += 1;
+        }
+
+        // Write back to sidecar file
+        let json = serde_json::to_string_pretty(&annotations_file).map_err(|e| {
+            crate::core::QuillError::Other(format!("Failed to serialize annotations: {}", e))
+        })?;
+
+        std::fs::write(&annotations_path, json)?;
+        println!("Added {} highlight annotation(s) to: {}", results.len(), annotations_path.display());
+    }
+
+    Ok(())
+}
+
+/// Text match result from OCR
+#[derive(Debug)]
+struct TextMatch {
+    text: String,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    confidence: i32,
+}
+
 /// Index a capture in the database
 fn index_capture(image: &QuillImage, path: &PathBuf) -> Result<()> {
     let index = Index::open()?;
@@ -842,4 +1026,328 @@ fn index_capture(image: &QuillImage, path: &PathBuf) -> Result<()> {
 
     index.upsert_image(&entry)?;
     Ok(())
+}
+
+/// Execute the render command (bake annotations onto image for viewing)
+pub fn run_render(args: &RenderArgs) -> Result<()> {
+    tracing::info!(?args, "Running render");
+
+    // Verify the image file exists
+    if !args.file.exists() {
+        return Err(crate::core::QuillError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    let annotations_path = annotations_file_path(&args.file);
+
+    // Load annotations from sidecar file
+    let annotations: Vec<crate::core::Annotation> = if annotations_path.exists() {
+        let json_content = std::fs::read_to_string(&annotations_path)?;
+        match serde_json::from_str::<AnnotationsFile>(&json_content) {
+            Ok(file) => {
+                file.annotations
+                    .iter()
+                    .filter_map(|sa| crate::gui::deserialize_annotation(sa))
+                    .collect()
+            }
+            Err(_) => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+
+    // Load the base image
+    let image_data = std::fs::read(&args.file)?;
+    let img = image::load_from_memory(&image_data)
+        .map_err(|e| crate::core::QuillError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
+
+    // Create QuillImage with annotations
+    let quill_image = QuillImage {
+        image_data,
+        width: img.width(),
+        height: img.height(),
+        source: crate::core::ImageSource::File(args.file.clone()),
+        annotations,
+        title: None,
+        description: None,
+        tags: Vec::new(),
+        file_path: Some(args.file.clone()),
+        created_at: SystemTime::now(),
+        modified_at: SystemTime::now(),
+    };
+
+    // Determine output path
+    let output_path = args.output.clone().unwrap_or_else(|| {
+        let stem = args.file.file_stem().unwrap_or_default().to_string_lossy();
+        let ext = args.file.extension().unwrap_or_default().to_string_lossy();
+        args.file.with_file_name(format!("{}.rendered.{}", stem, ext))
+    });
+
+    // Export with baked annotations
+    let options = export::ExportOptions {
+        bake_annotations: true,
+        ..Default::default()
+    };
+    export::export_image(&quill_image, &output_path, &options)?;
+
+    println!("Rendered {} annotation(s) to: {}", quill_image.annotations.len(), output_path.display());
+
+    Ok(())
+}
+
+/// Execute the remove-annotation command
+pub fn run_remove_annotation(args: &RemoveAnnotationArgs) -> Result<()> {
+    tracing::info!(?args, "Running remove-annotation");
+
+    // Verify the image file exists
+    if !args.file.exists() {
+        return Err(crate::core::QuillError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    let annotations_path = annotations_file_path(&args.file);
+
+    // Load existing annotations
+    if !annotations_path.exists() {
+        return Err(crate::core::QuillError::Other(format!(
+            "No annotations file found: {}",
+            annotations_path.display()
+        )));
+    }
+
+    let json_content = std::fs::read_to_string(&annotations_path)?;
+    let mut annotations_file = serde_json::from_str::<AnnotationsFile>(&json_content)
+        .map_err(|e| crate::core::QuillError::Other(format!("Failed to parse annotations: {}", e)))?;
+
+    // Find and remove the annotation
+    let original_count = annotations_file.annotations.len();
+    annotations_file.annotations.retain(|a| a.id != args.id);
+
+    if annotations_file.annotations.len() == original_count {
+        return Err(crate::core::QuillError::Other(format!(
+            "Annotation not found: {}",
+            args.id
+        )));
+    }
+
+    // Write back to file
+    let json = serde_json::to_string_pretty(&annotations_file)
+        .map_err(|e| crate::core::QuillError::Other(format!("Failed to serialize: {}", e)))?;
+    std::fs::write(&annotations_path, json)?;
+
+    println!("Removed annotation [{}]", args.id);
+    println!("Remaining annotations: {}", annotations_file.annotations.len());
+
+    Ok(())
+}
+
+/// Execute the clear-annotations command
+pub fn run_clear_annotations(args: &ClearAnnotationsArgs) -> Result<()> {
+    tracing::info!(?args, "Running clear-annotations");
+
+    // Verify the image file exists
+    if !args.file.exists() {
+        return Err(crate::core::QuillError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    let annotations_path = annotations_file_path(&args.file);
+
+    if !annotations_path.exists() {
+        println!("No annotations to clear");
+        return Ok(());
+    }
+
+    // Load to get count, then clear
+    let json_content = std::fs::read_to_string(&annotations_path)?;
+    let old_file = serde_json::from_str::<AnnotationsFile>(&json_content).ok();
+    let removed_count = old_file.map(|f| f.annotations.len()).unwrap_or(0);
+
+    // Create empty annotations file
+    let empty_file = AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new());
+    let json = serde_json::to_string_pretty(&empty_file)
+        .map_err(|e| crate::core::QuillError::Other(format!("Failed to serialize: {}", e)))?;
+    std::fs::write(&annotations_path, json)?;
+
+    println!("Cleared {} annotation(s)", removed_count);
+
+    Ok(())
+}
+
+/// Execute the grid command (overlay coordinate grid on image)
+pub fn run_grid(args: &GridArgs) -> Result<()> {
+    use crate::core::tile::TileBounds;
+    use crate::grid::{self, GridColor, GridConfig, GridMetadata};
+    use crate::grid::types::RegionJson;
+    use image::GenericImageView;
+
+    tracing::info!(?args, "Running grid");
+
+    // Verify the file exists
+    if !args.file.exists() {
+        return Err(crate::core::QuillError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    // Load the image
+    let image_data = std::fs::read(&args.file)?;
+    let img = image::load_from_memory(&image_data)
+        .map_err(|e| crate::core::QuillError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
+    let (width, height) = img.dimensions();
+
+    // Parse region if provided
+    let region = if let Some(ref region_str) = args.region {
+        Some(parse_grid_region(region_str)?)
+    } else {
+        None
+    };
+
+    // Parse colors
+    let color = GridColor::from_hex(&args.color)
+        .map_err(|e| crate::core::QuillError::Other(format!("Invalid color: {}", e)))?;
+    let major_color = GridColor::from_hex(&args.major_color)
+        .map_err(|e| crate::core::QuillError::Other(format!("Invalid major color: {}", e)))?;
+
+    // Create grid config
+    let config = GridConfig {
+        spacing: args.spacing,
+        major_interval: args.major_interval,
+        color,
+        major_color,
+        label_font_size: 12.0,
+        show_labels: true,
+    };
+
+    // Build grid spatial index
+    let index = grid::build_grid_index(width, height, &config, region.as_ref());
+
+    if args.json {
+        // JSON output mode - formula-based for compact representation
+        // Labels on image show base36 indices (col,row)
+        // Use formula to convert: pixel_x = origin[0] + col * spacing
+        let render_bounds = region.clone().unwrap_or_else(|| {
+            TileBounds::from_corners(0.0, 0.0, width as f64, height as f64)
+        });
+
+        let entries = grid::lines_in_region(&index, &render_bounds);
+
+        // Collect unique coordinates to determine grid dimensions
+        let mut vertical_coords: Vec<f64> = Vec::new();
+        let mut horizontal_coords: Vec<f64> = Vec::new();
+
+        for entry in entries {
+            match entry.line.orientation {
+                grid::GridOrientation::Vertical => vertical_coords.push(entry.line.coordinate),
+                grid::GridOrientation::Horizontal => horizontal_coords.push(entry.line.coordinate),
+            }
+        }
+
+        vertical_coords.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        horizontal_coords.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        vertical_coords.dedup();
+        horizontal_coords.dedup();
+
+        let origin_x = vertical_coords.first().copied().unwrap_or(0.0);
+        let origin_y = horizontal_coords.first().copied().unwrap_or(0.0);
+        let cols = vertical_coords.len();
+        let rows = horizontal_coords.len();
+
+        let metadata = GridMetadata::new(
+            width,
+            height,
+            origin_x,
+            origin_y,
+            args.spacing,
+            cols,
+            rows,
+            args.major_interval,
+            region.as_ref().map(RegionJson::from),
+        );
+
+        let json = serde_json::to_string_pretty(&metadata)
+            .map_err(|e| crate::core::QuillError::Other(format!("JSON error: {}", e)))?;
+        println!("{}", json);
+    } else {
+        // Image output mode
+        let mut output_img = img.to_rgba8();
+
+        // Determine render bounds
+        let render_bounds = region.clone().unwrap_or_else(|| {
+            TileBounds::from_corners(0.0, 0.0, width as f64, height as f64)
+        });
+
+        // Render grid
+        grid::render_grid(&mut output_img, &index, &render_bounds, &config);
+
+        // If region specified, crop the output
+        let final_img = if let Some(ref bounds) = region {
+            let x = bounds.min_x.max(0.0) as u32;
+            let y = bounds.min_y.max(0.0) as u32;
+            let w = (bounds.width() as u32).min(width - x);
+            let h = (bounds.height() as u32).min(height - y);
+            image::imageops::crop_imm(&output_img, x, y, w, h).to_image()
+        } else {
+            output_img
+        };
+
+        // Determine output path
+        let output_path = args.output.clone().unwrap_or_else(|| {
+            let stem = args.file.file_stem().unwrap_or_default().to_string_lossy();
+            args.file.with_file_name(format!("{}.grid.png", stem))
+        });
+
+        // Save output
+        final_img.save(&output_path)
+            .map_err(|e| crate::core::QuillError::Image(crate::core::ImageError::EncodeError(e.to_string())))?;
+
+        println!("Grid overlay saved to: {}", output_path.display());
+        println!("Image size: {}x{}", final_img.width(), final_img.height());
+        println!("Grid spacing: {}px (major every {} lines)", args.spacing, args.major_interval);
+    }
+
+    Ok(())
+}
+
+/// Parse a grid region string in "x1,y1,x2,y2" format
+fn parse_grid_region(region_str: &str) -> Result<crate::core::tile::TileBounds> {
+    use crate::core::tile::TileBounds;
+
+    let parts: Vec<&str> = region_str.split(',').collect();
+    if parts.len() != 4 {
+        return Err(crate::core::QuillError::Other(format!(
+            "Invalid region format '{}'. Expected 'x1,y1,x2,y2'",
+            region_str
+        )));
+    }
+
+    let x1 = parts[0].trim().parse::<f64>().map_err(|_| {
+        crate::core::QuillError::Other(format!("Invalid x1 coordinate: {}", parts[0]))
+    })?;
+    let y1 = parts[1].trim().parse::<f64>().map_err(|_| {
+        crate::core::QuillError::Other(format!("Invalid y1 coordinate: {}", parts[1]))
+    })?;
+    let x2 = parts[2].trim().parse::<f64>().map_err(|_| {
+        crate::core::QuillError::Other(format!("Invalid x2 coordinate: {}", parts[2]))
+    })?;
+    let y2 = parts[3].trim().parse::<f64>().map_err(|_| {
+        crate::core::QuillError::Other(format!("Invalid y2 coordinate: {}", parts[3]))
+    })?;
+
+    Ok(TileBounds::from_corners(x1, y1, x2, y2))
 }

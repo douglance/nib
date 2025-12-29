@@ -12,6 +12,7 @@ use gpui::{
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -48,7 +49,19 @@ use crate::gui::toolbar::Tool;
 const ANNOTATIONS_FILE_VERSION: &str = "1.0";
 
 /// Height of the toolbar in pixels (used for coordinate offset)
-const TOOLBAR_HEIGHT: f32 = 100.0;
+/// Mouse events are window-relative, so we subtract this to get canvas-relative coords
+const TOOLBAR_HEIGHT: f32 = 44.0;
+
+/// Debug log to file (eprintln doesn't flush reliably)
+fn debug_log(msg: &str) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/quill-debug.log")
+    {
+        let _ = writeln!(f, "{}", msg);
+    }
+}
 
 /// Serializable annotation data for JSON persistence
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -327,8 +340,9 @@ pub struct DragState {
 /// Text input state for creating/editing text annotations
 #[derive(Debug, Clone)]
 pub struct TextInputState {
-    /// Position where the text annotation will be placed (in image coordinates)
-    pub position: QuillPoint,
+    /// Screen position where user clicked (for rendering during input)
+    pub screen_x: f32,
+    pub screen_y: f32,
     /// Current text content being typed
     pub content: String,
     /// If editing an existing annotation, its ID
@@ -492,37 +506,47 @@ impl EditorView {
         (scale, offset_x, offset_y)
     }
 
-    /// Scale image coordinates to screen coordinates for rendering
-    /// Takes (x, y, w, h) in image pixels and returns (sx, sy, sw, sh) in screen pixels
+    /// Scale image coordinates to canvas coordinates for rendering
+    /// Takes (x, y, w, h) in image pixels and returns (sx, sy, sw, sh) in canvas pixels
+    /// Note: coordinates are relative to the canvas container, not the window
     fn scale_coords(&self, x: f64, y: f64, w: f64, h: f64) -> (f32, f32, f32, f32) {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
 
-        (
-            (x as f32 * scale) + offset_x,
-            (y as f32 * scale) + offset_y + TOOLBAR_HEIGHT,
-            w as f32 * scale,
-            h as f32 * scale,
-        )
+        let out_x = (x as f32 * scale) + offset_x;
+        let out_y = (y as f32 * scale) + offset_y;
+        let out_w = w as f32 * scale;
+        let out_h = h as f32 * scale;
+
+        debug_log(&format!("scale_coords: image=({:.1}, {:.1}, {:.1}, {:.1}) scale={:.3} offset=({:.1}, {:.1}) -> canvas=({:.1}, {:.1}, {:.1}, {:.1})",
+                 x, y, w, h, scale, offset_x, offset_y, out_x, out_y, out_w, out_h));
+
+        (out_x, out_y, out_w, out_h)
     }
 
-    /// Scale a single point from image coordinates to screen coordinates
+    /// Scale a single point from image coordinates to canvas coordinates
+    /// Note: coordinates are relative to the canvas container, not the window
     fn scale_point(&self, x: f64, y: f64) -> (f32, f32) {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
-        (
-            (x as f32 * scale) + offset_x,
-            (y as f32 * scale) + offset_y + TOOLBAR_HEIGHT,
-        )
+        let out_x = (x as f32 * scale) + offset_x;
+        let out_y = (y as f32 * scale) + offset_y;
+        debug_log(&format!("scale_point: image=({:.1}, {:.1}) scale={:.3} offset=({:.1}, {:.1}) -> canvas=({:.1}, {:.1})",
+                 x, y, scale, offset_x, offset_y, out_x, out_y));
+        (out_x, out_y)
     }
 
-    /// Convert screen coordinates back to image coordinates for annotation creation
-    fn screen_to_image_coords(&self, screen_x: f32, screen_y: f32) -> (f64, f64) {
+    /// Convert window coordinates to image coordinates for annotation creation
+    /// Mouse events are window-relative, so we subtract toolbar height first
+    fn screen_to_image_coords(&self, window_x: f32, window_y: f32) -> (f64, f64) {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
 
-        // Subtract toolbar height since mouse coords are in window space
-        let canvas_y = screen_y - TOOLBAR_HEIGHT;
+        // Window coords -> canvas coords (subtract toolbar)
+        let canvas_y = window_y - TOOLBAR_HEIGHT;
 
-        let image_x = (screen_x - offset_x) / scale;
+        let image_x = (window_x - offset_x) / scale;
         let image_y = (canvas_y - offset_y) / scale;
+
+        debug_log(&format!("screen_to_image_coords: window=({:.1}, {:.1}) canvas_y={:.1} scale={:.3} offset=({:.1}, {:.1}) -> image=({:.1}, {:.1})",
+                 window_x, window_y, canvas_y, scale, offset_x, offset_y, image_x, image_y));
 
         (image_x as f64, image_y as f64)
     }
@@ -625,18 +649,28 @@ impl EditorView {
 
     /// Handle mouse down event on canvas
     fn handle_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        // If in text input mode, clicking away confirms the text (Figma behavior)
+        if self.text_input_state.is_some() {
+            self.confirm_text_input(cx);
+            // Don't start a new action on this click - just finish the text
+            return;
+        }
+
         // Only start drawing for tools that support drag-to-draw
         match self.active_tool {
             Tool::Rectangle | Tool::Arrow | Tool::Line | Tool::Ellipse | Tool::Highlight | Tool::Blur => {
                 let position = event.position;
-                let screen_x: f32 = position.x.into();
-                let screen_y: f32 = position.y.into();
-                // Convert screen coordinates to image coordinates
-                let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
+                let click_x: f32 = position.x.into();
+                let click_y: f32 = position.y.into();
 
-                // DEBUG: Print click coordinates in image space
-                eprintln!("CLICK: screen=({:.0}, {:.0}) -> image=({:.0}, {:.0})",
-                         screen_x, screen_y, img_x, img_y);
+                // DEBUG: Print dimensions and click info
+                debug_log("=== MOUSE DOWN ===");
+                debug_log(&format!("  canvas_size=({:.0}, {:.0}) image_size=({}, {})",
+                         self.canvas_width, self.canvas_height, self.image_width, self.image_height));
+                debug_log(&format!("  event.position=({:.1}, {:.1})", click_x, click_y));
+
+                // Convert screen coordinates to image coordinates
+                let (img_x, img_y) = self.screen_to_image_coords(click_x, click_y);
                 self.drag_state = Some(DragState {
                     tool: self.active_tool,
                     start_point: QuillPoint::new(img_x, img_y),
@@ -649,13 +683,12 @@ impl EditorView {
                 let position = event.position;
                 let screen_x: f32 = position.x.into();
                 let screen_y: f32 = position.y.into();
-                // Convert screen coordinates to image coordinates
-                let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
-                let point = QuillPoint::new(img_x, img_y);
 
-                // Enter text input mode
+                // Store raw screen coordinates - render directly there
+                // Convert to image coords only when saving
                 self.text_input_state = Some(TextInputState {
-                    position: point,
+                    screen_x,
+                    screen_y,
                     content: String::new(),
                     editing_annotation_id: None,
                 });
@@ -698,10 +731,18 @@ impl EditorView {
 
                 // Find text annotation at click position
                 if let Some(annotation) = self.find_text_annotation_at(click_point) {
-                    if let AnnotationType::Text { position, content, .. } = &annotation.annotation_type {
+                    if let AnnotationType::Text { position, content, font_size, .. } = &annotation.annotation_type {
+                        // Convert annotation's image position to screen position
+                        let (ann_screen_x, ann_screen_y) = self.scale_point(position.x, position.y);
+                        // Add back the font height offset that we subtract when rendering
+                        let (scale, _, _) = self.calculate_scale_and_offset();
+                        let scaled_font_size = (*font_size as f32) * scale;
+                        let adjusted_screen_y = ann_screen_y + scaled_font_size;
+
                         // Enter edit mode for this annotation
                         self.text_input_state = Some(TextInputState {
-                            position: *position,
+                            screen_x: ann_screen_x,
+                            screen_y: adjusted_screen_y,
                             content: content.clone(),
                             editing_annotation_id: Some(annotation.id),
                         });
@@ -897,6 +938,9 @@ impl EditorView {
             AnnotationType::Box { region, filled, corner_radius, .. } => {
                 // Scale coordinates from image space to screen space
                 let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
+                debug_log(&format!("=== RENDER BOX ==="));
+                debug_log(&format!("  image region: x={:.1} y={:.1} w={:.1} h={:.1}", region.x, region.y, region.width, region.height));
+                debug_log(&format!("  final CSS: .left(px({:.1})) .top(px({:.1})) .w(px({:.1})) .h(px({:.1}))", sx, sy, sw, sh));
                 let mut element = div()
                     .absolute()
                     .left(px(sx))
@@ -1205,14 +1249,27 @@ impl EditorView {
             );
         }
 
-        // Add annotation overlays
+        // Add annotation overlays (skip text annotation being edited)
         for annotation in &self.annotations {
-            canvas = canvas.child(self.render_annotation(annotation));
+            // If we're editing this annotation, skip rendering it - we'll render the editable version
+            let is_being_edited = self.text_input_state.as_ref()
+                .and_then(|state| state.editing_annotation_id)
+                .map(|id| id == annotation.id)
+                .unwrap_or(false);
+
+            if !is_being_edited {
+                canvas = canvas.child(self.render_annotation(annotation));
+            }
         }
 
         // Add drag preview if actively drawing
         if let Some(preview) = self.render_drag_preview() {
             canvas = canvas.child(preview);
+        }
+
+        // Add inline text editing if in text input mode (Figma-style, directly on canvas)
+        if let Some(ref input_state) = self.text_input_state {
+            canvas = canvas.child(self.render_inline_text_editing(input_state));
         }
 
         canvas
@@ -1324,10 +1381,22 @@ impl EditorView {
             }
         } else {
             // Create new annotation
+            // Convert screen coords to image coords for storage
+            let font_size = 16.0;
+            let (scale, _, _) = self.calculate_scale_and_offset();
+            let scaled_font_size = font_size * scale;
+
+            // Offset screen position up by scaled font height (to match rendering)
+            let adjusted_screen_y = input_state.screen_y - scaled_font_size;
+
+            // Convert to image coordinates
+            let (img_x, img_y) = self.screen_to_image_coords(input_state.screen_x, adjusted_screen_y);
+            let position = QuillPoint::new(img_x, img_y);
+
             let annotation = Annotation::new(AnnotationType::Text {
-                position: input_state.position,
+                position,
                 content: input_state.content,
-                font_size: 16.0,
+                font_size: font_size as f64,
                 align: crate::core::types::TextAlign::Left,
                 background: None,
                 max_width: None,
@@ -1346,53 +1415,47 @@ impl EditorView {
         cx.notify();
     }
 
-    /// Render the text input overlay
-    fn render_text_input_overlay(&self, input_state: &TextInputState, _cx: &mut Context<Self>) -> impl IntoElement {
-        // Scale position to screen coordinates
-        let (screen_x, screen_y) = self.scale_point(input_state.position.x, input_state.position.y);
+    /// Render inline text editing directly on canvas (Figma-style)
+    /// Text renders just above the click position with a cursor, no overlay box
+    fn render_inline_text_editing(&self, input_state: &TextInputState) -> impl IntoElement {
+        // Window coords -> canvas coords (subtract toolbar height)
+        let canvas_x = input_state.screen_x;
+        let canvas_y = input_state.screen_y - TOOLBAR_HEIGHT;
 
-        let input_bg = rgb(0xffffff);
-        let input_border = rgb(0x0078d4);
-        let text_color = rgb(0x000000);
-        let placeholder_color = rgb(0x888888);
+        // Get scale for font sizing
+        let (scale, _, _) = self.calculate_scale_and_offset();
+        let font_size = 16.0_f32;
+        let scaled_font_size = font_size * scale;
 
-        // Display content or placeholder
-        let display_text = if input_state.content.is_empty() {
-            "Type here...".to_string()
-        } else {
-            input_state.content.clone()
-        };
+        // Offset text up so it appears above the click point
+        let text_y = canvas_y - scaled_font_size;
 
-        let is_placeholder = input_state.content.is_empty();
+        // Use the current drawing color (same as annotations)
+        let text_color = rgb(
+            self.current_color.r as u32 * 0x10000 +
+            self.current_color.g as u32 * 0x100 +
+            self.current_color.b as u32
+        );
+
+        // Cursor color matches text
+        let cursor_color = text_color;
 
         div()
             .absolute()
-            .left(px(screen_x))
-            .top(px(screen_y))
-            .min_w(px(150.))
-            .min_h(px(28.))
-            .px_2()
-            .py_1()
-            .bg(input_bg)
-            .border_2()
-            .border_color(input_border)
-            .rounded_md()
-            .shadow_lg()
-            .text_color(if is_placeholder { placeholder_color } else { text_color })
-            .text_sm()
+            .left(px(canvas_x))
+            .top(px(text_y))
+            .flex()
+            .flex_row()
+            .items_center()
+            .text_color(text_color)
+            .text_size(px(scaled_font_size))
+            .child(input_state.content.clone())
             .child(
+                // Blinking cursor - thin vertical bar after text
                 div()
-                    .flex()
-                    .items_center()
-                    .child(display_text)
-                    .child(
-                        // Blinking cursor indicator
-                        div()
-                            .w(px(2.))
-                            .h(px(16.))
-                            .bg(input_border)
-                            .ml_px()
-                    )
+                    .w(px(2.))
+                    .h(px(scaled_font_size))
+                    .bg(cursor_color)
             )
     }
 }
@@ -1415,7 +1478,9 @@ impl Render for EditorView {
         // Check if sidecar file has changed and reload annotations if needed
         self.check_and_reload_annotations();
 
-        let mut container = div()
+        // Inline text editing is now rendered directly on the canvas (Figma-style)
+        // No separate overlay needed
+        div()
             .id("editor-container")
             .size_full()
             .flex()
@@ -1426,13 +1491,6 @@ impl Render for EditorView {
             }))
             .child(self.render_toolbar(cx))
             .child(self.render_canvas(cx))
-            .child(self.render_status_bar());
-
-        // Add text input overlay if in text input mode
-        if let Some(ref input_state) = self.text_input_state {
-            container = container.child(self.render_text_input_overlay(input_state, cx));
-        }
-
-        container
+            .child(self.render_status_bar())
     }
 }

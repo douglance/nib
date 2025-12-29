@@ -54,6 +54,21 @@ pub enum Command {
 
     /// Add an annotation to an image
     AddAnnotation(AddAnnotationArgs),
+
+    /// Find text in an image using OCR and get precise coordinates
+    FindText(FindTextArgs),
+
+    /// Render annotations onto image and output to file (for Claude to view)
+    Render(RenderArgs),
+
+    /// Remove a specific annotation by ID
+    RemoveAnnotation(RemoveAnnotationArgs),
+
+    /// Clear all annotations from an image
+    ClearAnnotations(ClearAnnotationsArgs),
+
+    /// Overlay a coordinate grid on an image for precise positioning
+    Grid(GridArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -234,4 +249,94 @@ pub struct AddAnnotationArgs {
     /// Number value (for number annotations)
     #[arg(long)]
     pub value: Option<u32>,
+}
+
+#[derive(Parser, Debug)]
+pub struct FindTextArgs {
+    /// Image file to search for text
+    pub file: PathBuf,
+
+    /// Search for specific text (case-insensitive substring match)
+    #[arg(short, long)]
+    pub search: Option<String>,
+
+    /// Output as JSON for easy parsing
+    #[arg(long)]
+    pub json: bool,
+
+    /// Minimum confidence level (0-100, default: 60)
+    #[arg(short, long, default_value = "60")]
+    pub confidence: i32,
+
+    /// Automatically add highlight annotation for found text
+    #[arg(long)]
+    pub highlight: bool,
+
+    /// Color for highlight annotation (hex format)
+    #[arg(long, default_value = "#ffff00")]
+    pub color: String,
+
+    /// Limit search to a specific region (format: "x,y,width,height")
+    #[arg(short, long)]
+    pub region: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+pub struct RenderArgs {
+    /// Image file to render with annotations
+    pub file: PathBuf,
+
+    /// Output file (default: {file}.rendered.png)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct RemoveAnnotationArgs {
+    /// Image file containing the annotation
+    pub file: PathBuf,
+
+    /// Annotation ID to remove (e.g., "a1", "a2")
+    pub id: String,
+}
+
+#[derive(Parser, Debug)]
+pub struct ClearAnnotationsArgs {
+    /// Image file to clear annotations from
+    pub file: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+pub struct GridArgs {
+    /// Image file to overlay grid on (PNG or .tiles/ directory)
+    pub file: PathBuf,
+
+    /// Grid line spacing in pixels
+    #[arg(short = 's', long, default_value = "100")]
+    pub spacing: u32,
+
+    /// Region to focus on (format: "x1,y1,x2,y2")
+    /// If specified, outputs a cropped view of just that region with the grid
+    #[arg(short = 'r', long)]
+    pub region: Option<String>,
+
+    /// Output file (default: {file}.grid.png or stdout for --json)
+    #[arg(short = 'o', long)]
+    pub output: Option<PathBuf>,
+
+    /// Grid line color in hex format (default: semi-transparent gray)
+    #[arg(short = 'c', long, default_value = "#80808080")]
+    pub color: String,
+
+    /// Major line color in hex format (default: semi-transparent red)
+    #[arg(long, default_value = "#ff0000a0")]
+    pub major_color: String,
+
+    /// Interval for major lines with labels (every N lines)
+    #[arg(long, default_value = "5")]
+    pub major_interval: u32,
+
+    /// Output grid metadata as JSON instead of rendering image
+    #[arg(long)]
+    pub json: bool,
 }
