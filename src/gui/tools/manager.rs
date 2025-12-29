@@ -18,6 +18,25 @@ impl ToolManager {
         }
     }
 
+    /// Create a new tool manager with all built-in tools registered
+    pub fn with_all_tools() -> Self {
+        let mut manager = Self::new();
+
+        // Register all built-in tools
+        manager.register(Box::new(super::SelectTool::new()));
+        manager.register(Box::new(super::ArrowTool::new()));
+        manager.register(Box::new(super::RectangleTool::new()));
+        manager.register(Box::new(super::EllipseTool::new()));
+        manager.register(Box::new(super::LineTool::new()));
+        manager.register(Box::new(super::TextTool::new()));
+        manager.register(Box::new(super::NumberTool::new()));
+        manager.register(Box::new(super::HighlightTool::new()));
+        manager.register(Box::new(super::BlurTool::new()));
+        manager.register(Box::new(super::CropTool::new()));
+
+        manager
+    }
+
     /// Register a tool
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         self.tools.insert(tool.id(), tool);
@@ -112,6 +131,6 @@ impl ToolManager {
 
 impl Default for ToolManager {
     fn default() -> Self {
-        Self::new()
+        Self::with_all_tools()
     }
 }
