@@ -1,5 +1,7 @@
 # Tiled Screenshot Capture System
 
+> **STATUS: ✅ CORE COMPLETE** — Tile generation, R-tree spatial index, LRU caching, region extraction all implemented. CLI commands and GUI integration pending.
+
 ## Overview
 
 This specification defines a spatial tiling system for Nib that captures and stores screenshots as a hierarchy of tiles, similar to web map tiles (e.g., Google Maps, OpenStreetMap). The system solves the fundamental problem of **losing fine details when working with large screenshots** by enabling:
@@ -1702,92 +1704,93 @@ pub struct AiContext {
 
 ## Implementation Phases
 
-### Phase 1: Core Tile Infrastructure (Week 1-2)
+### Phase 1: Core Tile Infrastructure ✅ COMPLETE
 
-1. **Define core types** in `src/core/tile.rs`
-   - `TileId`, `TileConfig`, `TileBounds`, `TiledCaptureManifest`
-   - Serialization/deserialization with serde
+1. **Define core types** in `src/capture/tiled.rs`
+   - [x] `TileId`, `TileConfig`, `TileBounds`, `TiledCaptureManifest`
+   - [x] Serialization/deserialization with serde
 
-2. **Implement tile generation** in `src/capture/tiled.rs`
-   - Generate tiles from captured image
-   - Create zoom level pyramid
-   - Write manifest.json
+2. **Implement tile generation**
+   - [x] Generate tiles from captured image (`generate_tiles()`)
+   - [x] Create zoom level pyramid (parallel with Rayon)
+   - [x] Write manifest.json
 
 3. **Basic file I/O**
-   - Load/save individual tiles
-   - Parse manifest
+   - [x] Load/save individual tiles
+   - [x] Parse manifest
 
-### Phase 2: Spatial Index and Queries (Week 2-3)
+### Phase 2: Spatial Index and Queries ✅ COMPLETE
 
 1. **Integrate R-tree** (using `rstar` crate)
-   - Build index from manifest
-   - Persist index for fast loading
+   - [x] Build index from manifest (`build_spatial_index()`)
+   - [x] Persist index to `spatial.idx` binary file
 
 2. **Implement query API**
-   - `tile_at_point()`
-   - `tiles_in_region()`
-   - `tiles_in_viewport()`
+   - [x] `tile_at_point()`
+   - [x] `tiles_intersecting()`
+   - [x] `nearest_tiles()` for prefetching
 
 3. **Region extraction**
-   - Stitch tiles for region export
-   - Handle edge cases (partial tiles)
+   - [x] Stitch tiles for region export (`extract_region()`)
+   - [x] Handle edge cases (partial tiles)
 
-### Phase 3: CLI Commands (Week 3)
+### Phase 3: CLI Commands — NOT STARTED
 
 1. **Extend capture command**
-   - `--tiled` flag
-   - Auto-tiling for large captures
+   - [ ] `--tiled` flag
+   - [ ] Auto-tiling for large captures
 
 2. **New query commands**
-   - `nib query`
-   - `nib extract`
-   - `nib tiles`
+   - [ ] `nib query`
+   - [ ] `nib extract`
+   - [ ] `nib tiles`
 
 3. **Update existing commands**
-   - `nib render` works with tiled captures
-   - `nib find-text` uses per-tile OCR
+   - [ ] `nib render` works with tiled captures
+   - [ ] `nib find-text` uses per-tile OCR
 
-### Phase 4: OCR Integration (Week 4)
+### Phase 4: OCR Integration — PARTIAL
 
 1. **Per-tile OCR processing**
-   - Generate OCR for each tile
-   - Store in ocr/ subdirectory
+   - [x] Path structure in place (`ocr_path()` method)
+   - [ ] OCR engine integration per tile
+   - [ ] Store in ocr/ subdirectory
 
 2. **Coordinate mapping**
-   - Tile-local to global coordinates
-   - Include in spatial index
+   - [x] Global ↔ tile coordinate conversion
+   - [ ] Include text preview in spatial index
 
 3. **Text search across tiles**
-   - Fast lookup via spatial index
-   - Return tile + coordinates
+   - [ ] Fast lookup via spatial index
+   - [ ] Return tile + coordinates
 
-### Phase 5: Annotation Integration (Week 4-5)
+### Phase 5: Annotation Integration — NOT STARTED
 
 1. **Coordinate system compatibility**
-   - Annotations use original coordinates
-   - Transparent mapping in tile system
+   - [ ] Annotations use original coordinates
+   - [ ] Transparent mapping in tile system
 
 2. **Efficient annotation rendering**
-   - Only load tiles touched by annotations
-   - Render annotations on tile boundaries
+   - [ ] Only load tiles touched by annotations
+   - [ ] Render annotations on tile boundaries
 
 3. **Sidecar file updates**
-   - Track tile references
-   - Efficient partial updates
+   - [ ] Track tile references
+   - [ ] Efficient partial updates
 
-### Phase 6: GUI Integration (Future)
+### Phase 6: GUI Integration — NOT STARTED
 
 1. **Viewport-based tile loading**
-   - Load visible tiles only
-   - Prefetch adjacent tiles
+   - [ ] Load visible tiles only
+   - [ ] Prefetch adjacent tiles
 
 2. **Progressive rendering**
-   - Show low-zoom overview first
-   - Load detail tiles on zoom
+   - [ ] Show low-zoom overview first
+   - [ ] Load detail tiles on zoom
 
-3. **LRU tile cache**
-   - Memory-efficient tile management
-   - Configurable cache size
+3. **LRU tile cache** ✅ COMPLETE
+   - [x] Memory-efficient tile management (LRU cache in TiledCapture)
+   - [x] Configurable cache size (`NIB_TILE_CACHE_SIZE` env var)
 
 ## Testing Strategy
 

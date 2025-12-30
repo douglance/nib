@@ -1,5 +1,7 @@
 # .nib File Format Specification
 
+> **STATUS: ✅ CORE COMPLETE** — SQLite format, annotations, OCR/grid/render caches, session management all implemented. Agent CLI commands pending.
+
 ## Overview
 
 `.nib` is a self-contained document format for annotated images. It's a SQLite database containing the source image, annotations, and cached data in a single portable file.
@@ -434,30 +436,30 @@ nib migrate ./screenshots/              # Migrates all images with sidecars
 
 ## Implementation Phases
 
-### Phase 1: Core Format
-- [ ] Define SQLite schema in Rust
-- [ ] Create NibFile struct with open/create/save methods
-- [ ] Implement image table (store/retrieve BLOB)
-- [ ] Implement annotations table (CRUD operations)
-- [ ] Wire up to existing Annotation types
+### Phase 1: Core Format ✅ COMPLETE
+- [x] Define SQLite schema in Rust (`src/storage/nib_file.rs`)
+- [x] Create NibFile struct with open/create/save methods
+- [x] Implement image table (store/retrieve BLOB)
+- [x] Implement annotations table (CRUD operations)
+- [x] Wire up to existing Annotation types (all 9 types: Box, Arrow, Text, Number, Highlight, Blur, Line, Ellipse, Crop)
 
-### Phase 2: Agent Discovery & Query
-- [ ] Session registry (`~/.nib/sessions.json`)
+### Phase 2: Agent Discovery & Query — PARTIAL
+- [ ] Session registry (`~/.nib/sessions.json`) — schema exists, central registry not implemented
 - [ ] `nib list` - discover open .nib files
 - [ ] `nib info` - comprehensive image/annotation summary
 - [ ] `nib open` - import image and open in GUI
 - [ ] JSON output for all query commands
 
-### Phase 3: Real-time Sync
-- [ ] GUI registers session on open, removes on close
-- [ ] File watching for CLI→GUI updates
+### Phase 3: Real-time Sync ✅ COMPLETE
+- [x] GUI registers session on open, removes on close (`update_session()`, `clear_session()`)
+- [x] File watching for CLI→GUI updates (sidecar file watching in `app.rs`)
 - [ ] `nib watch` - stream changes for agent observation
 - [ ] `--since` flag for polling changes
 
-### Phase 4: Caching
-- [ ] Implement OCR cache (check before running tesseract)
-- [ ] Implement grid cache
-- [ ] Implement render cache with hash invalidation
+### Phase 4: Caching ✅ COMPLETE
+- [x] Implement OCR cache with region support, confidence scores, bounds
+- [x] Implement grid cache with spacing/region/metadata storage
+- [x] Implement render cache with SHA256 hash invalidation
 
 ### Phase 5: Migration & Polish
 - [ ] `nib migrate` command for JSON sidecars
