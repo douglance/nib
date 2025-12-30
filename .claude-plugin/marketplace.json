@@ -1,0 +1,22 @@
+{
+  "name": "nib-plugins",
+  "owner": {
+    "name": "Doug Lance",
+    "url": "https://github.com/douglance"
+  },
+  "plugins": [
+    {
+      "name": "nib",
+      "source": "./",
+      "description": "Screenshot annotation tool that bridges human visual thinking with AI comprehension",
+      "version": "0.1.0",
+      "author": {
+        "name": "Doug Lance"
+      },
+      "homepage": "https://github.com/douglance/nib",
+      "repository": "https://github.com/douglance/nib",
+      "license": "Commercial",
+      "keywords": ["screenshot", "annotation", "image", "ocr", "visual"]
+    }
+  ]
+}

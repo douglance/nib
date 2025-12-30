@@ -36,6 +36,7 @@ pub mod core;
 pub mod events;
 pub mod grid;
 pub mod gui;
+pub mod mcp;
 pub mod ocr;
 pub mod storage;
 

@@ -4,9 +4,13 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Fast, native screenshot annotation tool with semantic visual communication"
-license = "MIT"
+authors = ["Doug Lance"]
+repository = "https://github.com/douglance/nib"
+homepage = "https://github.com/douglance/nib"
+license-file = "LICENSE"
 keywords = ["screenshot", "annotation", "image", "tool"]
 categories = ["graphics", "gui", "command-line-utilities"]
+readme = "README.md"
 
 [[bin]]
 name = "nib"
@@ -83,6 +87,10 @@ rstar = "0.12"
 lru = "0.12"
 bincode = "1.3"
 rayon = "1.10"
+
+# MCP (Model Context Protocol) server
+rmcp = { version = "0.12", features = ["server", "transport-io", "macros"] }
+schemars = "1.0"
 
 # Platform-specific utilities
 [target.'cfg(unix)'.dependencies]

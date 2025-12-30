@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "nib": {
+      "command": "nib",
+      "args": ["mcp-server"],
+      "env": {}
+    }
+  }
+}

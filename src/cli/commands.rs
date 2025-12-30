@@ -921,7 +921,8 @@ pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
 
     std::fs::write(&annotations_path, json)?;
 
-    println!("Added annotation [{}] {} at ({}, {})",
+    println!("[NIB {}] claude added [{}] {} at ({}, {})",
+        crate::events::timestamp_ms(),
         new_annotation.id,
         args.annotation_type,
         args.x,
@@ -2552,4 +2553,12 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+
+/// Run the MCP server for Claude Code integration
+pub async fn run_mcp_server(args: &McpServerArgs) -> Result<()> {
+    tracing::info!(?args, "Starting MCP server");
+    
+    crate::mcp::run_mcp_server(args.image.clone()).await
 }

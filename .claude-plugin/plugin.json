@@ -1,0 +1,14 @@
+{
+  "name": "nib",
+  "version": "0.1.0",
+  "description": "Screenshot annotation tool that bridges human visual thinking with AI comprehension",
+  "author": {
+    "name": "Doug Lance",
+    "url": "https://github.com/douglance"
+  },
+  "homepage": "https://github.com/douglance/nib",
+  "repository": "https://github.com/douglance/nib",
+  "license": "Commercial",
+  "keywords": ["screenshot", "annotation", "image", "ocr", "visual"],
+  "mcpServers": "../.mcp.json"
+}

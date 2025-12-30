@@ -96,6 +96,15 @@ pub enum Command {
 
     /// List tiles in a tiled capture at a specific zoom level
     Tiles(TilesArgs),
+
+    /// Start MCP server for Claude Code integration
+    McpServer(McpServerArgs),
+}
+
+#[derive(Parser, Debug)]
+pub struct McpServerArgs {
+    /// Optional image file to work with
+    pub image: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]

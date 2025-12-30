@@ -18,20 +18,37 @@ async fn main() {
 async fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging
-    let filter = if cli.verbose {
-        "nib=debug"
+    // For MCP server, skip logging initialization (stdout must be pure JSON-RPC)
+    // and redirect any logs to stderr
+    let is_mcp_server = matches!(&cli.command, Command::McpServer(_));
+
+    if is_mcp_server {
+        // MCP server: log to stderr only, no ANSI colors
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::new("warn"))
+            .with(tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .with_ansi(false)
+                .with_writer(std::io::stderr))
+            .init();
     } else {
-        "nib=info"
-    };
+        // Normal CLI: log to stdout with colors
+        let filter = if cli.verbose {
+            "nib=debug"
+        } else {
+            "nib=info"
+        };
 
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()))
-        .with(tracing_subscriber::fmt::layer().with_target(false))
-        .init();
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()))
+            .with(tracing_subscriber::fmt::layer().with_target(false))
+            .init();
+    }
 
-    // Initialize storage
-    storage::init_storage()?;
+    // Initialize storage (skip for MCP server to avoid any stdout output)
+    if !is_mcp_server {
+        storage::init_storage()?;
+    }
 
     // Dispatch command
     match &cli.command {
@@ -60,5 +77,6 @@ async fn run() -> Result<()> {
         Command::Query(args) => cli::run_query(args, &cli.format),
         Command::Extract(args) => cli::run_extract(args),
         Command::Tiles(args) => cli::run_tiles(args, &cli.format),
+        Command::McpServer(args) => cli::run_mcp_server(args).await,
     }
 }

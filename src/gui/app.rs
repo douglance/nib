@@ -6,8 +6,8 @@ use gpui::{
     canvas, div, img, point, px, rgb, rgba, size, svg, App, AppContext, Application, AssetSource,
     Bounds, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Point,
-    Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size,
-    StatefulInteractiveElement, Styled, StyledImage, Task, Window, WindowBounds, WindowKind, WindowOptions,
+    Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement,
+    Styled, StyledImage, Task, Window, WindowBounds, WindowKind, WindowOptions,
 };
 use std::time::Duration;
 use serde::{Deserialize, Serialize};
@@ -61,7 +61,7 @@ const ANNOTATIONS_FILE_VERSION: &str = "1.0";
 const TOOLBAR_HEIGHT: f32 = 0.0; // Toolbar floats inside canvas, doesn't offset coordinates
 
 /// Serializable annotation data for JSON persistence
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SerializedAnnotation {
     pub id: String,
     #[serde(rename = "type")]
@@ -72,7 +72,7 @@ pub struct SerializedAnnotation {
 }
 
 /// Geometry data for different annotation types
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AnnotationGeometry {
     Rectangle {
@@ -571,6 +571,7 @@ impl EditorView {
         view
     }
 
+
     /// Update the stored modification time of the sidecar file
     fn update_sidecar_modified_time(&mut self) {
         if let Some(ref path) = self.file_path {
@@ -839,7 +840,25 @@ impl EditorView {
     fn process_tool_result(&mut self, result: ToolResult, cx: &mut Context<Self>) {
         match result {
             ToolResult::Created(annotation) => {
-                nib_log!("human created a{} {}", annotation.id.0, annotation.annotation_type.type_name());
+                // Log with full content for text annotations
+                let details = match &annotation.annotation_type {
+                    AnnotationType::Text { content, position, .. } => {
+                        format!("text \"{}\" at ({}, {})", content, position.x as i32, position.y as i32)
+                    }
+                    AnnotationType::Number { value, position, .. } => {
+                        format!("number {} at ({}, {})", value, position.x as i32, position.y as i32)
+                    }
+                    AnnotationType::Arrow { start, end, .. } => {
+                        format!("arrow ({}, {}) -> ({}, {})",
+                            start.x as i32, start.y as i32, end.x as i32, end.y as i32)
+                    }
+                    AnnotationType::Box { region, .. } => {
+                        format!("box at ({}, {}) {}x{}",
+                            region.x as i32, region.y as i32, region.width as i32, region.height as i32)
+                    }
+                    other => other.type_name().to_string(),
+                };
+                nib_log!("human created a{} {}", annotation.id.0, details);
                 self.annotations.push(annotation);
                 self.save_annotations(cx);
                 cx.notify();
@@ -1056,15 +1075,23 @@ impl EditorView {
     }
 
     /// Check if the sidecar file or .nib file has been modified and reload annotations if needed
+    ///
+    /// NOTE: This is called on every render frame. For fast agent response, the GUI must be
+    /// receiving user input (mouse movement, etc.) to trigger renders. When idle, external
+    /// changes won't be detected until the next user interaction.
     fn check_and_reload_annotations(&mut self) {
+        let t0 = std::time::Instant::now();
+
         // For .nib files, check the annotation modification timestamp
         if let Some(ref nib) = self.nib_file {
             match nib.latest_annotation_modified_at() {
                 Ok(Some(current_modified)) => {
                     if self.last_nib_modified != Some(current_modified) {
-                        tracing::debug!(".nib file changed, reloading annotations");
+                        let before_count = self.annotations.len();
                         self.load_annotations();
                         self.last_nib_modified = Some(current_modified);
+                        nib_log!("human detected external change ({} -> {} annotations)",
+                            before_count, self.annotations.len());
                     }
                 }
                 Ok(None) => {
@@ -1073,6 +1100,10 @@ impl EditorView {
                 Err(e) => {
                     tracing::warn!("Failed to check .nib modification time: {}", e);
                 }
+            }
+            let elapsed = t0.elapsed();
+            if elapsed.as_millis() > 5 {
+                eprintln!("[PERF] check_and_reload_annotations (nib): {:?}", elapsed);
             }
             return;
         }
@@ -1095,13 +1126,23 @@ impl EditorView {
 
         // Compare with stored modification time
         if self.last_sidecar_modified != Some(current_modified) {
+            let before_count = self.annotations.len();
             self.load_annotations();
             self.last_sidecar_modified = Some(current_modified);
+            nib_log!("human detected external change ({} -> {} annotations)",
+                before_count, self.annotations.len());
+        }
+
+        let elapsed = t0.elapsed();
+        if elapsed.as_millis() > 5 {
+            eprintln!("[PERF] check_and_reload_annotations (json): {:?}", elapsed);
         }
     }
 
     /// Save annotations to a sidecar JSON file or .nib file
     fn save_annotations(&mut self, cx: &mut Context<Self>) {
+        let t0 = std::time::Instant::now();
+
         // For .nib files, save to NibFile
         if let Some(ref nib) = self.nib_file {
             // Strategy: delete all existing annotations, then add all current ones
@@ -1173,6 +1214,11 @@ impl EditorView {
 
         // Schedule debounced blur preview regeneration if blur annotations changed
         self.schedule_blur_regeneration(cx);
+
+        let elapsed = t0.elapsed();
+        if elapsed.as_millis() > 10 {
+            eprintln!("[PERF] save_annotations: {:?}", elapsed);
+        }
     }
 
     /// Compute a hash of blur annotation state to detect changes
@@ -1281,6 +1327,8 @@ impl EditorView {
 
     /// Regenerate blur preview synchronously (used at startup)
     fn regenerate_blur_preview_sync(&mut self) {
+        let t0 = std::time::Instant::now();
+
         let new_hash = self.compute_blur_hash();
 
         if new_hash == self.blur_annotations_hash {
@@ -1336,10 +1384,17 @@ impl EditorView {
                 tracing::warn!("Failed to save blur preview: {}", e);
             }
         }
+
+        let elapsed = t0.elapsed();
+        if elapsed.as_millis() > 10 {
+            eprintln!("[PERF] regenerate_blur_preview_sync: {:?}", elapsed);
+        }
     }
 
     /// Load annotations from a sidecar JSON file or .nib file
     fn load_annotations(&mut self) {
+        let t0 = std::time::Instant::now();
+
         // For .nib files, load from NibFile
         if let Some(ref nib) = self.nib_file {
             match nib.list_annotations() {
@@ -1350,6 +1405,10 @@ impl EditorView {
                 Err(e) => {
                     tracing::warn!("Failed to load annotations from .nib file: {}", e);
                 }
+            }
+            let elapsed = t0.elapsed();
+            if elapsed.as_millis() > 10 {
+                eprintln!("[PERF] load_annotations (nib): {:?}", elapsed);
             }
             return;
         }
@@ -1382,6 +1441,11 @@ impl EditorView {
             Err(e) => {
                 tracing::warn!("Failed to read annotations file {:?}: {}", annotations_path, e);
             }
+        }
+
+        let elapsed = t0.elapsed();
+        if elapsed.as_millis() > 10 {
+            eprintln!("[PERF] load_annotations (json): {:?}", elapsed);
         }
     }
 
