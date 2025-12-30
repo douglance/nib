@@ -389,7 +389,7 @@ impl NibApp {
                         origin: Point::default(),
                         size: window_size,
                     })),
-                    kind: WindowKind::PopUp,
+                    kind: WindowKind::Normal,
                     ..Default::default()
                 };
 
@@ -399,6 +399,9 @@ impl NibApp {
                     view
                 })
                 .expect("Failed to open window");
+
+                // Quit the app when the window is closed
+                cx.on_window_closed(|cx| cx.shutdown()).detach();
             });
 
         Ok(())
@@ -645,6 +648,56 @@ impl EditorView {
             (x as f32 * scale) + offset_x,
             (y as f32 * scale) + offset_y,
         )
+    }
+
+    /// Render text with an all-around outline for better readability
+    /// Creates shadow text at 8 positions around the main text
+    fn render_text_with_outline(
+        content: String,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        text_color: gpui::Hsla,
+    ) -> impl IntoElement {
+        // Outline offset scales with font size for consistent appearance
+        let outline_offset = (font_size * 0.08).max(1.5);
+        let outline_color = rgba(0x000000cc); // Black with high opacity
+
+        // 8 positions around the text for full outline coverage
+        let offsets: [(f32, f32); 8] = [
+            (-outline_offset, -outline_offset), // NW
+            (0.0, -outline_offset),             // N
+            (outline_offset, -outline_offset),  // NE
+            (-outline_offset, 0.0),             // W
+            (outline_offset, 0.0),              // E
+            (-outline_offset, outline_offset),  // SW
+            (0.0, outline_offset),              // S
+            (outline_offset, outline_offset),   // SE
+        ];
+
+        let content_clone = content.clone();
+
+        div()
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            // Shadow layers (rendered first, behind main text)
+            .children(offsets.iter().map(|(dx, dy)| {
+                div()
+                    .absolute()
+                    .left(px(*dx))
+                    .top(px(*dy))
+                    .text_color(outline_color)
+                    .text_size(px(font_size))
+                    .child(content.clone())
+            }))
+            // Main text on top
+            .child(
+                div()
+                    .text_color(text_color)
+                    .text_size(px(font_size))
+                    .child(content_clone)
+            )
     }
 
     /// Create a line element using paint_path with proper bounds adjustment
@@ -1777,14 +1830,14 @@ impl EditorView {
                 let (sx, sy) = self.scale_point(position.x, position.y);
                 let scaled_font_size = *font_size as f32 * scale;
 
-                div()
-                    .absolute()
-                    .left(px(sx))
-                    .top(px(sy))
-                    .text_color(border_color)
-                    .text_size(px(scaled_font_size))
-                    .child(content.clone())
-                    .into_any_element()
+                Self::render_text_with_outline(
+                    content.clone(),
+                    sx,
+                    sy,
+                    scaled_font_size,
+                    border_color.into(),
+                )
+                .into_any_element()
             }
             AnnotationType::Number { position, value, radius } => {
                 // Scale position and radius
@@ -2312,7 +2365,7 @@ impl EditorView {
 
         // Get scale for font sizing
         let (scale, _, _) = self.calculate_scale_and_offset();
-        let font_size = 16.0_f32;
+        let font_size = 32.0_f32;
         let scaled_font_size = font_size * scale;
 
         // Offset text up so it appears above the click point
@@ -2329,6 +2382,22 @@ impl EditorView {
         // Cursor color matches text
         let cursor_color = text_color;
 
+        // Outline settings for text readability
+        let outline_offset = (scaled_font_size * 0.08).max(1.5);
+        let outline_color = rgba(0x000000cc);
+        let offsets: [(f32, f32); 8] = [
+            (-outline_offset, -outline_offset),
+            (0.0, -outline_offset),
+            (outline_offset, -outline_offset),
+            (-outline_offset, 0.0),
+            (outline_offset, 0.0),
+            (-outline_offset, outline_offset),
+            (0.0, outline_offset),
+            (outline_offset, outline_offset),
+        ];
+
+        let content = input_state.content.clone();
+
         div()
             .absolute()
             .left(px(canvas_x))
@@ -2336,9 +2405,28 @@ impl EditorView {
             .flex()
             .flex_row()
             .items_center()
-            .text_color(text_color)
-            .text_size(px(scaled_font_size))
-            .child(input_state.content.clone())
+            // Container for text with outline
+            .child(
+                div()
+                    .relative()
+                    // Shadow layers
+                    .children(offsets.iter().map(|(dx, dy)| {
+                        div()
+                            .absolute()
+                            .left(px(*dx))
+                            .top(px(*dy))
+                            .text_color(outline_color)
+                            .text_size(px(scaled_font_size))
+                            .child(content.clone())
+                    }))
+                    // Main text
+                    .child(
+                        div()
+                            .text_color(text_color)
+                            .text_size(px(scaled_font_size))
+                            .child(content.clone())
+                    )
+            )
             .child(
                 // Blinking cursor - thin vertical bar after text
                 div()

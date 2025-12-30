@@ -1207,7 +1207,7 @@ mod text_tool_tests {
         // Backspace
         tool.handle_event(
             ToolEvent::KeyDown {
-                key: "Backspace".to_string(),
+                key: "backspace".to_string(),
                 key_char: None,
                 modifiers: no_modifiers(),
             },
@@ -1244,7 +1244,7 @@ mod text_tool_tests {
         // Confirm with Enter
         let result = tool.handle_event(
             ToolEvent::KeyDown {
-                key: "Enter".to_string(),
+                key: "enter".to_string(),
                 key_char: None,
                 modifiers: no_modifiers(),
             },
@@ -1283,7 +1283,7 @@ mod text_tool_tests {
         // Cancel with Escape
         let result = tool.handle_event(
             ToolEvent::KeyDown {
-                key: "Escape".to_string(),
+                key: "escape".to_string(),
                 key_char: None,
                 modifiers: no_modifiers(),
             },
@@ -1313,7 +1313,7 @@ mod text_tool_tests {
         // Confirm with Enter (no text)
         let result = tool.handle_event(
             ToolEvent::KeyDown {
-                key: "Enter".to_string(),
+                key: "enter".to_string(),
                 key_char: None,
                 modifiers: no_modifiers(),
             },

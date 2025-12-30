@@ -53,7 +53,7 @@ impl TextTool {
             let annotation = Annotation::new(AnnotationType::Text {
                 position,
                 content,
-                font_size: 16.0,
+                font_size: 32.0,
                 align: TextAlign::Left,
                 background: None,
                 max_width: None,
