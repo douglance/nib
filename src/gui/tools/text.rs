@@ -9,6 +9,9 @@ use super::{
     ToolResult,
 };
 
+/// Default font size for text annotations (in image pixels)
+pub const TEXT_FONT_SIZE: f64 = 32.0;
+
 /// Tool for creating text annotations
 pub struct TextTool {
     state: TextInputState,
@@ -27,7 +30,7 @@ impl TextTool {
     }
 
     /// Confirm the current text and create/update annotation
-    fn confirm_text(&mut self, ctx: &ToolContext) -> ToolResult {
+    pub fn confirm_text(&mut self, ctx: &ToolContext) -> ToolResult {
         if self.state.content.trim().is_empty() {
             self.state.reset();
             return ToolResult::ExitMode;
@@ -53,7 +56,7 @@ impl TextTool {
             let annotation = Annotation::new(AnnotationType::Text {
                 position,
                 content,
-                font_size: 32.0,
+                font_size: TEXT_FONT_SIZE,
                 align: TextAlign::Left,
                 background: None,
                 max_width: None,
