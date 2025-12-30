@@ -1377,7 +1377,7 @@ mod select_tool_tests {
     #[test]
     fn test_select_tool_initial_state() {
         let tool = SelectTool::new();
-        assert!(tool.selected().is_none());
+        assert!(tool.selected().is_empty());
         assert!(!tool.is_active());
     }
 
@@ -1396,7 +1396,7 @@ mod select_tool_tests {
         );
 
         assert!(matches!(result, ToolResult::Handled));
-        assert!(tool.selected().is_none());
+        assert!(tool.selected().is_empty());
     }
 
     #[test]
@@ -1421,11 +1421,13 @@ mod select_tool_tests {
         );
 
         assert!(matches!(result, ToolResult::Handled));
-        assert!(tool.selected().is_some());
+        assert!(!tool.selected().is_empty());
     }
 
     #[test]
-    fn test_select_tool_click_text_enters_edit_mode() {
+    fn test_select_tool_click_text_selects_without_edit_mode() {
+        // Single-click on text now just selects, doesn't enter edit mode
+        // (Edit mode will be triggered by double-click in Phase 6)
         let mut tool = SelectTool::new();
         let annotations = vec![Annotation::new(AnnotationType::Text {
             position: Point::new(100.0, 100.0),
@@ -1446,7 +1448,9 @@ mod select_tool_tests {
             &ctx,
         );
 
-        assert!(matches!(result, ToolResult::EnterMode(ToolMode::TextInput { .. })));
+        // Single-click should just select, not enter edit mode
+        assert!(matches!(result, ToolResult::Handled));
+        assert!(!tool.selected().is_empty());
     }
 
     #[test]
@@ -1470,11 +1474,101 @@ mod select_tool_tests {
             },
             &ctx,
         );
-        assert!(tool.selected().is_some());
+        assert!(!tool.selected().is_empty());
 
         // Reset
         tool.reset();
-        assert!(tool.selected().is_none());
+        assert!(tool.selected().is_empty());
+    }
+
+    #[test]
+    fn test_select_tool_double_click_text_enters_edit_mode() {
+        // Double-click on text annotation should enter edit mode (Phase 6)
+        let mut tool = SelectTool::new();
+        let annotations = vec![Annotation::new(AnnotationType::Text {
+            position: Point::new(100.0, 100.0),
+            content: "Hello World".to_string(),
+            font_size: 16.0,
+            align: crate::core::types::TextAlign::Left,
+            background: None,
+            max_width: None,
+        })];
+        let ctx = make_test_context_with_annotations(&annotations);
+
+        // First click - should select
+        let result1 = tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(120.0, 110.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        assert!(matches!(result1, ToolResult::Handled));
+        assert!(!tool.selected().is_empty());
+
+        // Second click immediately after (simulates double-click)
+        // The timing is handled internally by comparing with last_click_time
+        let result2 = tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(120.0, 110.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        // Should enter text edit mode
+        match result2 {
+            ToolResult::EnterMode(ToolMode::TextInput {
+                position,
+                initial_content,
+                editing_annotation_id,
+            }) => {
+                assert_eq!(position.x, 100.0);
+                assert_eq!(position.y, 100.0);
+                assert_eq!(initial_content, "Hello World");
+                assert!(editing_annotation_id.is_some());
+            }
+            _ => panic!("Expected EnterMode(TextInput), got {:?}", result2),
+        }
+    }
+
+    #[test]
+    fn test_select_tool_double_click_non_text_does_not_enter_edit_mode() {
+        // Double-click on non-text annotation should not enter edit mode
+        let mut tool = SelectTool::new();
+        let annotations = vec![Annotation::new(AnnotationType::Box {
+            region: Region::new(50.0, 50.0, 100.0, 100.0),
+            stroke_width: 2.0,
+            stroke_style: crate::core::types::StrokeStyle::Solid,
+            filled: false,
+            corner_radius: 0.0,
+        })];
+        let ctx = make_test_context_with_annotations(&annotations);
+
+        // First click
+        let _result1 = tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(100.0, 100.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        // Second click immediately (double-click)
+        let result2 = tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(100.0, 100.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        // Should NOT enter edit mode for non-text annotation
+        assert!(matches!(result2, ToolResult::Handled));
     }
 }
 

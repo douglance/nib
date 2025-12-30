@@ -772,11 +772,129 @@ impl EditorView {
                     self.process_tool_result(r, cx);
                 }
             }
+            ToolResult::Moved {
+                ids,
+                delta_x,
+                delta_y,
+            } => {
+                // Move all specified annotations by the delta
+                for id in ids {
+                    if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
+                        Self::move_annotation_type(&mut ann.annotation_type, delta_x, delta_y);
+                    }
+                }
+                self.save_annotations();
+                cx.notify();
+            }
+            ToolResult::Resized { id, new_bounds } => {
+                // Resize the specified annotation to new bounds
+                if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
+                    Self::resize_annotation_type(&mut ann.annotation_type, new_bounds);
+                    ann.touch();
+                }
+                self.save_annotations();
+                cx.notify();
+            }
             ToolResult::Handled => {
                 cx.notify();
             }
             ToolResult::Ignored => {
                 // Nothing to do
+            }
+        }
+    }
+
+    /// Resize an annotation type to new bounds
+    fn resize_annotation_type(annotation_type: &mut AnnotationType, new_bounds: Region) {
+        match annotation_type {
+            AnnotationType::Box { region, .. }
+            | AnnotationType::Blur { region, .. }
+            | AnnotationType::Highlight { region, .. }
+            | AnnotationType::Crop { region } => {
+                *region = new_bounds;
+            }
+            AnnotationType::Ellipse {
+                center,
+                radius_x,
+                radius_y,
+                ..
+            } => {
+                *center = new_bounds.center();
+                *radius_x = new_bounds.width / 2.0;
+                *radius_y = new_bounds.height / 2.0;
+            }
+            // For line-based types, map bounds corners to start/end
+            AnnotationType::Arrow { start, end, .. }
+            | AnnotationType::Line { start, end, .. } => {
+                *start = NibPoint::new(new_bounds.x, new_bounds.y);
+                *end = NibPoint::new(
+                    new_bounds.x + new_bounds.width,
+                    new_bounds.y + new_bounds.height,
+                );
+            }
+            // Text/Number: just update position (cannot resize content)
+            AnnotationType::Text { position, .. } | AnnotationType::Number { position, .. } => {
+                *position = NibPoint::new(new_bounds.x, new_bounds.y);
+            }
+        }
+    }
+
+    /// Move an annotation type by the given delta
+    fn move_annotation_type(annotation_type: &mut AnnotationType, delta_x: f64, delta_y: f64) {
+        match annotation_type {
+            AnnotationType::Arrow {
+                ref mut start,
+                ref mut end,
+                ..
+            } => {
+                start.x += delta_x;
+                start.y += delta_y;
+                end.x += delta_x;
+                end.y += delta_y;
+            }
+            AnnotationType::Box { ref mut region, .. } => {
+                region.x += delta_x;
+                region.y += delta_y;
+            }
+            AnnotationType::Text {
+                ref mut position, ..
+            } => {
+                position.x += delta_x;
+                position.y += delta_y;
+            }
+            AnnotationType::Number {
+                ref mut position, ..
+            } => {
+                position.x += delta_x;
+                position.y += delta_y;
+            }
+            AnnotationType::Blur { ref mut region, .. } => {
+                region.x += delta_x;
+                region.y += delta_y;
+            }
+            AnnotationType::Highlight { ref mut region, .. } => {
+                region.x += delta_x;
+                region.y += delta_y;
+            }
+            AnnotationType::Line {
+                ref mut start,
+                ref mut end,
+                ..
+            } => {
+                start.x += delta_x;
+                start.y += delta_y;
+                end.x += delta_x;
+                end.y += delta_y;
+            }
+            AnnotationType::Ellipse {
+                ref mut center, ..
+            } => {
+                center.x += delta_x;
+                center.y += delta_y;
+            }
+            AnnotationType::Crop { ref mut region } => {
+                region.x += delta_x;
+                region.y += delta_y;
             }
         }
     }
@@ -1450,6 +1568,73 @@ impl EditorView {
                         .into_any_element(),
                 )
             }
+            ToolPreview::Selection { bounds, handles } => {
+                // Render selection bounds with optional resize handles
+                if bounds.is_empty() {
+                    return None;
+                }
+
+                let selection_color = rgb(0x3b82f6); // Blue selection color
+                let handle_color = rgb(0xffffff); // White handles
+                let handle_size = 8.0_f32;
+
+                // For now, render only the first bound (single selection case)
+                // Multi-selection rendering can be enhanced later
+                let region = &bounds[0];
+                let (sx, sy, sw, sh) =
+                    self.scale_coords(region.x, region.y, region.width, region.height);
+
+                let mut container = div()
+                    .absolute()
+                    .left(px(sx))
+                    .top(px(sy))
+                    .w(px(sw))
+                    .h(px(sh))
+                    .border_1()
+                    .border_color(selection_color);
+
+                // Render resize handles if provided
+                if let Some(handle_positions) = handles {
+                    let mut handles_container = div().absolute().left(px(0.0)).top(px(0.0));
+
+                    for (point, _handle_type) in handle_positions {
+                        let (hx, hy) = self.scale_point(point.x, point.y);
+                        handles_container = handles_container.child(
+                            div()
+                                .absolute()
+                                .left(px(hx - handle_size / 2.0))
+                                .top(px(hy - handle_size / 2.0))
+                                .w(px(handle_size))
+                                .h(px(handle_size))
+                                .bg(handle_color)
+                                .border_1()
+                                .border_color(selection_color),
+                        );
+                    }
+
+                    container = container.child(handles_container);
+                }
+
+                Some(container.into_any_element())
+            }
+            ToolPreview::Marquee { region } => {
+                // Render marquee selection rectangle (dashed border effect)
+                let marquee_color = rgb(0x3b82f6); // Blue
+                let (sx, sy, sw, sh) =
+                    self.scale_coords(region.x, region.y, region.width, region.height);
+
+                Some(
+                    div()
+                        .absolute()
+                        .left(px(sx))
+                        .top(px(sy))
+                        .w(px(sw))
+                        .h(px(sh))
+                        .border_1()
+                        .border_color(marquee_color)
+                        .into_any_element(),
+                )
+            }
         }
     }
 
@@ -1581,18 +1766,21 @@ impl EditorView {
 
     /// Handle keyboard input
     fn handle_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
-        // Only handle if we're in text input mode
-        if self.text_input_state.is_none() {
-            return;
-        }
-
         let keystroke = &event.keystroke;
+
+        // Extract modifier keys from the keystroke
+        let modifiers = Modifiers {
+            shift: keystroke.modifiers.shift,
+            ctrl: keystroke.modifiers.control,
+            alt: keystroke.modifiers.alt,
+            cmd: keystroke.modifiers.platform,
+        };
 
         // Build ToolEvent::KeyDown
         let tool_event = ToolEvent::KeyDown {
             key: keystroke.key.clone(),
             key_char: keystroke.key_char.as_ref().and_then(|s| s.chars().next()),
-            modifiers: Modifiers::default(),
+            modifiers,
         };
 
         // Dispatch to tool manager

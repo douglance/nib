@@ -115,6 +115,19 @@ pub enum ToolResult {
 
     /// Tool produced multiple results (batch operations)
     Batch(Vec<ToolResult>),
+
+    /// Tool moved annotations by delta
+    Moved {
+        ids: Vec<AnnotationId>,
+        delta_x: f64,
+        delta_y: f64,
+    },
+
+    /// Tool resized an annotation
+    Resized {
+        id: AnnotationId,
+        new_bounds: Region,
+    },
 }
 
 /// Special modes tools can request
@@ -144,4 +157,13 @@ pub enum ToolPreview {
         radius_y: f64,
         color: Color,
     },
+    /// Selection bounds with optional resize handles
+    Selection {
+        /// Bounding regions of selected annotations
+        bounds: Vec<Region>,
+        /// Handle positions (point in image coords and handle type)
+        handles: Option<Vec<(Point, HandlePosition)>>,
+    },
+    /// Marquee selection rectangle (for drag-to-select)
+    Marquee { region: Region },
 }

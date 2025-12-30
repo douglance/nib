@@ -120,6 +120,14 @@ impl Region {
             height: self.height + padding * 2.0,
         }
     }
+
+    /// Check if this region intersects with another region
+    pub fn intersects(&self, other: &Region) -> bool {
+        !(self.x + self.width < other.x
+            || other.x + other.width < self.x
+            || self.y + self.height < other.y
+            || other.y + other.height < self.y)
+    }
 }
 
 /// Severity level for annotations (affects default color)
