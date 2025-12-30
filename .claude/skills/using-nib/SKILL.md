@@ -227,14 +227,80 @@ Returns metadata with origin and spacing for calculating pixel coordinates:
 - `spacing`: Pixels between lines
 - Formula: `pixel = origin + (index * spacing)`
 
+## Real-Time Visual Collaboration
+
+When you need human input, launch the GUI with event streaming enabled:
+
+```bash
+# Launch GUI with real-time events
+NIB_EVENTS=1 nib gui /tmp/question.png
+```
+
+### Event Format (Progressive Disclosure)
+
+Events are minimal notifications - just enough to know what changed:
+
+```
+[NIB] human created a4 arrow
+[NIB] human deleted a2 text
+[NIB] human moved a3 rectangle, a5 ellipse
+[NIB] human resized a1 highlight
+```
+
+Format: `[NIB] human <action> <id> <type>`
+
+### Query for Details
+
+When an event interests you, query for full annotation data:
+
+```bash
+# Get specific annotation details
+nib annotations /tmp/question.png --id a4
+
+# Get all annotations
+nib annotations /tmp/question.png --json
+```
+
+### Collaboration Workflow
+
+```bash
+# 1. Capture and ask a question (blue = Claude)
+nib capture -o /tmp/q.png
+nib add-annotation /tmp/q.png -t text -x 100 -y 50 \
+  --text "Which button should I click?" -c "#0000ff"
+
+# 2. Launch GUI with events (human responds in red)
+NIB_EVENTS=1 nib gui /tmp/q.png &
+
+# 3. Watch for human response
+# Output: [NIB] human created a2 arrow
+# Output: [NIB] human created a3 text
+
+# 4. Query what they drew
+nib annotations /tmp/q.png --json
+```
+
+### Color Convention
+
+| Actor | Color | Hex |
+|-------|-------|-----|
+| Claude | Blue | `#0000ff` |
+| Human | Red | `#dc2626` |
+
+**Use this workflow when:**
+- You need to confirm which UI element to target
+- Coordinates from OCR seem ambiguous
+- You need the human to point at something
+- Complex visual decisions require human judgment
+
 ## Tips
 
-1. **Use grid for precision** - Overlay grid to find exact coordinates visually
-2. **Use find-text first** - Get exact coordinates before adding annotations
-3. **Add padding** - Expand bounding boxes by 5-10px for better visibility
-4. **Check with render** - Always render to verify placement
-5. **Use --json** - For scripting or when you need exact values
-6. **Two-pass grid workflow** - Coarse grid (100px) to find region, fine grid (10px) for precision
+1. **Use find-text first** - Get exact coordinates before adding annotations
+2. **Add padding** - Expand bounding boxes by 5-10px for better visibility
+3. **Check with render** - Always render to verify placement
+4. **Use --json** - For scripting or when you need exact values
+5. **Use grid for precision** - Overlay grid when OCR doesn't find the target
+6. **Suggest GUI for complex edits** - Human can fine-tune visually
 7. **Color conventions**:
    - `#ff0000` red = errors, warnings
    - `#00ff00` green = success, correct
