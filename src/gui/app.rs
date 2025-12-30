@@ -7,7 +7,7 @@ use gpui::{
     Bounds, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Point,
     Render, Result as GpuiResult, SharedString, Size, StatefulInteractiveElement, Styled,
-    StyledImage, Window, WindowBounds, WindowOptions,
+    StyledImage, Window, WindowBounds, WindowKind, WindowOptions,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -373,6 +373,7 @@ impl NibApp {
                         origin: Point::default(),
                         size: window_size,
                     })),
+                    kind: WindowKind::PopUp,
                     ..Default::default()
                 };
 
