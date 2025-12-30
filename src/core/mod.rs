@@ -3,6 +3,7 @@
 //! This module contains the fundamental types and pure business logic
 //! with no I/O dependencies.
 
+pub mod blur;
 pub mod errors;
 pub mod operations;
 pub mod qml;

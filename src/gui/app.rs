@@ -40,6 +40,7 @@ impl AssetSource for Assets {
     }
 }
 
+use crate::core::blur::apply_blur_region;
 use crate::core::types::{Annotation, AnnotationId, AnnotationType, Color, Region};
 use crate::core::types::Point as NibPoint;
 use crate::gui::toolbar::Tool;
@@ -430,6 +431,10 @@ pub struct EditorView {
     nib_path: Option<PathBuf>,
     /// Last annotation modification timestamp in .nib file (for file watching)
     last_nib_modified: Option<i64>,
+    /// Cached path to blur-processed image (temp file with blur regions applied)
+    blur_preview_path: Option<PathBuf>,
+    /// Hash of blur annotation state to detect when regeneration is needed
+    blur_annotations_hash: u64,
 }
 
 impl EditorView {
@@ -522,9 +527,13 @@ impl EditorView {
             nib_file,
             nib_path,
             last_nib_modified: None,
+            blur_preview_path: None,
+            blur_annotations_hash: 0,
         };
         // Load existing annotations if available
         view.load_annotations();
+        // Generate blur preview if there are blur annotations
+        view.regenerate_blur_preview_if_needed();
         // Record initial modification time
         view.update_sidecar_modified_time();
         // For .nib files, also record the annotation modification timestamp
@@ -1016,6 +1025,96 @@ impl EditorView {
                 tracing::warn!("Failed to serialize annotations: {}", e);
             }
         }
+
+        // Regenerate blur preview if blur annotations changed
+        self.regenerate_blur_preview_if_needed();
+    }
+
+    /// Compute a hash of blur annotation state to detect changes
+    fn compute_blur_hash(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let mut hasher = DefaultHasher::new();
+        for annotation in &self.annotations {
+            if let AnnotationType::Blur { region, intensity } = &annotation.annotation_type {
+                // Hash the blur region parameters
+                region.x.to_bits().hash(&mut hasher);
+                region.y.to_bits().hash(&mut hasher);
+                region.width.to_bits().hash(&mut hasher);
+                region.height.to_bits().hash(&mut hasher);
+                intensity.radius().hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+
+    /// Regenerate the blur preview image if blur annotations have changed
+    fn regenerate_blur_preview_if_needed(&mut self) {
+        let new_hash = self.compute_blur_hash();
+
+        // Check if blur annotations changed
+        if new_hash == self.blur_annotations_hash {
+            return;
+        }
+        self.blur_annotations_hash = new_hash;
+
+        // If no blur annotations, clear the preview
+        let blur_regions: Vec<_> = self.annotations.iter()
+            .filter_map(|a| {
+                if let AnnotationType::Blur { region, intensity } = &a.annotation_type {
+                    Some((region.clone(), intensity.radius()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if blur_regions.is_empty() {
+            // Clean up old preview file
+            if let Some(ref path) = self.blur_preview_path {
+                let _ = std::fs::remove_file(path);
+            }
+            self.blur_preview_path = None;
+            return;
+        }
+
+        // Load and process the original image
+        let Some(ref image_path) = self.file_path else {
+            return;
+        };
+
+        let img = match image::open(image_path) {
+            Ok(img) => img.to_rgba8(),
+            Err(e) => {
+                tracing::warn!("Failed to load image for blur preview: {}", e);
+                return;
+            }
+        };
+
+        // Apply blur regions
+        let mut processed = img;
+        for (region, radius) in &blur_regions {
+            apply_blur_region(&mut processed, region, *radius);
+        }
+
+        // Save to temp file
+        let temp_dir = std::env::temp_dir();
+        let temp_filename = format!(
+            "nib_blur_preview_{}.png",
+            std::process::id()
+        );
+        let temp_path = temp_dir.join(temp_filename);
+
+        match processed.save(&temp_path) {
+            Ok(()) => {
+                tracing::debug!("Generated blur preview at {:?}", temp_path);
+                self.blur_preview_path = Some(temp_path);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to save blur preview: {}", e);
+            }
+        }
     }
 
     /// Load annotations from a sidecar JSON file or .nib file
@@ -1287,7 +1386,7 @@ impl EditorView {
                 div()
                     .flex()
                     .flex_row()
-                    .h(px(72.))
+                    .h(px(64.))
                     .bg(rgba(0x2d2d2dee)) // Semi-transparent background
                     .rounded_xl()
                     .border_1()
@@ -1306,7 +1405,7 @@ impl EditorView {
                     .items_center()
                     .justify_center()
                     .w(px(56.))
-                    .h(px(64.))
+                    .h(px(56.))
                     .gap_1()
                     .rounded_md()
                     .cursor_pointer()
@@ -1465,14 +1564,13 @@ impl EditorView {
                 // Scale coordinates
                 let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
 
-                // Blur is represented as a dark semi-transparent overlay
+                // Blur is rendered in the preview image, no overlay needed
                 div()
                     .absolute()
                     .left(px(sx))
                     .top(px(sy))
                     .w(px(sw))
                     .h(px(sh))
-                    .bg(rgba(0x00000080))
                     .into_any_element()
             }
             AnnotationType::Crop { region } => {
@@ -1666,6 +1764,9 @@ impl EditorView {
             let scaled_width = self.image_width as f32 * scale;
             let scaled_height = self.image_height as f32 * scale;
 
+            // Use blur preview if available, otherwise original image
+            let display_path = self.blur_preview_path.as_ref().unwrap_or(path);
+
             canvas = canvas.child(
                 div()
                     .absolute()
@@ -1674,7 +1775,7 @@ impl EditorView {
                     .w(px(scaled_width))
                     .h(px(scaled_height))
                     .child(
-                        img(path.clone())
+                        img(display_path.clone())
                             .size_full()
                             .with_fallback(move || {
                                 div()

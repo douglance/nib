@@ -3,6 +3,7 @@
 //! Renders annotations onto the image and exports as PNG/JPEG/WebP.
 
 use super::StorageResult;
+use crate::core::blur::apply_blur_region;
 use crate::core::{Annotation, AnnotationType, Color, NibImage, Region, StorageError};
 use image::{DynamicImage, Rgba, RgbaImage};
 use imageproc::drawing::{
@@ -301,85 +302,6 @@ fn draw_arrow(
     }
 }
 
-fn apply_blur_region(img: &mut RgbaImage, region: &Region, radius: u32) {
-    if radius == 0 {
-        // Pixelate mode
-        pixelate_region(img, region, 12);
-        return;
-    }
-
-    // Extract region
-    let x = region.x.max(0.0) as u32;
-    let y = region.y.max(0.0) as u32;
-    let w = (region.width as u32).min(img.width().saturating_sub(x));
-    let h = (region.height as u32).min(img.height().saturating_sub(y));
-
-    if w == 0 || h == 0 {
-        return;
-    }
-
-    // Extract, blur, and put back
-    let sub = image::imageops::crop_imm(img, x, y, w, h).to_image();
-    let blurred = image::imageops::blur(&sub, radius as f32);
-
-    for (dx, dy, pixel) in blurred.enumerate_pixels() {
-        if x + dx < img.width() && y + dy < img.height() {
-            img.put_pixel(x + dx, y + dy, *pixel);
-        }
-    }
-}
-
-fn pixelate_region(img: &mut RgbaImage, region: &Region, block_size: u32) {
-    let x = region.x.max(0.0) as u32;
-    let y = region.y.max(0.0) as u32;
-    let w = (region.width as u32).min(img.width().saturating_sub(x));
-    let h = (region.height as u32).min(img.height().saturating_sub(y));
-
-    // Process in blocks
-    for by in (0..h).step_by(block_size as usize) {
-        for bx in (0..w).step_by(block_size as usize) {
-            // Get average color of block
-            let mut r_sum: u32 = 0;
-            let mut g_sum: u32 = 0;
-            let mut b_sum: u32 = 0;
-            let mut count: u32 = 0;
-
-            for dy in 0..block_size.min(h - by) {
-                for dx in 0..block_size.min(w - bx) {
-                    let px = x + bx + dx;
-                    let py = y + by + dy;
-                    if px < img.width() && py < img.height() {
-                        let pixel = img.get_pixel(px, py);
-                        r_sum += pixel.0[0] as u32;
-                        g_sum += pixel.0[1] as u32;
-                        b_sum += pixel.0[2] as u32;
-                        count += 1;
-                    }
-                }
-            }
-
-            if count > 0 {
-                let avg = Rgba([
-                    (r_sum / count) as u8,
-                    (g_sum / count) as u8,
-                    (b_sum / count) as u8,
-                    255,
-                ]);
-
-                // Fill block with average
-                for dy in 0..block_size.min(h - by) {
-                    for dx in 0..block_size.min(w - bx) {
-                        let px = x + bx + dx;
-                        let py = y + by + dy;
-                        if px < img.width() && py < img.height() {
-                            img.put_pixel(px, py, avg);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 fn draw_circle_outline(img: &mut RgbaImage, cx: f64, cy: f64, radius: f64, color: Rgba<u8>) {
     let steps = (radius * 4.0) as i32;
