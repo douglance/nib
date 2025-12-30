@@ -6,8 +6,8 @@ use gpui::{
     canvas, div, img, point, px, rgb, rgba, size, svg, App, AppContext, Application, AssetSource,
     Bounds, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Point,
-    Render, Result as GpuiResult, SharedString, Size, StatefulInteractiveElement, Styled,
-    StyledImage, Window, WindowBounds, WindowKind, WindowOptions,
+    Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size,
+    StatefulInteractiveElement, Styled, StyledImage, Window, WindowBounds, WindowKind, WindowOptions,
 };
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -43,6 +43,7 @@ impl AssetSource for Assets {
 use crate::core::blur::apply_blur_region;
 use crate::core::types::{Annotation, AnnotationId, AnnotationType, Color, Region};
 use crate::core::types::Point as NibPoint;
+use crate::gui::canvas::{Canvas, ZOOM_FACTOR};
 use crate::gui::toolbar::Tool;
 use crate::gui::tools::{
     Modifiers, MouseButton as ToolMouseButton, TextTool, ToolContext, ToolEvent, ToolId,
@@ -414,6 +415,8 @@ pub struct EditorView {
     canvas_width: f32,
     /// Canvas display height (estimated)
     canvas_height: f32,
+    /// Canvas state for zoom/pan (Figma-like mechanics)
+    canvas: Canvas,
     /// Focus handle for keyboard input
     focus_handle: FocusHandle,
     /// Text input state for creating/editing text annotations
@@ -426,7 +429,7 @@ pub struct EditorView {
     /// NibFile handle for .nib format (SQLite-based storage)
     nib_file: Option<NibFile>,
     /// Original .nib file path (file_path points to extracted temp image for rendering)
-    /// Kept for future use (e.g., window title, status bar display)
+    /// Kept for future use (e.g., window title display)
     #[allow(dead_code)]
     nib_path: Option<PathBuf>,
     /// Last annotation modification timestamp in .nib file (for file watching)
@@ -504,12 +507,16 @@ impl EditorView {
             (file_path.clone(), None, None, width, height)
         };
 
-        // Estimate canvas size (window 1200x800 minus toolbar ~44px and statusbar ~22px)
+        // Estimate canvas size (window 1200x800 minus toolbar ~44px)
         let canvas_width = 1200.0_f32;
-        let canvas_height = 734.0_f32; // 800 - 44 - 22
+        let canvas_height = 756.0_f32; // 800 - 44
 
         // Create focus handle for keyboard input
         let focus_handle = cx.focus_handle();
+
+        // Create canvas with image dimensions
+        let mut canvas = Canvas::new(image_width, image_height);
+        canvas.set_viewport(canvas_width as f64, canvas_height as f64);
 
         let mut view = Self {
             file_path: actual_file_path,
@@ -521,6 +528,7 @@ impl EditorView {
             image_height,
             canvas_width,
             canvas_height,
+            canvas,
             focus_handle,
             text_input_state: None,
             tool_manager: ToolManager::with_all_tools(),
@@ -563,18 +571,10 @@ impl EditorView {
     }
 
     /// Calculate the scale factor and offset for rendering annotations
-    /// Returns (scale, offset_x, offset_y) where scale is uniform and offsets center the image
+    /// Returns (scale, offset_x, offset_y) from the Canvas zoom/pan state
     fn calculate_scale_and_offset(&self) -> (f32, f32, f32) {
-        let scale_x = self.canvas_width / self.image_width as f32;
-        let scale_y = self.canvas_height / self.image_height as f32;
-        let scale = scale_x.min(scale_y);
-
-        // Calculate offset to center the image
-        let scaled_img_width = self.image_width as f32 * scale;
-        let scaled_img_height = self.image_height as f32 * scale;
-        let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
-        let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
-
+        let scale = self.canvas.scale();
+        let (offset_x, offset_y) = self.canvas.offset_tuple();
         (scale, offset_x, offset_y)
     }
 
@@ -701,15 +701,9 @@ impl EditorView {
     /// Convert window coordinates to image coordinates for annotation creation
     /// Mouse events are window-relative, so we subtract toolbar height first
     fn screen_to_image_coords(&self, window_x: f32, window_y: f32) -> (f64, f64) {
-        let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
-
         // Window coords -> canvas coords (subtract toolbar)
         let canvas_y = window_y - TOOLBAR_HEIGHT;
-
-        let image_x = (window_x - offset_x) / scale;
-        let image_y = (canvas_y - offset_y) / scale;
-
-        (image_x as f64, image_y as f64)
+        self.canvas.screen_to_image(window_x, canvas_y)
     }
 
     /// Build a ToolContext for tool event handling
@@ -1171,23 +1165,15 @@ impl EditorView {
         // - Activating the new tool
         // We inline context building to enable split borrows (annotations vs tool_manager)
         let deactivation_result = {
-            let (scale, offset_x, offset_y) = {
-                let scale_x = self.canvas_width / self.image_width as f32;
-                let scale_y = self.canvas_height / self.image_height as f32;
-                let scale = scale_x.min(scale_y);
-                let scaled_img_width = self.image_width as f32 * scale;
-                let scaled_img_height = self.image_height as f32 * scale;
-                let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
-                let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
-                (scale, offset_x, offset_y)
-            };
+            let scale = self.canvas.scale();
+            let offset = self.canvas.offset_tuple();
             let ctx = ToolContext {
                 color: self.current_color,
                 stroke_width: 2.0,
                 fill_enabled: false,
                 image_size: (self.image_width, self.image_height),
                 scale,
-                offset: (offset_x, offset_y),
+                offset,
                 annotations: &self.annotations,
                 min_drag_distance: 5.0,
             };
@@ -1237,23 +1223,15 @@ impl EditorView {
         // Dispatch to tool manager
         // We inline context building to enable split borrows (annotations vs tool_manager)
         let result = {
-            let (scale, offset_x, offset_y) = {
-                let scale_x = self.canvas_width / self.image_width as f32;
-                let scale_y = self.canvas_height / self.image_height as f32;
-                let scale = scale_x.min(scale_y);
-                let scaled_img_width = self.image_width as f32 * scale;
-                let scaled_img_height = self.image_height as f32 * scale;
-                let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
-                let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
-                (scale, offset_x, offset_y)
-            };
+            let scale = self.canvas.scale();
+            let offset = self.canvas.offset_tuple();
             let ctx = ToolContext {
                 color: self.current_color,
                 stroke_width: 2.0,
                 fill_enabled: false,
                 image_size: (self.image_width, self.image_height),
                 scale,
-                offset: (offset_x, offset_y),
+                offset,
                 annotations: &self.annotations,
                 min_drag_distance: 5.0,
             };
@@ -1279,23 +1257,15 @@ impl EditorView {
         // Dispatch to tool manager
         // We inline context building to enable split borrows (annotations vs tool_manager)
         let result = {
-            let (scale, offset_x, offset_y) = {
-                let scale_x = self.canvas_width / self.image_width as f32;
-                let scale_y = self.canvas_height / self.image_height as f32;
-                let scale = scale_x.min(scale_y);
-                let scaled_img_width = self.image_width as f32 * scale;
-                let scaled_img_height = self.image_height as f32 * scale;
-                let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
-                let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
-                (scale, offset_x, offset_y)
-            };
+            let scale = self.canvas.scale();
+            let offset = self.canvas.offset_tuple();
             let ctx = ToolContext {
                 color: self.current_color,
                 stroke_width: 2.0,
                 fill_enabled: false,
                 image_size: (self.image_width, self.image_height),
                 scale,
-                offset: (offset_x, offset_y),
+                offset,
                 annotations: &self.annotations,
                 min_drag_distance: 5.0,
             };
@@ -1329,29 +1299,53 @@ impl EditorView {
         // Dispatch to tool manager
         // We inline context building to enable split borrows (annotations vs tool_manager)
         let result = {
-            let (scale, offset_x, offset_y) = {
-                let scale_x = self.canvas_width / self.image_width as f32;
-                let scale_y = self.canvas_height / self.image_height as f32;
-                let scale = scale_x.min(scale_y);
-                let scaled_img_width = self.image_width as f32 * scale;
-                let scaled_img_height = self.image_height as f32 * scale;
-                let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
-                let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
-                (scale, offset_x, offset_y)
-            };
+            let scale = self.canvas.scale();
+            let offset = self.canvas.offset_tuple();
             let ctx = ToolContext {
                 color: self.current_color,
                 stroke_width: 2.0,
                 fill_enabled: false,
                 image_size: (self.image_width, self.image_height),
                 scale,
-                offset: (offset_x, offset_y),
+                offset,
                 annotations: &self.annotations,
                 min_drag_distance: 5.0,
             };
             self.tool_manager.handle_event(tool_event, &ctx)
         };
         self.process_tool_result(result, cx);
+    }
+
+    /// Handle scroll wheel event for zoom (Figma-like: Cmd/Ctrl+scroll = zoom to cursor)
+    fn handle_scroll_wheel(&mut self, event: &ScrollWheelEvent, cx: &mut Context<Self>) {
+        let position = event.position;
+        let screen_x: f32 = position.x.into();
+        let screen_y: f32 = position.y.into();
+
+        // Get scroll delta - convert to pixels if needed
+        let delta = event.delta.pixel_delta(px(20.0));
+        let delta_y: f32 = delta.y.into();
+
+        // Cmd/Ctrl + scroll = zoom, otherwise pan
+        if event.modifiers.secondary() {
+            // Zoom mode: zoom in/out centered on cursor
+            // Positive delta_y = scroll up = zoom in
+            let zoom_factor = if delta_y > 0.0 {
+                ZOOM_FACTOR
+            } else if delta_y < 0.0 {
+                1.0 / ZOOM_FACTOR
+            } else {
+                return;
+            };
+
+            self.canvas.zoom_at(screen_x, screen_y, zoom_factor);
+            cx.notify();
+        } else {
+            // Pan mode: scroll to pan the canvas
+            let delta_x: f32 = delta.x.into();
+            self.canvas.pan(delta_x as f64, delta_y as f64);
+            cx.notify();
+        }
     }
 
     /// Render the toolbar
@@ -1756,6 +1750,9 @@ impl EditorView {
             }))
             .on_mouse_up(MouseButton::Left, cx.listener(|this, event, _window, cx| {
                 this.handle_mouse_up(event, cx);
+            }))
+            .on_scroll_wheel(cx.listener(|this, event, _window, cx| {
+                this.handle_scroll_wheel(event, cx);
             }));
 
         // Add image if we have one - use explicit positioning to match annotation coordinates
@@ -1834,41 +1831,42 @@ impl EditorView {
         canvas
     }
 
-    /// Render the status bar at the bottom
-    fn render_status_bar(&self) -> impl IntoElement {
-        let status_bg = rgb(0x007acc);
-        let text_color = rgb(0xffffff);
-
-        let status_text = if self.text_input_state.is_some() {
-            "Typing text... (Enter to confirm, Escape to cancel)".to_string()
-        } else {
-            let is_drawing = !matches!(
-                self.tool_manager.preview(&self.build_tool_context()),
-                ToolPreview::None
-            );
-            format!(
-                "Tool: {} | Annotations: {} | {}",
-                self.active_tool.name(),
-                self.annotations.len(),
-                if is_drawing { "Drawing..." } else { "Ready" }
-            )
-        };
-
-        div()
-            .flex()
-            .w_full()
-            .h(px(22.))
-            .bg(status_bg)
-            .px_2()
-            .items_center()
-            .text_color(text_color)
-            .text_xs()
-            .child(status_text)
-    }
-
     /// Handle keyboard input
     fn handle_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
+
+        // Handle zoom keyboard shortcuts (Cmd/Ctrl + key)
+        // Skip if in text input mode
+        if keystroke.modifiers.platform && self.text_input_state.is_none() {
+            let key = keystroke.key.as_str();
+            match key {
+                // Cmd/Ctrl + Plus or Cmd/Ctrl + = : Zoom in
+                "+" | "=" => {
+                    self.canvas.zoom_center(ZOOM_FACTOR);
+                    cx.notify();
+                    return;
+                }
+                // Cmd/Ctrl + Minus : Zoom out
+                "-" => {
+                    self.canvas.zoom_center(1.0 / ZOOM_FACTOR);
+                    cx.notify();
+                    return;
+                }
+                // Cmd/Ctrl + 0 : Fit to view
+                "0" => {
+                    self.canvas.fit_to_view();
+                    cx.notify();
+                    return;
+                }
+                // Cmd/Ctrl + 1 : 100% zoom
+                "1" => {
+                    self.canvas.reset_zoom();
+                    cx.notify();
+                    return;
+                }
+                _ => {}
+            }
+        }
 
         // Check for tool shortcuts (single letter, no modifiers, not in text input mode)
         if !keystroke.modifiers.shift
@@ -1905,23 +1903,15 @@ impl EditorView {
         // Dispatch to tool manager
         // We inline context building to enable split borrows (annotations vs tool_manager)
         let result = {
-            let (scale, offset_x, offset_y) = {
-                let scale_x = self.canvas_width / self.image_width as f32;
-                let scale_y = self.canvas_height / self.image_height as f32;
-                let scale = scale_x.min(scale_y);
-                let scaled_img_width = self.image_width as f32 * scale;
-                let scaled_img_height = self.image_height as f32 * scale;
-                let offset_x = (self.canvas_width - scaled_img_width) / 2.0;
-                let offset_y = (self.canvas_height - scaled_img_height) / 2.0;
-                (scale, offset_x, offset_y)
-            };
+            let scale = self.canvas.scale();
+            let offset = self.canvas.offset_tuple();
             let ctx = ToolContext {
                 color: self.current_color,
                 stroke_width: 2.0,
                 fill_enabled: false,
                 image_size: (self.image_width, self.image_height),
                 scale,
-                offset: (offset_x, offset_y),
+                offset,
                 annotations: &self.annotations,
                 min_drag_distance: 5.0,
             };
@@ -2049,6 +2039,9 @@ impl Render for EditorView {
         let viewport_height: f32 = viewport.height.into();
         self.canvas_width = viewport_width;
         self.canvas_height = viewport_height; // Toolbar floats inside canvas
+
+        // Sync canvas viewport (handles resize and initial fit-to-view)
+        self.canvas.set_viewport(viewport_width as f64, viewport_height as f64);
 
         // Check if sidecar file has changed and reload annotations if needed
         self.check_and_reload_annotations();
