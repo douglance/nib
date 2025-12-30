@@ -58,7 +58,7 @@ impl TextTool {
                 background: None,
                 max_width: None,
             })
-            .with_color(ctx.color);
+            .with_color(ctx.effective_color());
 
             ToolResult::Batch(vec![ToolResult::Created(annotation), ToolResult::ExitMode])
         }

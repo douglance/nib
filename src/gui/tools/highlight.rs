@@ -83,7 +83,7 @@ impl Tool for HighlightTool {
                         region,
                         corner_radius: 0.0,
                     })
-                    .with_color(ctx.color);
+                    .with_color(ctx.effective_color());
 
                     return ToolResult::Created(annotation);
                 }
@@ -101,7 +101,7 @@ impl Tool for HighlightTool {
         if let (Some(start), Some(current)) = (self.drag.start, self.drag.current) {
             ToolPreview::Rectangle {
                 region: Region::from_points(start, current),
-                color: ctx.color,
+                color: ctx.effective_color(),
             }
         } else {
             ToolPreview::None

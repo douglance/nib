@@ -177,6 +177,12 @@ pub fn annotation_to_sidecar(annotation: &Annotation) -> SerializedAnnotation {
                 height: region.height,
             },
         ),
+        AnnotationType::Path { points, .. } => (
+            "path".to_string(),
+            AnnotationGeometry::Path {
+                points: points.iter().map(|p| (p.x, p.y)).collect(),
+            },
+        ),
     };
 
     SerializedAnnotation {

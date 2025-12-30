@@ -150,6 +150,21 @@ pub fn annotation_to_data(annotation: &Annotation) -> AnnotationData {
             width: region.width,
             height: region.height,
         },
+
+        AnnotationType::Path {
+            points,
+            stroke_width,
+            stroke_style,
+        } => AnnotationTypeData::Path {
+            points: points.iter().map(|p| (p.x, p.y)).collect(),
+            stroke_width: *stroke_width,
+            stroke_style: match stroke_style {
+                StrokeStyle::Solid => "solid",
+                StrokeStyle::Dashed => "dashed",
+                StrokeStyle::Dotted => "dotted",
+            }
+            .to_string(),
+        },
     };
 
     AnnotationData {
@@ -304,6 +319,20 @@ pub fn data_to_annotation(id: u64, data: &AnnotationData) -> Annotation {
         } => AnnotationType::Crop {
             region: Region::new(*x, *y, *width, *height),
         },
+
+        AnnotationTypeData::Path {
+            points,
+            stroke_width,
+            stroke_style,
+        } => AnnotationType::Path {
+            points: points.iter().map(|(x, y)| Point::new(*x, *y)).collect(),
+            stroke_width: *stroke_width,
+            stroke_style: match stroke_style.as_str() {
+                "dashed" => StrokeStyle::Dashed,
+                "dotted" => StrokeStyle::Dotted,
+                _ => StrokeStyle::Solid,
+            },
+        },
     };
 
     let severity = match data.severity.as_str() {
@@ -444,6 +473,12 @@ fn move_annotation(annotation_type: &mut AnnotationType, delta_x: f64, delta_y: 
         AnnotationType::Ellipse { center, .. } => {
             center.x += delta_x;
             center.y += delta_y;
+        }
+        AnnotationType::Path { points, .. } => {
+            for point in points.iter_mut() {
+                point.x += delta_x;
+                point.y += delta_y;
+            }
         }
     }
 }

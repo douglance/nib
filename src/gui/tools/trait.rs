@@ -17,6 +17,7 @@ pub enum ToolId {
     Highlight,
     Line,
     Crop,
+    Pencil,
 }
 
 impl ToolId {
@@ -33,6 +34,7 @@ impl ToolId {
             ToolId::Highlight,
             ToolId::Line,
             ToolId::Crop,
+            ToolId::Pencil,
         ]
     }
 
@@ -49,6 +51,7 @@ impl ToolId {
             ToolId::Highlight => "Highlight",
             ToolId::Line => "Line",
             ToolId::Crop => "Crop",
+            ToolId::Pencil => "Pencil",
         }
     }
 
@@ -65,6 +68,7 @@ impl ToolId {
             ToolId::Highlight => 'h',
             ToolId::Line => 'l',
             ToolId::Crop => 'c',
+            ToolId::Pencil => 'p',
         }
     }
 
@@ -81,6 +85,7 @@ impl ToolId {
             ToolId::Highlight => "assets/icons/highlight.svg",
             ToolId::Line => "assets/icons/line.svg",
             ToolId::Crop => "assets/icons/crop.svg",
+            ToolId::Pencil => "assets/icons/pencil.svg",
         }
     }
 }

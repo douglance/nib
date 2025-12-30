@@ -1,0 +1,11 @@
+# Clippy configuration for nib
+# See: https://doc.rust-lang.org/clippy/lint_configuration.html
+
+# Maximum cognitive complexity per function (default: 25)
+cognitive-complexity-threshold = 15
+
+# Maximum lines per function (default: 100)
+too-many-lines-threshold = 40
+
+# Maximum function arguments (default: 7)
+too-many-arguments-threshold = 6

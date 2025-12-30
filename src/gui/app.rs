@@ -41,7 +41,7 @@ impl AssetSource for Assets {
 }
 
 use crate::core::blur::apply_blur_region;
-use crate::core::types::{Annotation, AnnotationId, AnnotationType, Color, Region};
+use crate::core::types::{Annotation, AnnotationId, AnnotationStyle, AnnotationType, Color, Region};
 use crate::core::types::Point as NibPoint;
 use crate::gui::canvas::{Canvas, ZOOM_FACTOR};
 use crate::gui::toolbar::Tool;
@@ -98,6 +98,9 @@ pub enum AnnotationGeometry {
         value: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         content: Option<String>,
+    },
+    Path {
+        points: Vec<(f64, f64)>,
     },
 }
 
@@ -220,6 +223,12 @@ fn serialize_annotation(annotation: &Annotation) -> SerializedAnnotation {
                 y: region.y,
                 width: region.width,
                 height: region.height,
+            },
+        ),
+        AnnotationType::Path { points, .. } => (
+            "path".to_string(),
+            AnnotationGeometry::Path {
+                points: points.iter().map(|p| (p.x, p.y)).collect(),
             },
         ),
     };
@@ -403,8 +412,10 @@ pub struct EditorView {
     annotations: Vec<Annotation>,
     /// Currently selected tool
     active_tool: Tool,
-    /// Current drawing color
-    current_color: Color,
+    /// Current annotation style (semantic preset)
+    current_style: AnnotationStyle,
+    /// Custom color (used when style == Custom)
+    custom_color: Color,
     /// Last modification time of the sidecar annotations file (for file watching)
     last_sidecar_modified: Option<SystemTime>,
     /// Original image width in pixels
@@ -522,7 +533,8 @@ impl EditorView {
             file_path: actual_file_path,
             annotations: Vec::new(),
             active_tool: Tool::Rectangle,
-            current_color: Color::RED,
+            current_style: AnnotationStyle::default(),
+            custom_color: Color::RED,
             last_sidecar_modified: None,
             image_width,
             image_height,
@@ -578,6 +590,15 @@ impl EditorView {
         (scale, offset_x, offset_y)
     }
 
+    /// Get the effective color based on current style
+    /// Returns custom_color if style is Custom, otherwise the style's default color
+    fn effective_color(&self) -> Color {
+        match self.current_style {
+            AnnotationStyle::Custom => self.custom_color,
+            _ => self.current_style.color(),
+        }
+    }
+
     /// Scale image coordinates to canvas coordinates for rendering
     /// Takes (x, y, w, h) in image pixels and returns (sx, sy, sw, sh) in canvas pixels
     /// Coordinates are canvas-relative (canvas div is already below toolbar)
@@ -624,6 +645,40 @@ impl EditorView {
                 let mut builder = PathBuilder::stroke(px(stroke_width));
                 builder.move_to(p_start);
                 builder.line_to(p_end);
+                if let Ok(path) = builder.build() {
+                    window.paint_path(path, color);
+                }
+            },
+        )
+        .absolute()
+        .size_full()
+    }
+
+    /// Create a freeform path element using paint_path
+    fn render_path_element(
+        points: Vec<(f32, f32)>,
+        stroke_width: f32,
+        color: gpui::Hsla,
+    ) -> impl IntoElement {
+        canvas(
+            move |bounds, _window, _cx| {
+                let origin_x: f32 = bounds.origin.x.into();
+                let origin_y: f32 = bounds.origin.y.into();
+                let adjusted: Vec<_> = points
+                    .iter()
+                    .map(|(x, y)| point(px(*x + origin_x), px(*y + origin_y)))
+                    .collect();
+                adjusted
+            },
+            move |_bounds, adjusted_points, window, _cx| {
+                if adjusted_points.len() < 2 {
+                    return;
+                }
+                let mut builder = PathBuilder::stroke(px(stroke_width));
+                builder.move_to(adjusted_points[0]);
+                for pt in &adjusted_points[1..] {
+                    builder.line_to(*pt);
+                }
                 if let Ok(path) = builder.build() {
                     window.paint_path(path, color);
                 }
@@ -710,7 +765,8 @@ impl EditorView {
     fn build_tool_context(&self) -> ToolContext<'_> {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
         ToolContext {
-            color: self.current_color,
+            style: self.current_style,
+                custom_color: self.custom_color,
             stroke_width: 2.0,
             fill_enabled: false,
             image_size: (self.image_width, self.image_height),
@@ -840,6 +896,22 @@ impl EditorView {
             AnnotationType::Text { position, .. } | AnnotationType::Number { position, .. } => {
                 *position = NibPoint::new(new_bounds.x, new_bounds.y);
             }
+            // Path: scale all points to fit new bounds
+            AnnotationType::Path { points, .. } => {
+                if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (
+                    points.iter().map(|p| p.x).fold(None, |m, x| Some(m.map_or(x, |v: f64| v.min(x)))),
+                    points.iter().map(|p| p.x).fold(None, |m, x| Some(m.map_or(x, |v: f64| v.max(x)))),
+                    points.iter().map(|p| p.y).fold(None, |m, y| Some(m.map_or(y, |v: f64| v.min(y)))),
+                    points.iter().map(|p| p.y).fold(None, |m, y| Some(m.map_or(y, |v: f64| v.max(y)))),
+                ) {
+                    let old_width = (max_x - min_x).max(1.0);
+                    let old_height = (max_y - min_y).max(1.0);
+                    for point in points.iter_mut() {
+                        point.x = new_bounds.x + (point.x - min_x) / old_width * new_bounds.width;
+                        point.y = new_bounds.y + (point.y - min_y) / old_height * new_bounds.height;
+                    }
+                }
+            }
         }
     }
 
@@ -899,6 +971,14 @@ impl EditorView {
             AnnotationType::Crop { ref mut region } => {
                 region.x += delta_x;
                 region.y += delta_y;
+            }
+            AnnotationType::Path {
+                ref mut points, ..
+            } => {
+                for point in points.iter_mut() {
+                    point.x += delta_x;
+                    point.y += delta_y;
+                }
             }
         }
     }
@@ -1168,7 +1248,8 @@ impl EditorView {
             let scale = self.canvas.scale();
             let offset = self.canvas.offset_tuple();
             let ctx = ToolContext {
-                color: self.current_color,
+                style: self.current_style,
+                custom_color: self.custom_color,
                 stroke_width: 2.0,
                 fill_enabled: false,
                 image_size: (self.image_width, self.image_height),
@@ -1226,7 +1307,8 @@ impl EditorView {
             let scale = self.canvas.scale();
             let offset = self.canvas.offset_tuple();
             let ctx = ToolContext {
-                color: self.current_color,
+                style: self.current_style,
+                custom_color: self.custom_color,
                 stroke_width: 2.0,
                 fill_enabled: false,
                 image_size: (self.image_width, self.image_height),
@@ -1260,7 +1342,8 @@ impl EditorView {
             let scale = self.canvas.scale();
             let offset = self.canvas.offset_tuple();
             let ctx = ToolContext {
-                color: self.current_color,
+                style: self.current_style,
+                custom_color: self.custom_color,
                 stroke_width: 2.0,
                 fill_enabled: false,
                 image_size: (self.image_width, self.image_height),
@@ -1302,7 +1385,8 @@ impl EditorView {
             let scale = self.canvas.scale();
             let offset = self.canvas.offset_tuple();
             let ctx = ToolContext {
-                color: self.current_color,
+                style: self.current_style,
+                custom_color: self.custom_color,
                 stroke_width: 2.0,
                 fill_enabled: false,
                 image_size: (self.image_width, self.image_height),
@@ -1436,7 +1520,65 @@ impl EditorView {
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.select_tool(tool_copy, cx);
                     }))
-            })),
+            }))
+                    // Separator
+                    .child(
+                        div()
+                            .w(px(1.))
+                            .h(px(40.))
+                            .mx_2()
+                            .bg(rgba(0xffffff33))
+                    )
+                    // Style selector
+                    .children(AnnotationStyle::all().iter().map(|style| {
+                        let is_active = *style == self.current_style;
+                        let style_copy = *style;
+                        let style_color = if *style == AnnotationStyle::Custom {
+                            self.custom_color
+                        } else {
+                            style.color()
+                        };
+                        let gpui_style_color = rgb(
+                            style_color.r as u32 * 0x10000 +
+                            style_color.g as u32 * 0x100 +
+                            style_color.b as u32
+                        );
+
+                        div()
+                            .id(style.label())
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .w(px(48.))
+                            .h(px(48.))
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
+                            .hover(|s| s.bg(button_bg))
+                            // Color indicator circle
+                            .child(
+                                div()
+                                    .w(px(20.))
+                                    .h(px(20.))
+                                    .rounded_full()
+                                    .bg(gpui_style_color)
+                                    .border_2()
+                                    .border_color(if is_active { rgb(0xffffff) } else { rgba(0xffffff66) })
+                            )
+                            // Style name
+                            .child(
+                                div()
+                                    .text_color(text_color)
+                                    .text_size(px(9.))
+                                    .mt(px(2.))
+                                    .child(style.label())
+                            )
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.current_style = style_copy;
+                                cx.notify();
+                            }))
+                    })),
             ) // Close inner toolbar container
     }
 
@@ -1598,6 +1740,22 @@ impl EditorView {
                     .border_color(rgb(0x00ff00))
                     .into_any_element()
             }
+            AnnotationType::Path { points, stroke_width, .. } => {
+                if points.len() < 2 {
+                    return div().into_any_element();
+                }
+
+                // Scale all points to screen coordinates
+                let scaled_points: Vec<(f32, f32)> = points
+                    .iter()
+                    .map(|p| self.scale_point(p.x, p.y))
+                    .collect();
+
+                let stroke = *stroke_width as f32 * scale;
+
+                Self::render_path_element(scaled_points, stroke, border_color.into())
+                    .into_any_element()
+            }
         }
     }
 
@@ -1741,6 +1899,32 @@ impl EditorView {
                         .h(px(sh))
                         .border_1()
                         .border_color(marquee_color)
+                        .into_any_element(),
+                )
+            }
+            ToolPreview::Path {
+                points,
+                color,
+                stroke_width,
+            } => {
+                if points.len() < 2 {
+                    return None;
+                }
+
+                let preview_color = rgb(
+                    color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32,
+                );
+
+                // Scale all points to screen coordinates
+                let scaled_points: Vec<(f32, f32)> = points
+                    .iter()
+                    .map(|p| self.scale_point(p.x, p.y))
+                    .collect();
+
+                let stroke = stroke_width as f32 * self.calculate_scale_and_offset().0;
+
+                Some(
+                    Self::render_path_element(scaled_points, stroke, preview_color.into())
                         .into_any_element(),
                 )
             }
@@ -1924,7 +2108,8 @@ impl EditorView {
             let scale = self.canvas.scale();
             let offset = self.canvas.offset_tuple();
             let ctx = ToolContext {
-                color: self.current_color,
+                style: self.current_style,
+                custom_color: self.custom_color,
                 stroke_width: 2.0,
                 fill_enabled: false,
                 image_size: (self.image_width, self.image_height),
@@ -1989,7 +2174,8 @@ impl EditorView {
                 align: crate::core::types::TextAlign::Left,
                 background: None,
                 max_width: None,
-            }).with_color(self.current_color);
+            }).with_color(self.effective_color())
+            .with_severity(self.current_style.severity());
             self.annotations.push(annotation);
         }
 
@@ -2013,11 +2199,12 @@ impl EditorView {
         // Offset text up so it appears above the click point
         let text_y = canvas_y - scaled_font_size;
 
-        // Use the current drawing color (same as annotations)
+        // Use the effective color (based on current style)
+        let color = self.effective_color();
         let text_color = rgb(
-            self.current_color.r as u32 * 0x10000 +
-            self.current_color.g as u32 * 0x100 +
-            self.current_color.b as u32
+            color.r as u32 * 0x10000 +
+            color.g as u32 * 0x100 +
+            color.b as u32
         );
 
         // Cursor color matches text

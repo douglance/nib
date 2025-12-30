@@ -1,12 +1,14 @@
 //! Context provided to tools during event handling
 
-use crate::core::types::{Annotation, AnnotationType, Color, Point};
+use crate::core::types::{Annotation, AnnotationStyle, AnnotationType, Color, Point};
 
 /// Shared context provided to all tools
 pub struct ToolContext<'a> {
     // === Drawing Properties ===
-    /// Current drawing color
-    pub color: Color,
+    /// Current annotation style (semantic preset)
+    pub style: AnnotationStyle,
+    /// Custom color (used when style == Custom)
+    pub custom_color: Color,
     /// Current stroke width
     pub stroke_width: f64,
     /// Whether fill is enabled for shapes
@@ -30,6 +32,15 @@ pub struct ToolContext<'a> {
 }
 
 impl<'a> ToolContext<'a> {
+    /// Get the effective color based on style
+    /// Returns custom_color if style is Custom, otherwise the style's default color
+    pub fn effective_color(&self) -> Color {
+        match self.style {
+            AnnotationStyle::Custom => self.custom_color,
+            _ => self.style.color(),
+        }
+    }
+
     /// Convert screen coordinates to image coordinates
     pub fn screen_to_image(&self, screen_x: f32, screen_y: f32) -> Point {
         let image_x = (screen_x - self.offset.0) / self.scale;

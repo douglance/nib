@@ -57,7 +57,7 @@ impl Tool for NumberTool {
                     value: next_value,
                     radius: 14.0,
                 })
-                .with_color(ctx.color);
+                .with_color(ctx.effective_color());
 
                 ToolResult::Created(annotation)
             }

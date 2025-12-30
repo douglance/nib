@@ -95,7 +95,7 @@ impl Tool for EllipseTool {
                         stroke_width: ctx.stroke_width,
                         filled: ctx.fill_enabled,
                     })
-                    .with_color(ctx.color);
+                    .with_color(ctx.effective_color());
 
                     return ToolResult::Created(annotation);
                 }
@@ -116,7 +116,7 @@ impl Tool for EllipseTool {
                 center,
                 radius_x,
                 radius_y,
-                color: ctx.color,
+                color: ctx.effective_color(),
             }
         } else {
             ToolPreview::None

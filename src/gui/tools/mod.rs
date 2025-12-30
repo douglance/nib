@@ -12,6 +12,7 @@ mod highlight;
 mod line;
 mod manager;
 mod number;
+mod pencil;
 mod rectangle;
 mod select;
 mod state;
@@ -30,6 +31,7 @@ pub use highlight::*;
 pub use line::*;
 pub use manager::*;
 pub use number::*;
+pub use pencil::*;
 pub use rectangle::*;
 pub use select::*;
 pub use state::*;
@@ -166,4 +168,10 @@ pub enum ToolPreview {
     },
     /// Marquee selection rectangle (for drag-to-select)
     Marquee { region: Region },
+    /// Freeform path (pencil drawing)
+    Path {
+        points: Vec<Point>,
+        color: Color,
+        stroke_width: f64,
+    },
 }

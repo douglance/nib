@@ -82,7 +82,7 @@ impl Tool for BlurTool {
                         region,
                         intensity: BlurIntensity::Medium,
                     })
-                    .with_color(ctx.color);
+                    .with_color(ctx.effective_color());
 
                     return ToolResult::Created(annotation);
                 }

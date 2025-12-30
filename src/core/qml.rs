@@ -199,6 +199,7 @@ impl<R: Read> QmlParser<R> {
             "LINE" => self.parse_line(params),
             "ELLIPSE" | "CIRCLE" => self.parse_ellipse(params),
             "CROP" => self.parse_crop(params),
+            "PATH" | "PENCIL" => self.parse_path(params),
             _ => Err(QmlError::UnknownAnnotationType(type_name.to_string())),
         }
     }
@@ -419,6 +420,43 @@ impl<R: Read> QmlParser<R> {
         Ok((AnnotationType::Crop { region }, remaining))
     }
 
+    fn parse_path<'a>(&self, params: &'a str) -> QmlResult<(AnnotationType, &'a str)> {
+        // Format: x1,y1;x2,y2;x3,y3;...
+        // Points are separated by semicolons
+        let mut points = Vec::new();
+
+        // Find where the points section ends (at ->, !, or end of string)
+        let points_end = params
+            .find("->")
+            .or_else(|| params.find('!'))
+            .unwrap_or(params.len());
+
+        let points_str = &params[..points_end];
+        let remaining_params = &params[points_end..];
+
+        // Parse each point separated by semicolons
+        for point_str in points_str.split(';') {
+            let trimmed = point_str.trim();
+            if !trimmed.is_empty() {
+                let point = self.parse_point(trimmed)?;
+                points.push(point);
+            }
+        }
+
+        if points.len() < 2 {
+            return Err(self.parse_error("Path requires at least 2 points"));
+        }
+
+        Ok((
+            AnnotationType::Path {
+                points,
+                stroke_width: 2.0,
+                stroke_style: StrokeStyle::Solid,
+            },
+            remaining_params,
+        ))
+    }
+
     fn parse_point(&self, s: &str) -> QmlResult<Point> {
         let coords: Vec<&str> = s.split(',').collect();
         if coords.len() < 2 {
@@ -592,6 +630,11 @@ impl<W: Write> QmlSerializer<W> {
                     center.x, center.y, radius_x, radius_y
                 )
             }
+            AnnotationType::Path { points, .. } => points
+                .iter()
+                .map(|p| format!("{:.0},{:.0}", p.x, p.y))
+                .collect::<Vec<_>>()
+                .join(";"),
         };
 
         // Build label string

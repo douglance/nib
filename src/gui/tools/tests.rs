@@ -1,6 +1,6 @@
 //! Unit tests for tool trait implementations
 
-use crate::core::types::{Annotation, AnnotationType, Color, Point, Region};
+use crate::core::types::{Annotation, AnnotationStyle, AnnotationType, Color, Point, Region};
 use crate::gui::tools::*;
 
 // ============================================================================
@@ -11,7 +11,8 @@ use crate::gui::tools::*;
 fn make_test_context() -> ToolContext<'static> {
     static EMPTY: Vec<Annotation> = Vec::new();
     ToolContext {
-        color: Color::RED,
+        style: AnnotationStyle::Custom,
+        custom_color: Color::RED,
         stroke_width: 2.0,
         fill_enabled: false,
         image_size: (1920, 1080),
@@ -25,7 +26,8 @@ fn make_test_context() -> ToolContext<'static> {
 /// Create a test context with existing annotations
 fn make_test_context_with_annotations(annotations: &[Annotation]) -> ToolContext<'_> {
     ToolContext {
-        color: Color::RED,
+        style: AnnotationStyle::Custom,
+        custom_color: Color::RED,
         stroke_width: 2.0,
         fill_enabled: false,
         image_size: (1920, 1080),
@@ -66,9 +68,9 @@ mod tool_id_tests {
     use super::*;
 
     #[test]
-    fn test_tool_id_all_returns_ten_tools() {
+    fn test_tool_id_all_returns_eleven_tools() {
         let all_tools = ToolId::all();
-        assert_eq!(all_tools.len(), 10, "Expected 10 tools");
+        assert_eq!(all_tools.len(), 11, "Expected 11 tools");
     }
 
     #[test]
@@ -135,7 +137,8 @@ mod tool_context_tests {
     fn test_screen_to_image_at_scale_2() {
         static EMPTY: Vec<Annotation> = Vec::new();
         let ctx = ToolContext {
-            color: Color::RED,
+            style: AnnotationStyle::Custom,
+            custom_color: Color::RED,
             stroke_width: 2.0,
             fill_enabled: false,
             image_size: (1920, 1080),
@@ -153,7 +156,8 @@ mod tool_context_tests {
     fn test_screen_to_image_with_offset() {
         static EMPTY: Vec<Annotation> = Vec::new();
         let ctx = ToolContext {
-            color: Color::RED,
+            style: AnnotationStyle::Custom,
+            custom_color: Color::RED,
             stroke_width: 2.0,
             fill_enabled: false,
             image_size: (1920, 1080),
@@ -179,7 +183,8 @@ mod tool_context_tests {
     fn test_image_to_screen_at_scale_2() {
         static EMPTY: Vec<Annotation> = Vec::new();
         let ctx = ToolContext {
-            color: Color::RED,
+            style: AnnotationStyle::Custom,
+            custom_color: Color::RED,
             stroke_width: 2.0,
             fill_enabled: false,
             image_size: (1920, 1080),
@@ -1584,7 +1589,7 @@ mod tool_manager_tests {
     fn test_tool_manager_with_all_tools() {
         let manager = ToolManager::with_all_tools();
 
-        // Verify all 10 tools are registered
+        // Verify all 11 tools are registered
         for tool_id in ToolId::all() {
             assert!(
                 manager.has_tool(*tool_id),
@@ -1687,7 +1692,7 @@ mod tool_manager_tests {
         let manager = ToolManager::with_all_tools();
 
         let registered: Vec<ToolId> = manager.registered_tools().collect();
-        assert_eq!(registered.len(), 10);
+        assert_eq!(registered.len(), 11);
     }
 
     #[test]

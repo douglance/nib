@@ -74,7 +74,7 @@ impl Tool for ArrowTool {
                         head: ArrowHead::End,
                         stroke_width: ctx.stroke_width,
                     })
-                    .with_color(ctx.color);
+                    .with_color(ctx.effective_color());
 
                     return ToolResult::Created(annotation);
                 }
@@ -93,7 +93,7 @@ impl Tool for ArrowTool {
             ToolPreview::Line {
                 start,
                 end: current,
-                color: ctx.color,
+                color: ctx.effective_color(),
             }
         } else {
             ToolPreview::None

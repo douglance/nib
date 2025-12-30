@@ -666,6 +666,9 @@ pub fn run_annotations(args: &AnnotationsArgs) -> Result<()> {
                                 }
                                 info
                             }
+                            crate::gui::AnnotationGeometry::Path { points } => {
+                                format!("{} points", points.len())
+                            }
                         };
 
                         println!(

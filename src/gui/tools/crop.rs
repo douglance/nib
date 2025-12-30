@@ -75,7 +75,7 @@ impl Tool for CropTool {
                     }
 
                     let annotation =
-                        Annotation::new(AnnotationType::Crop { region }).with_color(ctx.color);
+                        Annotation::new(AnnotationType::Crop { region }).with_color(ctx.effective_color());
 
                     return ToolResult::Created(annotation);
                 }
@@ -93,7 +93,7 @@ impl Tool for CropTool {
         if let (Some(start), Some(current)) = (self.drag.start, self.drag.current) {
             ToolPreview::Rectangle {
                 region: Region::from_points(start, current),
-                color: ctx.color,
+                color: ctx.effective_color(),
             }
         } else {
             ToolPreview::None

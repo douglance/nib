@@ -957,6 +957,19 @@ struct CropData {
     height: f64,
 }
 
+#[derive(Serialize, Deserialize)]
+struct PathData {
+    points: Vec<PointData>,
+    stroke_width: f64,
+    stroke_style: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PointData {
+    x: f64,
+    y: f64,
+}
+
 // --- Helper functions ---
 
 fn serialize_annotation_data(annotation_type: &AnnotationType) -> StorageResult<String> {
@@ -1093,6 +1106,21 @@ fn serialize_annotation_data(annotation_type: &AnnotationType) -> StorageResult<
             };
             serde_json::to_string(&data)
         }
+        AnnotationType::Path {
+            points,
+            stroke_width,
+            stroke_style,
+        } => {
+            let data = PathData {
+                points: points
+                    .iter()
+                    .map(|p| PointData { x: p.x, y: p.y })
+                    .collect(),
+                stroke_width: *stroke_width,
+                stroke_style: stroke_style_to_string(stroke_style),
+            };
+            serde_json::to_string(&data)
+        }
     }
     .map_err(|e| StorageError::InvalidFormat(format!("Failed to serialize annotation: {}", e)))?;
 
@@ -1197,6 +1225,16 @@ fn deserialize_annotation_data(
             })?;
             AnnotationType::Crop {
                 region: Region::new(data.x, data.y, data.width, data.height),
+            }
+        }
+        "path" => {
+            let data: PathData = serde_json::from_str(data_json).map_err(|e| {
+                StorageError::InvalidFormat(format!("Invalid path data: {}", e))
+            })?;
+            AnnotationType::Path {
+                points: data.points.iter().map(|p| Point::new(p.x, p.y)).collect(),
+                stroke_width: data.stroke_width,
+                stroke_style: string_to_stroke_style(&data.stroke_style),
             }
         }
         _ => {

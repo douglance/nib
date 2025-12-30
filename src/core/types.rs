@@ -163,6 +163,67 @@ impl Severity {
     }
 }
 
+/// Semantic annotation style that maps to severity and color
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnnotationStyle {
+    #[default]
+    Note,   // Neutral labels, identifiers (gray)
+    Info,   // Context, explanations (blue)
+    Todo,   // Action needed, "fix this" (yellow/amber)
+    Bug,    // Problems, broken things (red)
+    Done,   // Confirmed working, approved (green)
+    Custom, // User-selected color
+}
+
+impl AnnotationStyle {
+    pub const GRAY: Color = Color::rgb(128, 128, 128);
+    pub const AMBER: Color = Color::rgb(245, 158, 11);
+
+    pub fn severity(&self) -> Severity {
+        match self {
+            Self::Note => Severity::None,
+            Self::Info => Severity::Info,
+            Self::Todo => Severity::Warning,
+            Self::Bug => Severity::Error,
+            Self::Done => Severity::Success,
+            Self::Custom => Severity::None,
+        }
+    }
+
+    pub fn color(&self) -> Color {
+        match self {
+            Self::Note => Self::GRAY,
+            Self::Info => Color::BLUE,
+            Self::Todo => Self::AMBER,
+            Self::Bug => Color::RED,
+            Self::Done => Color::GREEN,
+            Self::Custom => Color::RED, // Default, overridden by picker
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Note => "Note",
+            Self::Info => "Info",
+            Self::Todo => "Todo",
+            Self::Bug => "Bug",
+            Self::Done => "Done",
+            Self::Custom => "Custom",
+        }
+    }
+
+    pub fn all() -> &'static [AnnotationStyle] {
+        &[
+            Self::Note,
+            Self::Info,
+            Self::Todo,
+            Self::Bug,
+            Self::Done,
+            Self::Custom,
+        ]
+    }
+}
+
 /// Arrow head style
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ArrowHead {
@@ -289,6 +350,13 @@ pub enum AnnotationType {
 
     /// Crop indicator (defines export bounds)
     Crop { region: Region },
+
+    /// Freeform path (pencil drawing)
+    Path {
+        points: Vec<Point>,
+        stroke_width: f64,
+        stroke_style: StrokeStyle,
+    },
 }
 
 impl AnnotationType {
@@ -350,6 +418,20 @@ impl AnnotationType {
                 radius_y * 2.0 + stroke_width,
             ),
             AnnotationType::Crop { region } => *region,
+            AnnotationType::Path {
+                points,
+                stroke_width,
+                ..
+            } => {
+                if points.is_empty() {
+                    return Region::new(0.0, 0.0, 0.0, 0.0);
+                }
+                let min_x = points.iter().map(|p| p.x).fold(f64::INFINITY, f64::min);
+                let max_x = points.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max);
+                let min_y = points.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+                let max_y = points.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
+                Region::new(min_x, min_y, max_x - min_x, max_y - min_y).expand(*stroke_width / 2.0)
+            }
         }
     }
 
@@ -365,6 +447,7 @@ impl AnnotationType {
             AnnotationType::Line { .. } => "line",
             AnnotationType::Ellipse { .. } => "ellipse",
             AnnotationType::Crop { .. } => "crop",
+            AnnotationType::Path { .. } => "path",
         }
     }
 }

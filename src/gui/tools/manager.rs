@@ -33,6 +33,7 @@ impl ToolManager {
         manager.register(Box::new(super::HighlightTool::new()));
         manager.register(Box::new(super::BlurTool::new()));
         manager.register(Box::new(super::CropTool::new()));
+        manager.register(Box::new(super::PencilTool::new()));
 
         manager
     }

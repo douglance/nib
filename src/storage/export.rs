@@ -252,6 +252,24 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation) {
         AnnotationType::Crop { .. } => {
             // Crop regions are not rendered, they're used for export bounds
         }
+        AnnotationType::Path { points, stroke_width, .. } => {
+            if points.len() >= 2 {
+                // Draw connected line segments for the path
+                for offset in 0..(*stroke_width as i32).max(1) {
+                    let dy = if offset == 0 { 0.0 } else { offset as f32 / 2.0 };
+                    for i in 0..points.len() - 1 {
+                        let start = &points[i];
+                        let end = &points[i + 1];
+                        draw_line_segment_mut(
+                            img,
+                            (start.x as f32, start.y as f32 + dy),
+                            (end.x as f32, end.y as f32 + dy),
+                            color,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 

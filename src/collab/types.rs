@@ -414,6 +414,11 @@ pub enum AnnotationTypeData {
         width: f64,
         height: f64,
     },
+    Path {
+        points: Vec<(f64, f64)>,
+        stroke_width: f64,
+        stroke_style: String,
+    },
 }
 
 /// A single property change for partial updates
