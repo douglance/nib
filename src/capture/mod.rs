@@ -9,7 +9,6 @@
 pub mod region;
 pub mod screen;
 pub mod tiled;
-pub mod window;
 
 pub use tiled::{generate_tiles, TiledCapture};
 

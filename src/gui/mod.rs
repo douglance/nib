@@ -10,7 +10,6 @@ pub mod elements;
 pub mod sidebar;
 pub mod toolbar;
 pub mod tools;
-pub mod window;
 
 pub use app::NibApp;
 pub use app::{annotations_file_path, deserialize_annotation, AnnotationsFile, AnnotationGeometry, SerializedAnnotation};
