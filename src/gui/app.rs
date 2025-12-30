@@ -1394,13 +1394,13 @@ impl EditorView {
 
                 div()
                     .id(tool.name())
+                    .relative()
                     .flex()
                     .flex_col()
                     .items_center()
                     .justify_center()
                     .w(px(56.))
                     .h(px(56.))
-                    .gap_1()
                     .rounded_md()
                     .cursor_pointer()
                     .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
@@ -1411,11 +1411,27 @@ impl EditorView {
                             .size(px(28.))
                             .text_color(icon_color)
                     )
+                    // Keyboard shortcut badge on top-right
                     .child(
                         div()
-                            .text_color(text_color)
-                            .text_size(px(10.))
-                            .child(format!("{} ({})", tool.name(), tool.shortcut().to_ascii_uppercase()))
+                            .absolute()
+                            .top(px(2.))
+                            .right(px(2.))
+                            .w(px(16.))
+                            .h(px(16.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(3.))
+                            .bg(rgba(0x00000066))
+                            .border_1()
+                            .border_color(rgba(0xffffff33))
+                            .child(
+                                div()
+                                    .text_color(text_color)
+                                    .text_size(px(10.))
+                                    .child(tool.shortcut().to_ascii_uppercase().to_string())
+                            )
                     )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.select_tool(tool_copy, cx);
@@ -1742,7 +1758,9 @@ impl EditorView {
             .bg(background_color)
             .relative()
             .overflow_hidden()
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, event, _window, cx| {
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, event, window, cx| {
+                // Grab focus so keyboard shortcuts work
+                this.focus_handle.focus(window);
                 this.handle_mouse_down(event, cx);
             }))
             .on_mouse_move(cx.listener(|this, event, _window, cx| {
