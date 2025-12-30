@@ -1,20 +1,21 @@
 //! CLI command implementations
 
 use super::args::*;
-use crate::capture::screen;
+use crate::capture::{generate_tiles, screen, TiledCapture};
+use crate::core::TileConfig;
 use crate::collab::{
     log::SessionManager,
     session::Session,
     types::ClientType,
 };
-use crate::core::{qml, NibImage, Result};
+use crate::core::{qml, NibImage, Result, TileBounds, TileId};
 use crate::gui::{NibApp, annotations_file_path, AnnotationsFile};
 use crate::storage::{
     self, convert, export, index::Index, nib_file::NibFile, qml_file, sessions::SessionRegistry,
 };
 use arboard::Clipboard;
 use chrono::{DateTime, Local};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Execute the capture command
@@ -57,8 +58,30 @@ pub fn run_capture(args: &CaptureArgs) -> Result<()> {
     if args.clipboard {
         copy_to_clipboard(&image)?;
         println!("Copied to clipboard!");
+    } else if args.tiled {
+        // Tiled capture mode: create tile pyramid
+        let output_dir = args.output.clone().unwrap_or_else(generate_tiled_dirname);
+
+        // Load image as RGBA
+        let img = image::load_from_memory(&image.image_data)
+            .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?
+            .to_rgba8();
+
+        // Create tile config
+        let config = TileConfig::for_image(img.width(), img.height(), args.tile_size);
+
+        // Generate tiles
+        let manifest = generate_tiles(&img, &output_dir, &config).map_err(|e| {
+            crate::core::NibError::Other(format!("Failed to generate tiles: {}", e))
+        })?;
+
+        println!("Tiled capture saved to: {}", output_dir.display());
+        println!("  Dimensions: {}x{}", image.width, image.height);
+        println!("  Tile size: {}px", args.tile_size);
+        println!("  Zoom levels: {}", manifest.levels.len());
+        println!("  Total tiles: {}", manifest.total_tile_count());
     } else {
-        let output_path = args.output.clone().unwrap_or_else(|| generate_filename());
+        let output_path = args.output.clone().unwrap_or_else(generate_filename);
         save_capture(&image, &output_path)?;
         println!("Saved to: {}", output_path.display());
 
@@ -74,6 +97,13 @@ pub fn run_capture(args: &CaptureArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Generate a unique directory name for tiled captures
+fn generate_tiled_dirname() -> PathBuf {
+    let now = chrono::Local::now();
+    let dirname = format!("nib_tiled_{}", now.format("%Y%m%d_%H%M%S"));
+    storage::captures_dir().join(dirname)
 }
 
 /// Execute the annotate command
@@ -152,7 +182,7 @@ pub async fn run_edit(args: &EditArgs) -> Result<()> {
     // Open session (checks for existing sessions and connects if found)
     let session = Session::open(&args.file, ClientType::Cli)
         .await
-        .map_err(|e| crate::core::NibError::Other(e))?;
+        .map_err(crate::core::NibError::Other)?;
 
     let is_owner = session.is_owner();
     println!(
@@ -167,7 +197,7 @@ pub async fn run_edit(args: &EditArgs) -> Result<()> {
         for annotation in new_annotations {
             session
                 .add_annotation(annotation)
-                .map_err(|e| crate::core::NibError::Other(e))?;
+                .map_err(crate::core::NibError::Other)?;
         }
         println!("Added annotations from: {}", qml_path.display());
     }
@@ -178,7 +208,7 @@ pub async fn run_edit(args: &EditArgs) -> Result<()> {
         for annotation in new_annotations {
             session
                 .add_annotation(annotation)
-                .map_err(|e| crate::core::NibError::Other(e))?;
+                .map_err(crate::core::NibError::Other)?;
         }
         println!("Added annotations from command line");
     }
@@ -245,7 +275,7 @@ pub async fn run_edit(args: &EditArgs) -> Result<()> {
         // Close session
         session
             .close()
-            .map_err(|e| crate::core::NibError::Other(e))?;
+            .map_err(crate::core::NibError::Other)?;
     }
 
     Ok(())
@@ -523,6 +553,7 @@ pub fn run_folder() -> Result<()> {
 
 /// Execute the gui command (launch the graphical editor)
 pub fn run_gui(args: &GuiArgs) -> Result<()> {
+    let t0 = std::time::Instant::now();
     tracing::info!(?args, "Launching GUI");
 
     let file_path = args.file.clone();
@@ -565,14 +596,17 @@ pub fn run_gui(args: &GuiArgs) -> Result<()> {
             }
         }
     }
+    eprintln!("[PERF] run_gui session setup: {:?}", t0.elapsed());
 
     // Create and run the app
     let app = match file_path.clone() {
         Some(path) => NibApp::with_file(path),
         None => NibApp::new(),
     };
+    eprintln!("[PERF] run_gui app created: {:?}", t0.elapsed());
 
     let result = app.run().map_err(|e| crate::core::NibError::Other(e.to_string()));
+    eprintln!("[PERF] run_gui app.run() returned: {:?}", t0.elapsed());
 
     // Unregister session for .nib files when GUI closes
     if is_nib_file {
@@ -1182,7 +1216,7 @@ struct TextMatch {
 }
 
 /// Index a capture in the database
-fn index_capture(image: &NibImage, path: &PathBuf) -> Result<()> {
+fn index_capture(image: &NibImage, path: &Path) -> Result<()> {
     let index = Index::open()?;
 
     let now = SystemTime::now()
@@ -1229,7 +1263,7 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
             Ok(file) => {
                 file.annotations
                     .iter()
-                    .filter_map(|sa| crate::gui::deserialize_annotation(sa))
+                    .filter_map(crate::gui::deserialize_annotation)
                     .collect()
             }
             Err(_) => Vec::new(),
@@ -1419,7 +1453,7 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
         // JSON output mode - formula-based for compact representation
         // Labels on image show base36 indices (col,row)
         // Use formula to convert: pixel_x = origin[0] + col * spacing
-        let render_bounds = region.clone().unwrap_or_else(|| {
+        let render_bounds = region.unwrap_or_else(|| {
             TileBounds::from_corners(0.0, 0.0, width as f64, height as f64)
         });
 
@@ -1466,7 +1500,7 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
         let mut output_img = img.to_rgba8();
 
         // Determine render bounds
-        let render_bounds = region.clone().unwrap_or_else(|| {
+        let render_bounds = region.unwrap_or_else(|| {
             TileBounds::from_corners(0.0, 0.0, width as f64, height as f64)
         });
 
@@ -2078,6 +2112,341 @@ fn migrate_directory(dir: &PathBuf, recursive: bool, delete_sidecar: bool) -> Re
     );
 
     Ok(())
+}
+
+// =============================================================================
+// Tiled capture CLI commands
+// =============================================================================
+
+/// Execute the query command (query tiled capture for point or region)
+pub fn run_query(args: &QueryArgs, format: &OutputFormat) -> Result<()> {
+    tracing::info!(?args, "Running query");
+
+    // Open the tiled capture
+    let capture = TiledCapture::open(&args.capture_dir).map_err(|e| {
+        crate::core::NibError::Other(format!("Failed to open tiled capture: {}", e))
+    })?;
+
+    let max_zoom = capture.manifest.tile_config.max_zoom;
+    let zoom = args.zoom.unwrap_or(max_zoom);
+
+    // Parse and execute query
+    if let Some(ref point_str) = args.point {
+        // Point query
+        let (x, y) = parse_point(point_str)?;
+
+        let tile_id = capture.tile_at_point(x, y, zoom).ok_or_else(|| {
+            crate::core::NibError::Other(format!(
+                "Point ({}, {}) is outside image bounds",
+                x, y
+            ))
+        })?;
+
+        let bounds = capture.tile_bounds(tile_id);
+
+        // Build response
+        let response = serde_json::json!({
+            "type": "point",
+            "x": x,
+            "y": y,
+            "zoom": zoom,
+            "tile": {
+                "id": format!("z{}/{}_{}", tile_id.zoom, tile_id.x, tile_id.y),
+                "zoom": tile_id.zoom,
+                "x": tile_id.x,
+                "y": tile_id.y
+            },
+            "bounds": {
+                "min_x": bounds.min_x,
+                "min_y": bounds.min_y,
+                "max_x": bounds.max_x,
+                "max_y": bounds.max_y
+            }
+        });
+
+        match format {
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+            }
+            OutputFormat::Text => {
+                println!("Point ({}, {}) at zoom {}", x, y, zoom);
+                println!("  Tile: z{}/{}_{}", tile_id.zoom, tile_id.x, tile_id.y);
+                println!(
+                    "  Bounds: ({:.0},{:.0}) - ({:.0},{:.0})",
+                    bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y
+                );
+            }
+        }
+    } else if let Some(ref region_str) = args.region {
+        // Region query
+        let bounds = parse_tile_region(region_str)?;
+        let tiles = capture.tiles_intersecting(&bounds, zoom);
+
+        let tile_info: Vec<serde_json::Value> = tiles
+            .iter()
+            .map(|entry| {
+                let b = &entry.bounds;
+                serde_json::json!({
+                    "id": format!("z{}/{}_{}", entry.tile_id.zoom, entry.tile_id.x, entry.tile_id.y),
+                    "zoom": entry.tile_id.zoom,
+                    "x": entry.tile_id.x,
+                    "y": entry.tile_id.y,
+                    "bounds": {
+                        "min_x": b.min_x,
+                        "min_y": b.min_y,
+                        "max_x": b.max_x,
+                        "max_y": b.max_y
+                    }
+                })
+            })
+            .collect();
+
+        let response = serde_json::json!({
+            "type": "region",
+            "bounds": {
+                "min_x": bounds.min_x,
+                "min_y": bounds.min_y,
+                "max_x": bounds.max_x,
+                "max_y": bounds.max_y,
+                "width": bounds.width(),
+                "height": bounds.height()
+            },
+            "zoom": zoom,
+            "tile_count": tiles.len(),
+            "tiles": tile_info
+        });
+
+        match format {
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+            }
+            OutputFormat::Text => {
+                println!(
+                    "Region ({:.0},{:.0}) - ({:.0},{:.0}) at zoom {}",
+                    bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y, zoom
+                );
+                println!("  Tiles: {}", tiles.len());
+                for entry in &tiles {
+                    println!(
+                        "    z{}/{}_{}: ({:.0},{:.0}) - ({:.0},{:.0})",
+                        entry.tile_id.zoom,
+                        entry.tile_id.x,
+                        entry.tile_id.y,
+                        entry.bounds.min_x,
+                        entry.bounds.min_y,
+                        entry.bounds.max_x,
+                        entry.bounds.max_y
+                    );
+                }
+            }
+        }
+    } else {
+        // No query specified - show capture info
+        let (width, height) = capture.image_dimensions();
+        let response = serde_json::json!({
+            "type": "info",
+            "capture_id": capture.manifest.capture_id,
+            "dimensions": {
+                "width": width,
+                "height": height
+            },
+            "tile_config": {
+                "tile_size": capture.manifest.tile_config.tile_size,
+                "max_zoom": max_zoom,
+                "zoom_levels": capture.manifest.levels.len()
+            },
+            "total_tiles": capture.total_tile_count()
+        });
+
+        match format {
+            OutputFormat::Json => {
+                println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+            }
+            OutputFormat::Text => {
+                println!("Tiled capture: {}", capture.manifest.capture_id);
+                println!("  Dimensions: {}x{}", width, height);
+                println!(
+                    "  Tile size: {}px, {} zoom levels",
+                    capture.manifest.tile_config.tile_size,
+                    capture.manifest.levels.len()
+                );
+                println!("  Total tiles: {}", capture.total_tile_count());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Execute the extract command (extract region from tiled capture)
+pub fn run_extract(args: &ExtractArgs) -> Result<()> {
+    tracing::info!(?args, "Running extract");
+
+    // Open the tiled capture
+    let mut capture = TiledCapture::open(&args.capture_dir).map_err(|e| {
+        crate::core::NibError::Other(format!("Failed to open tiled capture: {}", e))
+    })?;
+
+    // Parse region
+    let bounds = parse_tile_region(&args.region)?;
+
+    // Extract region
+    let extracted = capture.extract_region(&bounds).map_err(|e| {
+        crate::core::NibError::Other(format!("Failed to extract region: {}", e))
+    })?;
+
+    // Save to output
+    extracted.save(&args.output).map_err(|e| {
+        crate::core::NibError::Image(crate::core::ImageError::EncodeError(e.to_string()))
+    })?;
+
+    println!("Extracted region to: {}", args.output.display());
+    println!("  Region: ({:.0},{:.0}) - ({:.0},{:.0})",
+        bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y);
+    println!("  Size: {}x{}", extracted.width(), extracted.height());
+
+    Ok(())
+}
+
+/// Execute the tiles command (list tiles in a tiled capture)
+pub fn run_tiles(args: &TilesArgs, format: &OutputFormat) -> Result<()> {
+    tracing::info!(?args, "Running tiles");
+
+    // Open the tiled capture
+    let capture = TiledCapture::open(&args.capture_dir).map_err(|e| {
+        crate::core::NibError::Other(format!("Failed to open tiled capture: {}", e))
+    })?;
+
+    let max_zoom = capture.manifest.tile_config.max_zoom;
+    let zoom = args.zoom.unwrap_or(max_zoom);
+
+    let level = capture
+        .manifest
+        .levels
+        .get(zoom as usize)
+        .ok_or_else(|| {
+            crate::core::NibError::Other(format!(
+                "Invalid zoom level {}. Max is {}",
+                zoom, max_zoom
+            ))
+        })?;
+
+    // Build tile list
+    let mut tiles: Vec<serde_json::Value> = Vec::new();
+
+    for y in 0..level.grid_height {
+        for x in 0..level.grid_width {
+            let tile_id = TileId::new(zoom, x, y);
+            let bounds = capture.tile_bounds(tile_id);
+
+            let tile_info = if args.verbose {
+                serde_json::json!({
+                    "id": format!("z{}/{}_{}", zoom, x, y),
+                    "x": x,
+                    "y": y,
+                    "bounds": {
+                        "min_x": bounds.min_x,
+                        "min_y": bounds.min_y,
+                        "max_x": bounds.max_x,
+                        "max_y": bounds.max_y
+                    }
+                })
+            } else {
+                serde_json::json!({
+                    "id": format!("z{}/{}_{}", zoom, x, y),
+                    "x": x,
+                    "y": y
+                })
+            };
+
+            tiles.push(tile_info);
+        }
+    }
+
+    let response = serde_json::json!({
+        "zoom": zoom,
+        "scale": level.scale,
+        "grid": {
+            "width": level.grid_width,
+            "height": level.grid_height
+        },
+        "tile_count": level.tile_count,
+        "tiles": tiles
+    });
+
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+        }
+        OutputFormat::Text => {
+            println!("Tiles at zoom level {}:", zoom);
+            println!("  Scale: {:.2}x", level.scale);
+            println!("  Grid: {}x{}", level.grid_width, level.grid_height);
+            println!("  Total: {} tiles", level.tile_count);
+
+            if args.verbose {
+                println!();
+                for y in 0..level.grid_height {
+                    for x in 0..level.grid_width {
+                        let tile_id = TileId::new(zoom, x, y);
+                        let bounds = capture.tile_bounds(tile_id);
+                        println!(
+                            "  z{}/{}_{}: ({:.0},{:.0}) - ({:.0},{:.0})",
+                            zoom, x, y, bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse a point string "x,y" into coordinates
+fn parse_point(point_str: &str) -> Result<(f64, f64)> {
+    let parts: Vec<&str> = point_str.split(',').collect();
+    if parts.len() != 2 {
+        return Err(crate::core::NibError::Other(format!(
+            "Invalid point format '{}'. Expected 'x,y'",
+            point_str
+        )));
+    }
+
+    let x = parts[0].trim().parse::<f64>().map_err(|_| {
+        crate::core::NibError::Other(format!("Invalid x coordinate: {}", parts[0]))
+    })?;
+    let y = parts[1].trim().parse::<f64>().map_err(|_| {
+        crate::core::NibError::Other(format!("Invalid y coordinate: {}", parts[1]))
+    })?;
+
+    Ok((x, y))
+}
+
+/// Parse a region string "x,y,width,height" into TileBounds
+fn parse_tile_region(region_str: &str) -> Result<TileBounds> {
+    let parts: Vec<&str> = region_str.split(',').collect();
+    if parts.len() != 4 {
+        return Err(crate::core::NibError::Other(format!(
+            "Invalid region format '{}'. Expected 'x,y,width,height'",
+            region_str
+        )));
+    }
+
+    let x = parts[0].trim().parse::<f64>().map_err(|_| {
+        crate::core::NibError::Other(format!("Invalid x coordinate: {}", parts[0]))
+    })?;
+    let y = parts[1].trim().parse::<f64>().map_err(|_| {
+        crate::core::NibError::Other(format!("Invalid y coordinate: {}", parts[1]))
+    })?;
+    let width = parts[2].trim().parse::<f64>().map_err(|_| {
+        crate::core::NibError::Other(format!("Invalid width: {}", parts[2]))
+    })?;
+    let height = parts[3].trim().parse::<f64>().map_err(|_| {
+        crate::core::NibError::Other(format!("Invalid height: {}", parts[3]))
+    })?;
+
+    Ok(TileBounds::from_corners(x, y, x + width, y + height))
 }
 
 /// Execute the export command (export .nib to PNG/JSON/QML)

@@ -7,12 +7,13 @@ use gpui::{
     Bounds, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Point,
     Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size,
-    StatefulInteractiveElement, Styled, StyledImage, Window, WindowBounds, WindowKind, WindowOptions,
+    StatefulInteractiveElement, Styled, StyledImage, Task, Window, WindowBounds, WindowKind, WindowOptions,
 };
+use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Asset source for loading SVG icons and other assets
@@ -50,6 +51,7 @@ use crate::gui::tools::{
     ToolManager, ToolMode, ToolPreview, ToolResult,
 };
 use crate::storage::nib_file::NibFile;
+use crate::nib_log;
 
 /// Version string for the annotations file format
 const ANNOTATIONS_FILE_VERSION: &str = "1.0";
@@ -321,8 +323,8 @@ pub fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annot
 }
 
 /// Get the sidecar annotations file path for an image
-pub fn annotations_file_path(image_path: &PathBuf) -> PathBuf {
-    let mut path = image_path.clone();
+pub fn annotations_file_path(image_path: &Path) -> PathBuf {
+    let mut path = image_path.to_path_buf();
     let file_name = path.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "image".to_string());
@@ -362,6 +364,7 @@ impl NibApp {
 
     /// Launch the GUI application
     pub fn run(self) -> anyhow::Result<()> {
+        let t0 = std::time::Instant::now();
         let file_path = self.file_path.clone();
 
         // Get the assets base path - try manifest dir first, then executable dir
@@ -373,10 +376,12 @@ impl NibApp {
                     .and_then(|p| p.parent().map(PathBuf::from))
                     .unwrap_or_else(|| PathBuf::from("."))
             });
+        eprintln!("[PERF] NibApp::run assets_base: {:?}", t0.elapsed());
 
         Application::new()
             .with_assets(Assets { base: assets_base })
             .run(move |cx: &mut App| {
+                eprintln!("[PERF] NibApp::run inside GPUI callback: {:?}", t0.elapsed());
                 let window_size: Size<gpui::Pixels> = size(px(1200.), px(800.));
 
                 let options = WindowOptions {
@@ -389,7 +394,9 @@ impl NibApp {
                 };
 
                 cx.open_window(options, |_window, cx| {
-                    cx.new(|cx| EditorView::new(file_path.clone(), cx))
+                    let view = cx.new(|cx| EditorView::new(file_path.clone(), cx));
+                    eprintln!("[PERF] NibApp::run window opened: {:?}", t0.elapsed());
+                    view
                 })
                 .expect("Failed to open window");
             });
@@ -449,11 +456,15 @@ pub struct EditorView {
     blur_preview_path: Option<PathBuf>,
     /// Hash of blur annotation state to detect when regeneration is needed
     blur_annotations_hash: u64,
+    /// Pending debounced blur regeneration task (cancelled when replaced)
+    blur_regen_task: Option<Task<()>>,
 }
 
 impl EditorView {
     /// Create a new editor view
     pub fn new(file_path: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
+        let t0 = std::time::Instant::now();
+
         // Check if this is a .nib file
         let is_nib_file = file_path
             .as_ref()
@@ -507,8 +518,8 @@ impl EditorView {
         } else {
             // Standard image file - load dimensions directly
             let (width, height) = if let Some(ref path) = file_path {
-                if let Ok(img) = image::open(path) {
-                    (img.width(), img.height())
+                if let Ok((w, h)) = image::image_dimensions(path) {
+                    (w, h)
                 } else {
                     (1920, 1080) // default fallback
                 }
@@ -517,6 +528,7 @@ impl EditorView {
             };
             (file_path.clone(), None, None, width, height)
         };
+        let t1 = t0.elapsed();
 
         // Estimate canvas size (window 1200x800 minus toolbar ~44px)
         let canvas_width = 1200.0_f32;
@@ -549,17 +561,30 @@ impl EditorView {
             last_nib_modified: None,
             blur_preview_path: None,
             blur_annotations_hash: 0,
+            blur_regen_task: None,
         };
-        // Load existing annotations if available
+        let t2 = t0.elapsed();
+
         view.load_annotations();
-        // Generate blur preview if there are blur annotations
-        view.regenerate_blur_preview_if_needed();
-        // Record initial modification time
+        let t3 = t0.elapsed();
+
+        view.regenerate_blur_preview_sync();
+        let t4 = t0.elapsed();
+
         view.update_sidecar_modified_time();
-        // For .nib files, also record the annotation modification timestamp
         if view.nib_file.is_some() {
             view.update_nib_modified_time();
         }
+        let t5 = t0.elapsed();
+
+        eprintln!("[PERF] EditorView::new breakdown:");
+        eprintln!("[PERF]   file/nib load:    {:?}", t1);
+        eprintln!("[PERF]   struct init:      {:?} (+{:?})", t2, t2 - t1);
+        eprintln!("[PERF]   load_annotations: {:?} (+{:?})", t3, t3 - t2);
+        eprintln!("[PERF]   blur_preview:     {:?} (+{:?})", t4, t4 - t3);
+        eprintln!("[PERF]   update_times:     {:?} (+{:?})", t5, t5 - t4);
+        eprintln!("[PERF]   TOTAL:            {:?}", t5);
+
         view
     }
 
@@ -781,8 +806,9 @@ impl EditorView {
     fn process_tool_result(&mut self, result: ToolResult, cx: &mut Context<Self>) {
         match result {
             ToolResult::Created(annotation) => {
+                nib_log!("human created a{} {}", annotation.id.0, annotation.annotation_type.type_name());
                 self.annotations.push(annotation);
-                self.save_annotations();
+                self.save_annotations(cx);
                 cx.notify();
             }
             ToolResult::Updated(id) => {
@@ -797,12 +823,17 @@ impl EditorView {
                         *content = new_content;
                     }
                 }
-                self.save_annotations();
+                self.save_annotations(cx);
                 cx.notify();
             }
             ToolResult::Deleted(id) => {
+                let type_name = self.annotations.iter()
+                    .find(|a| a.id == id)
+                    .map(|a| a.annotation_type.type_name())
+                    .unwrap_or("unknown");
+                nib_log!("human deleted a{} {}", id.0, type_name);
                 self.annotations.retain(|a| a.id != id);
-                self.save_annotations();
+                self.save_annotations(cx);
                 cx.notify();
             }
             ToolResult::EnterMode(mode) => {
@@ -838,21 +869,29 @@ impl EditorView {
                 delta_y,
             } => {
                 // Move all specified annotations by the delta
-                for id in ids {
-                    if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
+                for id in &ids {
+                    if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == *id) {
                         Self::move_annotation_type(&mut ann.annotation_type, delta_x, delta_y);
                     }
                 }
-                self.save_annotations();
+                nib_log!("human moved {}", ids.iter()
+                    .filter_map(|id| self.annotations.iter().find(|a| a.id == *id))
+                    .map(|a| format!("a{} {}", a.id.0, a.annotation_type.type_name()))
+                    .collect::<Vec<_>>().join(", "));
+                self.save_annotations(cx);
                 cx.notify();
             }
             ToolResult::Resized { id, new_bounds } => {
                 // Resize the specified annotation to new bounds
-                if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
+                let type_name = if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
                     Self::resize_annotation_type(&mut ann.annotation_type, new_bounds);
                     ann.touch();
-                }
-                self.save_annotations();
+                    ann.annotation_type.type_name()
+                } else {
+                    "unknown"
+                };
+                nib_log!("human resized a{} {}", id.0, type_name);
+                self.save_annotations(cx);
                 cx.notify();
             }
             ToolResult::Handled => {
@@ -1023,14 +1062,13 @@ impl EditorView {
 
         // Compare with stored modification time
         if self.last_sidecar_modified != Some(current_modified) {
-            tracing::debug!("Sidecar file changed, reloading annotations");
             self.load_annotations();
             self.last_sidecar_modified = Some(current_modified);
         }
     }
 
     /// Save annotations to a sidecar JSON file or .nib file
-    fn save_annotations(&mut self) {
+    fn save_annotations(&mut self, cx: &mut Context<Self>) {
         // For .nib files, save to NibFile
         if let Some(ref nib) = self.nib_file {
             // Strategy: delete all existing annotations, then add all current ones
@@ -1100,8 +1138,8 @@ impl EditorView {
             }
         }
 
-        // Regenerate blur preview if blur annotations changed
-        self.regenerate_blur_preview_if_needed();
+        // Schedule debounced blur preview regeneration if blur annotations changed
+        self.schedule_blur_regeneration(cx);
     }
 
     /// Compute a hash of blur annotation state to detect changes
@@ -1123,21 +1161,104 @@ impl EditorView {
         hasher.finish()
     }
 
-    /// Regenerate the blur preview image if blur annotations have changed
-    fn regenerate_blur_preview_if_needed(&mut self) {
+    /// Schedule debounced blur preview regeneration (500ms delay)
+    /// Cancels any pending regeneration task when called, implementing trailing-edge debounce
+    fn schedule_blur_regeneration(&mut self, cx: &mut Context<Self>) {
         let new_hash = self.compute_blur_hash();
 
         // Check if blur annotations changed
         if new_hash == self.blur_annotations_hash {
             return;
         }
+
+        // Update hash immediately to track the change
         self.blur_annotations_hash = new_hash;
 
-        // If no blur annotations, clear the preview
+        // Handle immediate clear case (no blur annotations) synchronously
+        let has_blur = self.annotations.iter().any(|a| matches!(a.annotation_type, AnnotationType::Blur { .. }));
+        if !has_blur {
+            if let Some(ref path) = self.blur_preview_path {
+                let _ = std::fs::remove_file(path);
+            }
+            self.blur_preview_path = None;
+            self.blur_regen_task = None;
+            return;
+        }
+
+        // Collect blur regions and image path for the async task
         let blur_regions: Vec<_> = self.annotations.iter()
             .filter_map(|a| {
                 if let AnnotationType::Blur { region, intensity } = &a.annotation_type {
-                    Some((region.clone(), intensity.radius()))
+                    Some((*region, intensity.radius()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        let Some(image_path) = self.file_path.clone() else {
+            return;
+        };
+
+        // Cancel any pending task by replacing it (old task is dropped and cancelled)
+        // Get executor before async boundary
+        let executor = cx.background_executor().clone();
+
+        // Prepare the expected output path
+        let temp_dir = std::env::temp_dir();
+        let temp_filename = format!("nib_blur_preview_{}.png", std::process::id());
+        let temp_path = temp_dir.join(&temp_filename);
+
+        // Set the preview path immediately so renders can use it once ready
+        self.blur_preview_path = Some(temp_path.clone());
+
+        // Spawn debounced background task for blur processing
+        // The Task handle allows cancellation when a new blur change occurs
+        let executor_for_timer = executor.clone();
+        let task = executor.spawn(async move {
+            // Wait 500ms (debounce delay)
+            executor_for_timer.timer(Duration::from_millis(500)).await;
+
+            // Perform blur processing
+            let img = match image::open(&image_path) {
+                Ok(img) => img.to_rgba8(),
+                Err(e) => {
+                    tracing::warn!("Failed to load image for blur preview: {}", e);
+                    return;
+                }
+            };
+
+            let mut processed = img;
+            for (region, radius) in &blur_regions {
+                apply_blur_region(&mut processed, region, *radius);
+            }
+
+            match processed.save(&temp_path) {
+                Ok(()) => {
+                    tracing::debug!("Generated blur preview at {:?}", temp_path);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to save blur preview: {}", e);
+                }
+            }
+        });
+
+        self.blur_regen_task = Some(task);
+    }
+
+    /// Regenerate blur preview synchronously (used at startup)
+    fn regenerate_blur_preview_sync(&mut self) {
+        let new_hash = self.compute_blur_hash();
+
+        if new_hash == self.blur_annotations_hash {
+            return;
+        }
+        self.blur_annotations_hash = new_hash;
+
+        let blur_regions: Vec<_> = self.annotations.iter()
+            .filter_map(|a| {
+                if let AnnotationType::Blur { region, intensity } = &a.annotation_type {
+                    Some((*region, intensity.radius()))
                 } else {
                     None
                 }
@@ -1145,7 +1266,6 @@ impl EditorView {
             .collect();
 
         if blur_regions.is_empty() {
-            // Clean up old preview file
             if let Some(ref path) = self.blur_preview_path {
                 let _ = std::fs::remove_file(path);
             }
@@ -1153,7 +1273,6 @@ impl EditorView {
             return;
         }
 
-        // Load and process the original image
         let Some(ref image_path) = self.file_path else {
             return;
         };
@@ -1166,18 +1285,13 @@ impl EditorView {
             }
         };
 
-        // Apply blur regions
         let mut processed = img;
         for (region, radius) in &blur_regions {
             apply_blur_region(&mut processed, region, *radius);
         }
 
-        // Save to temp file
         let temp_dir = std::env::temp_dir();
-        let temp_filename = format!(
-            "nib_blur_preview_{}.png",
-            std::process::id()
-        );
+        let temp_filename = format!("nib_blur_preview_{}.png", std::process::id());
         let temp_path = temp_dir.join(temp_filename);
 
         match processed.save(&temp_path) {
@@ -1440,6 +1554,7 @@ impl EditorView {
             Tool::Rectangle,
             Tool::Ellipse,
             Tool::Line,
+            Tool::Pencil,
             Tool::Text,
             Tool::Number,
             Tool::Highlight,
@@ -1942,6 +2057,10 @@ impl EditorView {
             .bg(background_color)
             .relative()
             .overflow_hidden()
+            .track_focus(&self.focus_handle)
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_key_down(event, window, cx);
+            }))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, event, window, cx| {
                 // Grab focus so keyboard shortcuts work
                 this.focus_handle.focus(window);
@@ -2180,7 +2299,7 @@ impl EditorView {
         }
 
         // Save annotations to disk
-        self.save_annotations();
+        self.save_annotations(cx);
         cx.notify();
     }
 
@@ -2257,10 +2376,6 @@ impl Render for EditorView {
             .id("editor-container")
             .size_full()
             .relative()
-            .track_focus(&self.focus_handle)
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                this.handle_key_down(event, window, cx);
-            }))
             .child(self.render_canvas(cx))
             .child(self.render_toolbar(cx)) // Toolbar floats over canvas
     }

@@ -87,6 +87,15 @@ pub enum Command {
 
     /// Export .nib file to PNG (with annotations baked, as sidecar JSON, or as QML)
     Export(ExportArgs),
+
+    /// Query a tiled capture for point or region information
+    Query(QueryArgs),
+
+    /// Extract a region from a tiled capture at full resolution
+    Extract(ExtractArgs),
+
+    /// List tiles in a tiled capture at a specific zoom level
+    Tiles(TilesArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -136,6 +145,18 @@ pub struct CaptureArgs {
     /// Delay before capture (seconds)
     #[arg(short, long, default_value = "0")]
     pub delay: u32,
+
+    /// Enable tiled capture for large images (creates tile pyramid)
+    #[arg(long)]
+    pub tiled: bool,
+
+    /// Tile size in pixels (default: 512, only used with --tiled)
+    #[arg(long, default_value = "512")]
+    pub tile_size: u32,
+
+    /// Number of zoom levels (default: auto-calculated, only used with --tiled)
+    #[arg(long)]
+    pub zoom_levels: Option<u8>,
 }
 
 #[derive(Debug, Clone, ValueEnum)]
@@ -447,4 +468,58 @@ pub enum ExportFormat {
     Json,
     /// Export PNG with embedded QML tEXt chunk
     Qml,
+}
+
+#[derive(Parser, Debug)]
+pub struct QueryArgs {
+    /// Tiled capture directory (containing manifest.json)
+    pub capture_dir: PathBuf,
+
+    /// Query by point coordinates (format: "x,y")
+    #[arg(long)]
+    pub point: Option<String>,
+
+    /// Query by region (format: "x,y,width,height")
+    #[arg(long)]
+    pub region: Option<String>,
+
+    /// Zoom level for query (default: max resolution)
+    #[arg(long)]
+    pub zoom: Option<u8>,
+
+    /// Include OCR data in response (if available)
+    #[arg(long)]
+    pub include_ocr: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ExtractArgs {
+    /// Tiled capture directory (containing manifest.json)
+    pub capture_dir: PathBuf,
+
+    /// Region to extract (format: "x,y,width,height")
+    #[arg(short, long)]
+    pub region: String,
+
+    /// Output file path
+    #[arg(short, long)]
+    pub output: PathBuf,
+
+    /// Scale factor (default: 1.0 = full resolution)
+    #[arg(long, default_value = "1.0")]
+    pub scale: f64,
+}
+
+#[derive(Parser, Debug)]
+pub struct TilesArgs {
+    /// Tiled capture directory (containing manifest.json)
+    pub capture_dir: PathBuf,
+
+    /// Zoom level to list (default: max resolution)
+    #[arg(long)]
+    pub zoom: Option<u8>,
+
+    /// Show detailed bounds for each tile
+    #[arg(short, long)]
+    pub verbose: bool,
 }

@@ -297,7 +297,7 @@ impl SessionManager {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map_or(false, |ext| ext == "session") {
+            if path.extension().is_some_and(|ext| ext == "session") {
                 if let Ok(contents) = std::fs::read_to_string(&path) {
                     if let Ok(state) = serde_json::from_str::<SessionState>(&contents) {
                         sessions.push(state);

@@ -208,8 +208,8 @@ pub fn extract_text_regions(image_path: &std::path::Path) -> Result<Vec<TextRegi
             // Expand bounding box with padding (clamped to >= 0)
             let x = (rect.left() - PADDING_X).max(0);
             let y = (rect.top() - PADDING_Y).max(0);
-            let width = rect.width() as i32 + (PADDING_X * 2);
-            let height = rect.height() as i32 + (PADDING_Y * 2);
+            let width = rect.width() + (PADDING_X * 2);
+            let height = rect.height() + (PADDING_Y * 2);
 
             regions.push(TextRegion {
                 text,

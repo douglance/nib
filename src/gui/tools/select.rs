@@ -59,13 +59,6 @@ impl SelectTool {
         self.selected_ids.push(id);
     }
 
-    /// Add an annotation to the current selection
-    fn add_to_selection(&mut self, id: AnnotationId) {
-        if !self.selected_ids.contains(&id) {
-            self.selected_ids.push(id);
-        }
-    }
-
     /// Toggle an annotation in the selection (add if not present, remove if present)
     fn toggle_selection(&mut self, id: AnnotationId) {
         if let Some(position) = self.selected_ids.iter().position(|&selected| selected == id) {
@@ -452,7 +445,7 @@ impl Tool for SelectTool {
             }
             ToolEvent::KeyDown { key, modifiers, .. } => {
                 // Delete selected annotations with Delete or Backspace
-                if (key == "Backspace" || key == "Delete") && !self.selected_ids.is_empty() {
+                if (key == "backspace" || key == "delete") && !self.selected_ids.is_empty() {
                     let deleted_ids = self.selected_ids.clone();
                     self.clear_selection();
                     return ToolResult::Batch(
@@ -461,7 +454,7 @@ impl Tool for SelectTool {
                 }
 
                 // Escape - clear selection
-                if key == "Escape" {
+                if key == "escape" {
                     self.clear_selection();
                     return ToolResult::Handled;
                 }
@@ -470,10 +463,10 @@ impl Tool for SelectTool {
                 if !self.selected_ids.is_empty() {
                     let nudge_amount = if modifiers.shift { 10.0 } else { 1.0 };
                     let (delta_x, delta_y) = match key.as_str() {
-                        "ArrowLeft" | "Left" => (-nudge_amount, 0.0),
-                        "ArrowRight" | "Right" => (nudge_amount, 0.0),
-                        "ArrowUp" | "Up" => (0.0, -nudge_amount),
-                        "ArrowDown" | "Down" => (0.0, nudge_amount),
+                        "left" => (-nudge_amount, 0.0),
+                        "right" => (nudge_amount, 0.0),
+                        "up" => (0.0, -nudge_amount),
+                        "down" => (0.0, nudge_amount),
                         _ => return ToolResult::Ignored,
                     };
 

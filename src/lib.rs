@@ -33,6 +33,7 @@ pub mod capture;
 pub mod cli;
 pub mod collab;
 pub mod core;
+pub mod events;
 pub mod grid;
 pub mod gui;
 pub mod ocr;

@@ -223,7 +223,7 @@ impl<R: Read> QmlParser<R> {
 
         // End coordinates may be followed by label/severity
         let end_str = end_part
-            .split(|c| c == '-' || c == '!')
+            .split(['-', '!'])
             .next()
             .unwrap_or(end_part);
         let end = self.parse_point(end_str)?;
@@ -353,7 +353,7 @@ impl<R: Read> QmlParser<R> {
 
         let start = self.parse_point(start_str)?;
         let end_str = end_part
-            .split(|c| c == '-' || c == '!')
+            .split(['-', '!'])
             .next()
             .unwrap_or(end_part);
         let end = self.parse_point(end_str)?;
@@ -374,7 +374,7 @@ impl<R: Read> QmlParser<R> {
     fn parse_ellipse<'a>(&self, params: &'a str) -> QmlResult<(AnnotationType, &'a str)> {
         // Format: cx,cy,rx,ry or cx,cy,r (circle)
         let coords: Vec<&str> = params
-            .split(|c| c == ',' || c == '-' || c == '!')
+            .split([',', '-', '!'])
             .take(4)
             .collect();
 

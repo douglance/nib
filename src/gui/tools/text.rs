@@ -110,12 +110,12 @@ impl Tool for TextTool {
             }
             ToolEvent::KeyDown { key, key_char, .. } if self.state.active => {
                 match key.as_str() {
-                    "Enter" | "Return" => self.confirm_text(ctx),
-                    "Escape" => {
+                    "enter" | "return" => self.confirm_text(ctx),
+                    "escape" => {
                         self.state.reset();
                         ToolResult::ExitMode
                     }
-                    "Backspace" => {
+                    "backspace" => {
                         self.state.backspace();
                         ToolResult::Handled
                     }
