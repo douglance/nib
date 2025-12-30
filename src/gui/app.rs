@@ -401,7 +401,9 @@ impl NibApp {
                 .expect("Failed to open window");
 
                 // Quit the app when the window is closed
-                cx.on_window_closed(|cx| cx.shutdown()).detach();
+                cx.on_window_closed(|_cx| {
+                    std::process::exit(0);
+                }).detach();
             });
 
         Ok(())
@@ -896,7 +898,7 @@ impl EditorView {
                         let (screen_x, screen_y) = self.scale_point(position.x, position.y);
                         // Adjust for font height (text is drawn with baseline at position)
                         let (scale, _, _) = self.calculate_scale_and_offset();
-                        let adjusted_screen_y = screen_y + (16.0 * scale); // font_size * scale
+                        let adjusted_screen_y = screen_y + (32.0 * scale); // font_size * scale
                         self.text_input_state = Some(TextInputState {
                             screen_x,
                             screen_y: adjusted_screen_y,
@@ -2328,7 +2330,7 @@ impl EditorView {
         } else {
             // Create new annotation
             // Convert screen coords to image coords for storage
-            let font_size = 16.0;
+            let font_size = 32.0;
             let (scale, _, _) = self.calculate_scale_and_offset();
             let scaled_font_size = font_size * scale;
 
