@@ -1421,7 +1421,7 @@ impl EditorView {
                         div()
                             .text_color(text_color)
                             .text_size(px(10.))
-                            .child(tool.name())
+                            .child(format!("{} ({})", tool.name(), tool.shortcut().to_ascii_uppercase()))
                     )
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.select_tool(tool_copy, cx);
@@ -1869,6 +1869,23 @@ impl EditorView {
     /// Handle keyboard input
     fn handle_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
+
+        // Check for tool shortcuts (single letter, no modifiers, not in text input mode)
+        if !keystroke.modifiers.shift
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+            && !keystroke.modifiers.platform
+            && self.text_input_state.is_none()
+        {
+            if let Some(key_char) = keystroke.key_char.as_ref().and_then(|s| s.chars().next()) {
+                for &tool_id in Tool::all() {
+                    if tool_id.shortcut() == key_char {
+                        self.select_tool(tool_id, cx);
+                        return;
+                    }
+                }
+            }
+        }
 
         // Extract modifier keys from the keystroke
         let modifiers = Modifiers {
