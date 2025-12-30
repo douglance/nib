@@ -48,7 +48,7 @@ use crate::gui::canvas::{Canvas, ZOOM_FACTOR};
 use crate::gui::toolbar::Tool;
 use crate::gui::tools::{
     Modifiers, MouseButton as ToolMouseButton, TextTool, ToolContext, ToolEvent, ToolId,
-    ToolManager, ToolMode, ToolPreview, ToolResult,
+    ToolManager, ToolMode, ToolPreview, ToolResult, TEXT_FONT_SIZE,
 };
 use crate::storage::nib_file::NibFile;
 use crate::nib_log;
@@ -364,7 +364,6 @@ impl NibApp {
 
     /// Launch the GUI application
     pub fn run(self) -> anyhow::Result<()> {
-        let t0 = std::time::Instant::now();
         let file_path = self.file_path.clone();
 
         // Get the assets base path - try manifest dir first, then executable dir
@@ -376,12 +375,10 @@ impl NibApp {
                     .and_then(|p| p.parent().map(PathBuf::from))
                     .unwrap_or_else(|| PathBuf::from("."))
             });
-        eprintln!("[PERF] NibApp::run assets_base: {:?}", t0.elapsed());
 
         Application::new()
             .with_assets(Assets { base: assets_base })
             .run(move |cx: &mut App| {
-                eprintln!("[PERF] NibApp::run inside GPUI callback: {:?}", t0.elapsed());
                 let window_size: Size<gpui::Pixels> = size(px(1200.), px(800.));
 
                 let options = WindowOptions {
@@ -394,9 +391,7 @@ impl NibApp {
                 };
 
                 cx.open_window(options, |_window, cx| {
-                    let view = cx.new(|cx| EditorView::new(file_path.clone(), cx));
-                    eprintln!("[PERF] NibApp::run window opened: {:?}", t0.elapsed());
-                    view
+                    cx.new(|cx| EditorView::new(file_path.clone(), cx))
                 })
                 .expect("Failed to open window");
 
@@ -468,8 +463,6 @@ pub struct EditorView {
 impl EditorView {
     /// Create a new editor view
     pub fn new(file_path: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
-        let t0 = std::time::Instant::now();
-
         // Check if this is a .nib file
         let is_nib_file = file_path
             .as_ref()
@@ -533,7 +526,6 @@ impl EditorView {
             };
             (file_path.clone(), None, None, width, height)
         };
-        let t1 = t0.elapsed();
 
         // Estimate canvas size (window 1200x800 minus toolbar ~44px)
         let canvas_width = 1200.0_f32;
@@ -568,27 +560,13 @@ impl EditorView {
             blur_annotations_hash: 0,
             blur_regen_task: None,
         };
-        let t2 = t0.elapsed();
 
         view.load_annotations();
-        let t3 = t0.elapsed();
-
         view.regenerate_blur_preview_sync();
-        let t4 = t0.elapsed();
-
         view.update_sidecar_modified_time();
         if view.nib_file.is_some() {
             view.update_nib_modified_time();
         }
-        let t5 = t0.elapsed();
-
-        eprintln!("[PERF] EditorView::new breakdown:");
-        eprintln!("[PERF]   file/nib load:    {:?}", t1);
-        eprintln!("[PERF]   struct init:      {:?} (+{:?})", t2, t2 - t1);
-        eprintln!("[PERF]   load_annotations: {:?} (+{:?})", t3, t3 - t2);
-        eprintln!("[PERF]   blur_preview:     {:?} (+{:?})", t4, t4 - t3);
-        eprintln!("[PERF]   update_times:     {:?} (+{:?})", t5, t5 - t4);
-        eprintln!("[PERF]   TOTAL:            {:?}", t5);
 
         view
     }
@@ -898,7 +876,7 @@ impl EditorView {
                         let (screen_x, screen_y) = self.scale_point(position.x, position.y);
                         // Adjust for font height (text is drawn with baseline at position)
                         let (scale, _, _) = self.calculate_scale_and_offset();
-                        let adjusted_screen_y = screen_y + (32.0 * scale); // font_size * scale
+                        let adjusted_screen_y = screen_y + (TEXT_FONT_SIZE as f32 * scale);
                         self.text_input_state = Some(TextInputState {
                             screen_x,
                             screen_y: adjusted_screen_y,
@@ -2308,54 +2286,39 @@ impl EditorView {
     }
 
     /// Confirm text input and create/update the annotation
+    /// Delegates to TextTool to avoid duplicating annotation creation logic
     fn confirm_text_input(&mut self, cx: &mut Context<Self>) {
-        let Some(input_state) = self.text_input_state.take() else {
+        if self.text_input_state.is_none() {
             return;
+        }
+
+        // Delegate to TextTool - it owns the text content and position
+        // Build context inline to avoid borrow conflicts with tool_manager
+        let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
+        let result = {
+            let ctx = ToolContext {
+                style: self.current_style,
+                custom_color: self.custom_color,
+                stroke_width: 2.0,
+                fill_enabled: false,
+                image_size: (self.image_width, self.image_height),
+                scale,
+                offset: (offset_x, offset_y),
+                annotations: &self.annotations,
+                min_drag_distance: 5.0,
+            };
+            if let Some(text_tool) = self.tool_manager.get_tool_as_mut::<TextTool>(ToolId::Text) {
+                text_tool.confirm_text(&ctx)
+            } else {
+                ToolResult::Ignored
+            }
         };
 
-        // Only create annotation if there's actual content
-        if input_state.content.trim().is_empty() {
-            cx.notify();
-            return;
-        }
+        // Clear EditorView's render state
+        self.text_input_state = None;
 
-        if let Some(annotation_id) = input_state.editing_annotation_id {
-            // Update existing annotation
-            if let Some(annotation) = self.annotations.iter_mut().find(|a| a.id == annotation_id) {
-                if let AnnotationType::Text { content, .. } = &mut annotation.annotation_type {
-                    *content = input_state.content;
-                    annotation.touch();
-                }
-            }
-        } else {
-            // Create new annotation
-            // Convert screen coords to image coords for storage
-            let font_size = 32.0;
-            let (scale, _, _) = self.calculate_scale_and_offset();
-            let scaled_font_size = font_size * scale;
-
-            // Offset screen position up by scaled font height (to match rendering)
-            let adjusted_screen_y = input_state.screen_y - scaled_font_size;
-
-            // Convert to image coordinates
-            let (img_x, img_y) = self.screen_to_image_coords(input_state.screen_x, adjusted_screen_y);
-            let position = NibPoint::new(img_x, img_y);
-
-            let annotation = Annotation::new(AnnotationType::Text {
-                position,
-                content: input_state.content,
-                font_size: font_size as f64,
-                align: crate::core::types::TextAlign::Left,
-                background: None,
-                max_width: None,
-            }).with_color(self.effective_color())
-            .with_severity(self.current_style.severity());
-            self.annotations.push(annotation);
-        }
-
-        // Save annotations to disk
-        self.save_annotations(cx);
-        cx.notify();
+        // Process the result through normal flow
+        self.process_tool_result(result, cx);
     }
 
     /// Render inline text editing directly on canvas (Figma-style)
@@ -2367,7 +2330,7 @@ impl EditorView {
 
         // Get scale for font sizing
         let (scale, _, _) = self.calculate_scale_and_offset();
-        let font_size = 32.0_f32;
+        let font_size = TEXT_FONT_SIZE as f32;
         let scaled_font_size = font_size * scale;
 
         // Offset text up so it appears above the click point

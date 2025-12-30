@@ -16,9 +16,7 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    let t0 = std::time::Instant::now();
     let cli = Cli::parse();
-    eprintln!("[PERF] cli parse: {:?}", t0.elapsed());
 
     // Initialize logging
     let filter = if cli.verbose {
@@ -34,10 +32,8 @@ async fn run() -> Result<()> {
 
     // Initialize storage
     storage::init_storage()?;
-    eprintln!("[PERF] storage init: {:?}", t0.elapsed());
 
     // Dispatch command
-    eprintln!("[PERF] dispatch command: {:?}", t0.elapsed());
     match &cli.command {
         Command::Capture(args) => cli::run_capture(args),
         Command::Annotate(args) => cli::run_annotate(args),

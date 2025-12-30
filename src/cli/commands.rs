@@ -553,7 +553,6 @@ pub fn run_folder() -> Result<()> {
 
 /// Execute the gui command (launch the graphical editor)
 pub fn run_gui(args: &GuiArgs) -> Result<()> {
-    let t0 = std::time::Instant::now();
     tracing::info!(?args, "Launching GUI");
 
     let file_path = args.file.clone();
@@ -596,17 +595,14 @@ pub fn run_gui(args: &GuiArgs) -> Result<()> {
             }
         }
     }
-    eprintln!("[PERF] run_gui session setup: {:?}", t0.elapsed());
 
     // Create and run the app
     let app = match file_path.clone() {
         Some(path) => NibApp::with_file(path),
         None => NibApp::new(),
     };
-    eprintln!("[PERF] run_gui app created: {:?}", t0.elapsed());
 
     let result = app.run().map_err(|e| crate::core::NibError::Other(e.to_string()));
-    eprintln!("[PERF] run_gui app.run() returned: {:?}", t0.elapsed());
 
     // Unregister session for .nib files when GUI closes
     if is_nib_file {
