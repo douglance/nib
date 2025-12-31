@@ -2771,6 +2771,478 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
 /// Run the MCP server for Claude Code integration
 pub async fn run_mcp_server(args: &McpServerArgs) -> Result<()> {
     tracing::info!(?args, "Starting MCP server");
-    
+
     crate::mcp::run_mcp_server(args.image.clone()).await
+}
+
+/// Wait for human annotation feedback, spawn GUI, render, and exit
+///
+/// This command is optimized for Claude-human collaboration:
+/// 1. Convert image to .nib if needed
+/// 2. Spawn GUI as subprocess (unless --no-gui)
+/// 3. Block watching for annotation changes
+/// 4. On annotation detected: kill GUI, render, output JSON
+pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
+    tracing::info!(?args, "Running feedback");
+
+    // Verify file exists
+    if !args.file.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    // Determine if this is an image or .nib file
+    let extension = args.file.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let is_image = matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif");
+    let is_nib = extension == "nib";
+
+    if !is_image && !is_nib {
+        return Err(crate::core::NibError::Other(format!(
+            "Unsupported file type: {}. Expected .nib or image (.png, .jpg, .webp)",
+            args.file.display()
+        )));
+    }
+
+    // Get or create the .nib file path
+    let nib_path = if is_image {
+        let nib_path = args.file.with_extension("nib");
+        if !nib_path.exists() {
+            let image_data = std::fs::read(&args.file)?;
+            let img = image::load_from_memory(&image_data).map_err(|e| {
+                crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+            })?;
+            let (width, height) = (img.width(), img.height());
+            NibFile::create(&nib_path, &image_data, &extension, width, height)?;
+        }
+        nib_path
+    } else {
+        args.file.clone()
+    };
+
+    // Spawn GUI as subprocess (unless --no-gui)
+    let mut gui_process = if !args.no_gui {
+        // Get path to current executable
+        let exe_path = std::env::current_exe().map_err(|e| {
+            crate::core::NibError::Other(format!("Failed to get executable path: {}", e))
+        })?;
+
+        let child = std::process::Command::new(&exe_path)
+            .arg("gui")
+            .arg(&nib_path)
+            .spawn()
+            .map_err(|e| {
+                crate::core::NibError::Other(format!("Failed to spawn GUI: {}", e))
+            })?;
+
+        Some(child)
+    } else {
+        None
+    };
+
+    // Open the .nib file to get initial state
+    let nib = NibFile::open(&nib_path)?;
+    let last_modified_at = nib.latest_annotation_modified_at()?.unwrap_or(0);
+    drop(nib);
+
+    let poll_duration = Duration::from_millis(100);
+    let start_time = std::time::Instant::now();
+    let timeout_duration = if args.timeout > 0 {
+        Some(Duration::from_secs(args.timeout))
+    } else {
+        None
+    };
+
+    // Watch loop - wait for annotations
+    let annotations_received = loop {
+        // Check timeout
+        if let Some(timeout) = timeout_duration {
+            if start_time.elapsed() >= timeout {
+                // Kill GUI on timeout
+                if let Some(ref mut proc) = gui_process {
+                    let _ = proc.kill();
+                }
+
+                let output = serde_json::json!({
+                    "event": "timeout",
+                    "reason": "no_annotations"
+                });
+                println!("{}", serde_json::to_string(&output).unwrap_or_default());
+                return Ok(());
+            }
+        }
+
+        tokio::time::sleep(poll_duration).await;
+
+        // Reopen the file to check for changes
+        let nib = match NibFile::open(&nib_path) {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("Error opening .nib file: {}", e);
+                continue;
+            }
+        };
+
+        // Check for new/modified annotations since last check
+        let new_annotations = match nib.list_annotations_since(last_modified_at) {
+            Ok(a) => a,
+            Err(e) => {
+                tracing::warn!("Error listing annotations: {}", e);
+                continue;
+            }
+        };
+
+        if !new_annotations.is_empty() {
+            break new_annotations;
+        }
+    };
+
+    // Kill GUI
+    if let Some(ref mut proc) = gui_process {
+        let _ = proc.kill();
+    }
+
+    // Open the .nib file to get image info for OCR and zoom
+    let nib = NibFile::open(&nib_path)?;
+    let (image_data, image_info) = nib.get_image()?;
+    let all_annotations = nib.list_annotations()?;
+
+    // Determine the original image path for OCR (we need the PNG, not .nib)
+    let original_image_path = if is_image {
+        args.file.clone()
+    } else {
+        // For .nib files, we need to extract image temporarily for OCR
+        let temp_image_path = nib_path.with_extension("_temp_ocr.png");
+        std::fs::write(&temp_image_path, &image_data)?;
+        temp_image_path
+    };
+
+    // Build full annotation summaries with OCR context
+    let annotation_summaries: Vec<serde_json::Value> = annotations_received
+        .iter()
+        .map(|ann| {
+            let mut full_json = annotation_to_full_json(ann);
+
+            // Add OCR "near" - what text is closest to the annotation
+            let bounds = ann.annotation_type.bounds();
+            if let Some(near) = extract_ocr_context(
+                &original_image_path,
+                &bounds,
+                200, // padding
+                image_info.width,
+                image_info.height,
+            ) {
+                full_json
+                    .as_object_mut()
+                    .unwrap()
+                    .insert("near".to_string(), near);
+            }
+
+            full_json
+        })
+        .collect();
+
+    // Render (unless --no-render)
+    let rendered_path = if !args.no_render {
+        // Determine rendered output path
+        let stem = nib_path.file_stem().unwrap_or_default().to_string_lossy();
+        let rendered_path = nib_path.with_file_name(format!("{}.rendered.png", stem));
+
+        // Create NibImage and export with baked annotations
+        let nib_image = NibImage {
+            image_data: image_data.clone(),
+            width: image_info.width,
+            height: image_info.height,
+            source: crate::core::ImageSource::File(nib_path.clone()),
+            annotations: all_annotations,
+            title: None,
+            description: None,
+            tags: Vec::new(),
+            file_path: Some(nib_path.clone()),
+            created_at: SystemTime::now(),
+            modified_at: SystemTime::now(),
+        };
+
+        let options = export::ExportOptions {
+            bake_annotations: true,
+            ..Default::default()
+        };
+        export::export_image(&nib_image, &rendered_path, &options)?;
+
+        Some(rendered_path)
+    } else {
+        None
+    };
+
+    // Generate zoom image centered on annotations
+    let zoom_info = if !annotations_received.is_empty() {
+        // Calculate combined bounds of all new annotations
+        let mut min_x = f64::MAX;
+        let mut min_y = f64::MAX;
+        let mut max_x = f64::MIN;
+        let mut max_y = f64::MIN;
+
+        for ann in &annotations_received {
+            let bounds = ann.annotation_type.bounds();
+            min_x = min_x.min(bounds.x);
+            min_y = min_y.min(bounds.y);
+            max_x = max_x.max(bounds.x + bounds.width);
+            max_y = max_y.max(bounds.y + bounds.height);
+        }
+
+        let combined_bounds = crate::core::Region::new(
+            min_x,
+            min_y,
+            max_x - min_x,
+            max_y - min_y,
+        );
+
+        // Use rendered image for zoom if available, otherwise original
+        let source_for_zoom = rendered_path
+            .as_ref()
+            .map(|p| p.as_path())
+            .unwrap_or(&original_image_path);
+
+        let stem = nib_path.file_stem().unwrap_or_default().to_string_lossy();
+        let zoom_path = nib_path.with_file_name(format!("{}.zoom.png", stem));
+
+        match generate_zoom_image(
+            source_for_zoom,
+            &zoom_path,
+            &combined_bounds,
+            200, // padding
+            50,  // grid spacing
+            image_info.width,
+            image_info.height,
+        ) {
+            Ok(zoom_json) => Some(zoom_json),
+            Err(e) => {
+                tracing::warn!("Failed to generate zoom image: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Clean up temporary image if we created one
+    if !is_image {
+        let temp_path = nib_path.with_extension("_temp_ocr.png");
+        let _ = std::fs::remove_file(&temp_path);
+    }
+
+    // Output minimal JSON - recipient knows nib well
+    let zoom_path = zoom_info
+        .as_ref()
+        .and_then(|z| z.get("path"))
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string());
+
+    // For single annotation, output flat structure
+    // For multiple, output array
+    if annotation_summaries.len() == 1 {
+        let mut output = annotation_summaries[0].clone();
+        if let Some(path) = &zoom_path {
+            output.as_object_mut().unwrap().insert("zoom".to_string(), serde_json::json!(path));
+        }
+        println!("{}", serde_json::to_string(&output).unwrap_or_default());
+    } else {
+        let output = serde_json::json!({
+            "annotations": annotation_summaries,
+            "zoom": zoom_path
+        });
+        println!("{}", serde_json::to_string(&output).unwrap_or_default());
+    }
+
+    Ok(())
+}
+
+// =============================================================================
+// Feedback Helper Functions
+// =============================================================================
+
+/// Serialize annotation to minimal JSON - just type, key coord, and content if text
+fn annotation_to_full_json(ann: &crate::core::Annotation) -> serde_json::Value {
+    use crate::core::AnnotationType;
+
+    let type_name = ann.annotation_type.type_name();
+
+    // Extract key coordinate and optional content
+    let (at, content) = match &ann.annotation_type {
+        AnnotationType::Arrow { end, .. } => ([end.x as i32, end.y as i32], None),
+        AnnotationType::Box { region, .. } => {
+            ([region.x as i32, region.y as i32], None)
+        }
+        AnnotationType::Text { position, content, .. } => {
+            ([position.x as i32, position.y as i32], Some(content.clone()))
+        }
+        AnnotationType::Number { position, value, .. } => {
+            ([position.x as i32, position.y as i32], Some(value.to_string()))
+        }
+        AnnotationType::Blur { region, .. } => ([region.x as i32, region.y as i32], None),
+        AnnotationType::Highlight { region, .. } => ([region.x as i32, region.y as i32], None),
+        AnnotationType::Line { end, .. } => ([end.x as i32, end.y as i32], None),
+        AnnotationType::Ellipse { center, .. } => ([center.x as i32, center.y as i32], None),
+        AnnotationType::Crop { region } => ([region.x as i32, region.y as i32], None),
+        AnnotationType::Path { points, .. } => {
+            let first = points.first().map(|p| [p.x as i32, p.y as i32]).unwrap_or([0, 0]);
+            (first, None)
+        }
+    };
+
+    let mut json = serde_json::json!({
+        "type": type_name,
+        "at": at
+    });
+
+    if let Some(c) = content {
+        json.as_object_mut().unwrap().insert("content".to_string(), serde_json::json!(c));
+    }
+
+    json
+}
+
+/// Extract nearest OCR text around an annotation - returns just the closest text
+fn extract_ocr_context(
+    image_path: &Path,
+    bounds: &crate::core::Region,
+    padding: i32,
+    image_width: u32,
+    image_height: u32,
+) -> Option<serde_json::Value> {
+    use crate::ocr;
+
+    // Calculate padded region (clamped to image bounds)
+    let x = (bounds.x as i32 - padding).max(0);
+    let y = (bounds.y as i32 - padding).max(0);
+    let right = ((bounds.x + bounds.width) as i32 + padding).min(image_width as i32);
+    let bottom = ((bounds.y + bounds.height) as i32 + padding).min(image_height as i32);
+    let width = right - x;
+    let height = bottom - y;
+
+    if width < 10 || height < 10 {
+        return None;
+    }
+
+    let ocr_region = ocr::Region::new(x, y, width, height);
+
+    match ocr::find_text(image_path, None, Some(ocr_region)) {
+        Ok(text_regions) if !text_regions.is_empty() => {
+            // Find nearest text to annotation center
+            let center_x = bounds.x + bounds.width / 2.0;
+            let center_y = bounds.y + bounds.height / 2.0;
+
+            text_regions
+                .iter()
+                .min_by(|a, b| {
+                    let dist_a = {
+                        let ax = a.x as f64 + a.width as f64 / 2.0;
+                        let ay = a.y as f64 + a.height as f64 / 2.0;
+                        ((ax - center_x).powi(2) + (ay - center_y).powi(2)).sqrt()
+                    };
+                    let dist_b = {
+                        let bx = b.x as f64 + b.width as f64 / 2.0;
+                        let by = b.y as f64 + b.height as f64 / 2.0;
+                        ((bx - center_x).powi(2) + (by - center_y).powi(2)).sqrt()
+                    };
+                    dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|r| serde_json::json!(r.text))
+        }
+        _ => None,
+    }
+}
+
+/// Generate a zoom image centered on the annotation with grid overlay
+fn generate_zoom_image(
+    image_path: &Path,
+    output_path: &Path,
+    bounds: &crate::core::Region,
+    padding: u32,
+    grid_spacing: u32,
+    image_width: u32,
+    image_height: u32,
+) -> Result<serde_json::Value> {
+    use crate::grid::{self, GridColor, GridConfig};
+
+    // Calculate zoom region (annotation + padding, clamped to image bounds)
+    let zoom_x = (bounds.x as i32 - padding as i32).max(0) as u32;
+    let zoom_y = (bounds.y as i32 - padding as i32).max(0) as u32;
+    let zoom_right = ((bounds.x + bounds.width) as u32 + padding).min(image_width);
+    let zoom_bottom = ((bounds.y + bounds.height) as u32 + padding).min(image_height);
+    let zoom_width = zoom_right - zoom_x;
+    let zoom_height = zoom_bottom - zoom_y;
+
+    // Load image and convert to RGBA
+    let image_data = std::fs::read(image_path)?;
+    let img = image::load_from_memory(&image_data)
+        .map_err(|e| {
+            crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+        })?
+        .to_rgba8();
+
+    // Crop to zoom region
+    let mut output_img =
+        image::imageops::crop_imm(&img, zoom_x, zoom_y, zoom_width, zoom_height).to_image();
+
+    // Build and render grid overlay
+    let tile_bounds =
+        crate::core::TileBounds::from_corners(0.0, 0.0, zoom_width as f64, zoom_height as f64);
+
+    let config = GridConfig {
+        spacing: grid_spacing,
+        major_interval: 4, // Major line every 4 cells (200px if spacing=50)
+        color: GridColor::from_hex("#80808080").unwrap_or(GridColor {
+            r: 128,
+            g: 128,
+            b: 128,
+            a: 128,
+        }),
+        major_color: GridColor::from_hex("#ff000080").unwrap_or(GridColor {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 128,
+        }),
+        label_font_size: 10.0,
+        show_labels: true,
+    };
+
+    let index = grid::build_grid_index(zoom_width, zoom_height, &config, None);
+    grid::render_grid(&mut output_img, &index, &tile_bounds, &config);
+
+    // Save zoom image
+    output_img.save(output_path).map_err(|e| {
+        crate::core::NibError::Image(crate::core::ImageError::EncodeError(e.to_string()))
+    })?;
+
+    // Calculate center of annotation in original image coordinates
+    let center_x = bounds.x + bounds.width / 2.0;
+    let center_y = bounds.y + bounds.height / 2.0;
+
+    // Calculate a zoom-out region (2x the current padding)
+    let zoom_out_padding = padding * 2;
+    let zoom_out_x1 = (center_x as i32 - zoom_out_padding as i32).max(0);
+    let zoom_out_y1 = (center_y as i32 - zoom_out_padding as i32).max(0);
+    let zoom_out_x2 = (center_x as i32 + zoom_out_padding as i32).min(image_width as i32);
+    let zoom_out_y2 = (center_y as i32 + zoom_out_padding as i32).min(image_height as i32);
+
+    Ok(serde_json::json!({
+        "path": output_path.display().to_string(),
+        "region": [zoom_x, zoom_y, zoom_width, zoom_height],
+        "center": [center_x as i32, center_y as i32],
+        "grid_spacing": grid_spacing,
+        "zoom_out_command": format!(
+            "nib grid {} --region '{},{},{},{}' --spacing {} -o {}",
+            image_path.display(),
+            zoom_out_x1, zoom_out_y1, zoom_out_x2, zoom_out_y2,
+            grid_spacing,
+            output_path.with_file_name(
+                output_path.file_stem().unwrap_or_default().to_string_lossy().to_string() + "_wide.png"
+            ).display()
+        )
+    }))
 }

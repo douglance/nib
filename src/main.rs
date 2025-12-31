@@ -25,7 +25,10 @@ async fn run() -> Result<()> {
     // Default mode (nib <file>) also needs quiet logging
     let is_default_mode = cli.command.is_none() && cli.file.is_some();
 
-    if is_mcp_server || is_default_mode {
+    // Feedback mode also needs quiet logging (JSON output)
+    let is_feedback_mode = matches!(&cli.command, Some(Command::Feedback(_)));
+
+    if is_mcp_server || is_default_mode || is_feedback_mode {
         // MCP server and default mode: log to stderr only, no ANSI colors
         tracing_subscriber::registry()
             .with(tracing_subscriber::EnvFilter::new("warn"))
@@ -86,6 +89,7 @@ async fn run() -> Result<()> {
         Some(Command::Extract(args)) => cli::run_extract(&args),
         Some(Command::Tiles(args)) => cli::run_tiles(&args, &cli.format),
         Some(Command::McpServer(args)) => cli::run_mcp_server(&args).await,
+        Some(Command::Feedback(args)) => cli::run_feedback(&args).await,
         None => {
             eprintln!("Error: No file or command specified. Use --help for usage.");
             std::process::exit(1);

@@ -58,6 +58,8 @@ nib render image.png
 | `validate` | Check QML syntax validity |
 | `find-text` | OCR text search in image |
 | `grid` | Add coordinate grid overlay |
+| `feedback` | Wait for human annotation feedback (opens GUI, returns JSON) |
+| `watch` | Watch a .nib file for annotation changes |
 | `list` | List recent captures |
 | `info` | Show image and annotation details |
 
@@ -80,6 +82,18 @@ nib remove-annotation shot.png a1
 
 # 5. When done, clear all if needed
 nib clear-annotations shot.png
+```
+
+## Image-First Feedback Loop (Fast)
+
+Nib is designed for image-based communication. After each annotation event, the agent must inspect the image (zoom first, then full if unclear).
+
+```bash
+# Wait for human feedback (opens GUI, exits on first annotation)
+nib feedback shot.png -t 120
+
+# Zoom in around the annotation (x1,y1,x2,y2)
+nib grid shot.rendered.png --region "1900,650,2300,850" -o shot.zoom.png
 ```
 
 ## Annotation Types

@@ -386,7 +386,7 @@ impl NibApp {
                         origin: Point::default(),
                         size: window_size,
                     })),
-                    kind: WindowKind::Normal,
+                    kind: WindowKind::PopUp, // Float on top of all windows
                     ..Default::default()
                 };
 

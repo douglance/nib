@@ -20,6 +20,10 @@
 5. **Queryable** - Agents can query dimensions, OCR text, existing annotations via CLI
 6. **Portable** - Works on any platform with SQLite
 
+## Image-First Verification (Required for Agents)
+
+Annotations are pointers to pixels. Agents must inspect the image after each new annotation. Start with a zoomed crop around the annotation (use `nib grid` or `nib extract`), then zoom out if unclear. Use grid metadata to locate coordinates precisely.
+
 ## File Extension
 
 - Primary: `.nib`

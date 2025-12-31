@@ -113,12 +113,33 @@ pub enum Command {
 
     /// Start MCP server for Claude Code integration
     McpServer(McpServerArgs),
+
+    /// Wait for human annotation feedback, spawn GUI, then render and exit
+    Feedback(FeedbackArgs),
 }
 
 #[derive(Parser, Debug)]
 pub struct McpServerArgs {
     /// Optional image file to work with
     pub image: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct FeedbackArgs {
+    /// Image or .nib file to get feedback on
+    pub file: PathBuf,
+
+    /// Timeout in seconds (default: 60, 0 = no timeout)
+    #[arg(short = 't', long, default_value = "60")]
+    pub timeout: u64,
+
+    /// Don't auto-open GUI (use when GUI is already open)
+    #[arg(long)]
+    pub no_gui: bool,
+
+    /// Don't auto-render after annotation detected
+    #[arg(long)]
+    pub no_render: bool,
 }
 
 #[derive(Parser, Debug)]
