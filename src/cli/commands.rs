@@ -1711,7 +1711,7 @@ pub async fn run_watch(args: &super::args::WatchArgs) -> Result<()> {
     let initial_count = nib.annotation_count()?;
     drop(nib);
 
-    if !args.json {
+    if !args.json && !args.once {
         println!("Watching: {}", args.file.display());
         println!("Initial annotations: {}", initial_count);
         println!("Poll interval: {}ms", args.interval);
@@ -1719,9 +1719,29 @@ pub async fn run_watch(args: &super::args::WatchArgs) -> Result<()> {
     }
 
     let poll_duration = Duration::from_millis(args.interval);
+    let start_time = std::time::Instant::now();
+    let timeout_duration = if args.timeout > 0 {
+        Some(Duration::from_secs(args.timeout))
+    } else {
+        None
+    };
 
     // Watch loop
     loop {
+        // Check timeout (only in --once mode)
+        if args.once {
+            if let Some(timeout) = timeout_duration {
+                if start_time.elapsed() >= timeout {
+                    if args.json {
+                        println!(r#"{{"event":"timeout","reason":"no_events"}}"#);
+                    } else {
+                        println!("Timeout: no events after {}s", args.timeout);
+                    }
+                    return Ok(());
+                }
+            }
+        }
+
         tokio::time::sleep(poll_duration).await;
 
         // Reopen the file to check for changes (WAL mode allows concurrent access)
@@ -1777,6 +1797,11 @@ pub async fn run_watch(args: &super::args::WatchArgs) -> Result<()> {
                         annotation.annotation_type.type_name()
                     );
                 }
+            }
+
+            // In --once mode, exit after first event batch
+            if args.once {
+                return Ok(());
             }
         }
     }

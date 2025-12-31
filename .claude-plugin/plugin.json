@@ -10,5 +10,5 @@
   "repository": "https://github.com/douglance/nib",
   "license": "Commercial",
   "keywords": ["screenshot", "annotation", "image", "ocr", "visual"],
-  "mcpServers": "../.mcp.json"
+  "mcpServers": "./mcp.json"
 }

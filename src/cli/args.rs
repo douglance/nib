@@ -435,6 +435,14 @@ pub struct WatchArgs {
     /// Poll interval in milliseconds
     #[arg(long, default_value = "100")]
     pub interval: u64,
+
+    /// Exit after first event (blocking mode for agents)
+    #[arg(long)]
+    pub once: bool,
+
+    /// Timeout in seconds (only with --once, 0 = no timeout)
+    #[arg(long, default_value = "30")]
+    pub timeout: u64,
 }
 
 #[derive(Parser, Debug)]
