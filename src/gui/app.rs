@@ -2474,6 +2474,9 @@ impl Focusable for EditorView {
 
 impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        // Schedule continuous re-renders to detect external file changes when idle
+        window.request_animation_frame();
+
         // Update canvas dimensions from actual window size
         let viewport = window.viewport_size();
         let viewport_width: f32 = viewport.width.into();
