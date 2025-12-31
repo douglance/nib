@@ -80,9 +80,9 @@ function tryCargoInstall() {
 
   console.log('Building nib from source (this may take a few minutes)...');
 
-  // Build to a temp location
+  // Build to a temp location - install from GitHub since crates.io name is taken
   const tempRoot = path.join(__dirname, '..', '.cargo-tmp');
-  execSync(`cargo install nib --root "${tempRoot}"`, {
+  execSync(`cargo install --git https://github.com/douglance/nib --root "${tempRoot}"`, {
     stdio: 'inherit',
   });
 
