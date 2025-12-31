@@ -816,11 +816,13 @@ fn run_annotations_nib(args: &AnnotationsArgs) -> Result<()> {
     Ok(())
 }
 
-/// Execute the add-annotation command (add annotation to sidecar file)
+/// Execute the add-annotation command (add annotation to sidecar file or .nib file)
 pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
+    use crate::core::{Annotation, AnnotationType, ArrowHead, BlurIntensity, Color, Point, Region, StrokeStyle, TextAlign};
+
     tracing::info!(?args, "Running add-annotation");
 
-    // Verify the image file exists
+    // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
             crate::core::StorageError::NotFound(format!(
@@ -830,6 +832,108 @@ pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
         ));
     }
 
+    // Parse color from hex string
+    let color = parse_hex_color(&args.color).unwrap_or(Color::RED);
+
+    // Check if this is a .nib file (SQLite format) or regular image (JSON sidecar)
+    let is_nib_file = args.file.extension().map(|e| e == "nib").unwrap_or(false);
+
+    if is_nib_file {
+        // Handle .nib SQLite format
+        let nib = NibFile::open(&args.file)?;
+
+        // Create the annotation type based on args
+        let annotation_type = match args.annotation_type.as_str() {
+            "rectangle" => AnnotationType::Box {
+                region: Region::new(args.x, args.y, args.width, args.height),
+                stroke_width: 2.0,
+                stroke_style: StrokeStyle::Solid,
+                filled: false,
+                corner_radius: 0.0,
+            },
+            "highlight" => AnnotationType::Highlight {
+                region: Region::new(args.x, args.y, args.width, args.height),
+                corner_radius: 0.0,
+            },
+            "blur" => AnnotationType::Blur {
+                region: Region::new(args.x, args.y, args.width, args.height),
+                intensity: BlurIntensity::Medium,
+            },
+            "crop" => AnnotationType::Crop {
+                region: Region::new(args.x, args.y, args.width, args.height),
+            },
+            "arrow" => AnnotationType::Arrow {
+                start: Point::new(args.x, args.y),
+                end: Point::new(args.x + args.width, args.y + args.height),
+                head: ArrowHead::End,
+                stroke_width: 2.0,
+            },
+            "line" => AnnotationType::Line {
+                start: Point::new(args.x, args.y),
+                end: Point::new(args.x + args.width, args.y + args.height),
+                stroke_width: 2.0,
+                stroke_style: StrokeStyle::Solid,
+            },
+            "ellipse" => AnnotationType::Ellipse {
+                center: Point::new(args.x + args.width / 2.0, args.y + args.height / 2.0),
+                radius_x: args.width / 2.0,
+                radius_y: args.height / 2.0,
+                stroke_width: 2.0,
+                filled: false,
+            },
+            "text" => AnnotationType::Text {
+                position: Point::new(args.x, args.y),
+                content: args.text.clone().unwrap_or_else(|| "Text".to_string()),
+                font_size: 32.0,
+                align: TextAlign::Left,
+                background: None,
+                max_width: None,
+            },
+            "number" => {
+                // Get next number value from existing annotations
+                let next_num = nib.list_annotations()?
+                    .iter()
+                    .filter_map(|a| {
+                        if let AnnotationType::Number { value, .. } = &a.annotation_type {
+                            Some(*value)
+                        } else {
+                            None
+                        }
+                    })
+                    .max()
+                    .unwrap_or(0) + 1;
+
+                AnnotationType::Number {
+                    position: Point::new(args.x, args.y),
+                    value: args.value.unwrap_or(next_num),
+                    radius: 16.0,
+                }
+            }
+            _ => {
+                return Err(crate::core::NibError::Other(format!(
+                    "Unknown annotation type: {}. Valid types: rectangle, arrow, line, ellipse, highlight, blur, text, number",
+                    args.annotation_type
+                )));
+            }
+        };
+
+        // Create and add the annotation
+        let annotation = Annotation::new(annotation_type).with_color(color);
+        let id = nib.add_annotation(&annotation)?;
+
+        println!("[NIB {}] claude added [{}] {} at ({}, {})",
+            crate::events::timestamp_ms(),
+            id,
+            args.annotation_type,
+            args.x,
+            args.y
+        );
+        println!("Saved to: {}", args.file.display());
+
+        return Ok(());
+    }
+
+    // Handle regular image files with JSON sidecar format
     let annotations_path = annotations_file_path(&args.file);
 
     // Load existing annotations or create empty file
@@ -931,6 +1035,25 @@ pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
     println!("Saved to: {}", annotations_path.display());
 
     Ok(())
+}
+
+/// Parse a hex color string (e.g., "#ff0000" or "#ff0000ff") into a Color
+fn parse_hex_color(hex: &str) -> Option<crate::core::Color> {
+    let hex = hex.trim_start_matches('#');
+    if hex.len() == 6 {
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        Some(crate::core::Color::rgb(r, g, b))
+    } else if hex.len() == 8 {
+        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+        let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+        Some(crate::core::Color::rgba(r, g, b, a))
+    } else {
+        None
+    }
 }
 
 // =============================================================================
