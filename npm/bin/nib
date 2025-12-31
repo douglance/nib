@@ -1,0 +1,28 @@
+#!/usr/bin/env node
+
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+
+// Look for the actual binary
+const binDir = __dirname;
+const binaryName = process.platform === 'win32' ? 'nib.exe' : 'nib-binary';
+const binaryPath = path.join(binDir, binaryName);
+
+if (!fs.existsSync(binaryPath)) {
+  console.error('nib binary not found. Try reinstalling: npm install -g @douglance/nib');
+  process.exit(1);
+}
+
+const child = spawn(binaryPath, process.argv.slice(2), {
+  stdio: 'inherit',
+});
+
+child.on('error', (err) => {
+  console.error('Failed to start nib:', err.message);
+  process.exit(1);
+});
+
+child.on('exit', (code) => {
+  process.exit(code ?? 0);
+});
