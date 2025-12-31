@@ -4,6 +4,11 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 /// Nib - Fast, native screenshot annotation tool
+///
+/// When called with just a file path (no subcommand), nib will:
+/// - Create a .nib file from an image if needed
+/// - Start watching for annotation changes (blocking mode)
+/// - Exit after first event, outputting JSON
 #[derive(Parser, Debug)]
 #[command(name = "nib")]
 #[command(author, version, about, long_about = None)]
@@ -16,8 +21,17 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "text")]
     pub format: OutputFormat,
 
+    /// File to watch (image or .nib). If omitted, a subcommand is required.
+    /// Images (.png, .jpg, .webp) will be converted to .nib first.
+    #[arg(value_name = "FILE")]
+    pub file: Option<PathBuf>,
+
+    /// Timeout in seconds for watching (default: 30, 0 = no timeout)
+    #[arg(short = 't', long, default_value = "30")]
+    pub timeout: u64,
+
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -436,11 +450,11 @@ pub struct WatchArgs {
     #[arg(long, default_value = "100")]
     pub interval: u64,
 
-    /// Exit after first event (blocking mode for agents)
+    /// Stream events continuously instead of exiting after first event
     #[arg(long)]
-    pub once: bool,
+    pub stream: bool,
 
-    /// Timeout in seconds (only with --once, 0 = no timeout)
+    /// Timeout in seconds (0 = no timeout, default: 30)
     #[arg(long, default_value = "30")]
     pub timeout: u64,
 }

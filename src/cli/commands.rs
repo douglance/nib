@@ -18,6 +18,69 @@ use chrono::{DateTime, Local};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// Default mode: nib <file> - watch for annotation changes (blocking mode with JSON output)
+///
+/// If file is an image (.png, .jpg, .webp), creates a .nib file first.
+/// Then watches for annotation changes and exits after first event.
+pub async fn run_default_watch(file: &PathBuf, timeout: u64) -> Result<()> {
+    // Verify file exists
+    if !file.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                file.display()
+            )),
+        ));
+    }
+
+    // Determine if this is an image or .nib file
+    let extension = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let is_image = matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif");
+    let is_nib = extension == "nib";
+
+    if !is_image && !is_nib {
+        return Err(crate::core::NibError::Other(format!(
+            "Unsupported file type: {}. Expected .nib or image (.png, .jpg, .webp)",
+            file.display()
+        )));
+    }
+
+    // Get or create the .nib file path
+    let nib_path = if is_image {
+        // Create .nib from image
+        let nib_path = file.with_extension("nib");
+        if !nib_path.exists() {
+            // Read and create .nib file
+            let image_data = std::fs::read(file)?;
+            let img = image::load_from_memory(&image_data).map_err(|e| {
+                crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+            })?;
+            let (width, height) = (img.width(), img.height());
+            NibFile::create(&nib_path, &image_data, &extension, width, height)?;
+            // Output the created path as JSON for the agent
+            let json = serde_json::json!({
+                "event": "nib_created",
+                "path": nib_path.display().to_string()
+            });
+            println!("{}", serde_json::to_string(&json).unwrap_or_default());
+        }
+        nib_path
+    } else {
+        file.clone()
+    };
+
+    // Now watch the .nib file using the standard watch logic
+    let watch_args = WatchArgs {
+        file: nib_path,
+        json: true,
+        interval: 100,
+        stream: false,
+        timeout,
+    };
+
+    run_watch(&watch_args).await
+}
+
 /// Execute the capture command
 pub fn run_capture(args: &CaptureArgs) -> Result<()> {
     tracing::info!(?args, "Running capture");
@@ -1834,7 +1897,8 @@ pub async fn run_watch(args: &super::args::WatchArgs) -> Result<()> {
     let initial_count = nib.annotation_count()?;
     drop(nib);
 
-    if !args.json && !args.once {
+    // In stream mode, show human-friendly header
+    if !args.json && args.stream {
         println!("Watching: {}", args.file.display());
         println!("Initial annotations: {}", initial_count);
         println!("Poll interval: {}ms", args.interval);
@@ -1851,8 +1915,8 @@ pub async fn run_watch(args: &super::args::WatchArgs) -> Result<()> {
 
     // Watch loop
     loop {
-        // Check timeout (only in --once mode)
-        if args.once {
+        // Check timeout (only in blocking mode, not stream mode)
+        if !args.stream {
             if let Some(timeout) = timeout_duration {
                 if start_time.elapsed() >= timeout {
                     if args.json {
@@ -1922,8 +1986,8 @@ pub async fn run_watch(args: &super::args::WatchArgs) -> Result<()> {
                 }
             }
 
-            // In --once mode, exit after first event batch
-            if args.once {
+            // In blocking mode (default), exit after first event batch
+            if !args.stream {
                 return Ok(());
             }
         }
