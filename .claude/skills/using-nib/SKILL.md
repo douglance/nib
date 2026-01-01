@@ -39,10 +39,25 @@ nib feedback image.png \
 
 ### Response Format
 
-Human's annotations come back as JSON (your annotations are filtered out):
+Human's annotations come back as JSON:
 ```json
 {"annotations":[{"id":"a1","type":"rectangle","at":[150,200,300,100],"owner":"human"}]}
 ```
+
+### Owner-Based Filtering
+
+The feedback loop automatically separates Claude's annotations from human annotations:
+
+| Source | Owner Field | Filtered? |
+|--------|-------------|-----------|
+| CLI (`-a` flag) | `"claude"` | Yes - excluded from response |
+| Human drawing | `"human"` | No - included in response |
+
+When human hits Cmd+Enter, `send_to_claude()` returns only:
+- Annotations where `owner != "claude"`
+- Annotations not already sent in this session
+
+This means you always get back just the human's new work, never your own annotations echoed back.
 
 ### Flags
 
@@ -51,6 +66,14 @@ Human's annotations come back as JSON (your annotations are filtered out):
 | `-a, --annotations` | JSON array of your annotations |
 | `-m, --message` | Question/context shown as toast |
 | `-t, --timeout` | Seconds to wait (default: 60) |
+
+### Timeout Behavior
+
+If timeout expires before human responds:
+```json
+{"event":"timeout"}
+```
+Exit code is 0 (not an error). GUI stays open for human to continue working.
 
 ### Example: Multi-Turn Conversation
 
@@ -85,14 +108,14 @@ These are useful for specific tasks but `nib feedback` handles most collaboratio
 ### Finding Coordinates with OCR
 
 ```bash
-nib find-text image.png --search "Submit"
+nib find-text image.png -s "Submit"
 # Output: x=213, y=4, width=29, height=15
 
 # Auto-highlight matches
-nib find-text image.png --search "Error" --highlight --color "#ff0000"
+nib find-text image.png -s "Error" --highlight --color "#ff0000"
 
 # Focus on region (x,y,width,height)
-nib find-text image.png --region "100,200,400,300" --search "Button"
+nib find-text image.png -r "100,200,400,300" -s "Button"
 ```
 
 ### Headless Annotation
