@@ -1315,6 +1315,7 @@ fn row_to_annotation(row: AnnotationRow) -> StorageResult<Annotation> {
 
     Ok(Annotation {
         id: AnnotationId(id_num),
+        owner: "human".to_string(), // Default to human for existing annotations
         annotation_type,
         color,
         severity: Severity::None, // Not stored in DB; could be derived from color

@@ -178,6 +178,7 @@ pub fn annotation_to_data(annotation: &Annotation) -> AnnotationData {
         severity: annotation.severity.as_str().to_string(),
         label: annotation.label.clone(),
         z_index: annotation.z_index,
+        owner: annotation.owner.clone(),
     }
 }
 
@@ -349,6 +350,7 @@ pub fn data_to_annotation(id: u64, data: &AnnotationData) -> Annotation {
     annotation.severity = severity;
     annotation.label = data.label.clone();
     annotation.z_index = data.z_index;
+    annotation.owner = data.owner.clone();
 
     annotation
 }
@@ -617,6 +619,7 @@ mod tests {
             severity: "error".to_string(),
             label: None,
             z_index: 0,
+            owner: "human".to_string(),
         };
 
         // Add
@@ -660,5 +663,149 @@ mod tests {
             }
             _ => panic!("Expected arrow"),
         }
+    }
+
+    #[test]
+    fn test_owner_claude_preserved_in_roundtrip() {
+        // Create annotation with owner "claude"
+        let arrow = Annotation::new(AnnotationType::Arrow {
+            start: Point::new(100.0, 100.0),
+            end: Point::new(200.0, 150.0),
+            head: ArrowHead::End,
+            stroke_width: 2.0,
+        })
+        .with_owner("claude");
+
+        assert_eq!(arrow.owner, "claude");
+
+        // Convert to AnnotationData
+        let data = annotation_to_data(&arrow);
+        assert_eq!(data.owner, "claude");
+
+        // Convert back to Annotation
+        let restored = data_to_annotation(arrow.id.0, &data);
+        assert_eq!(restored.owner, "claude");
+    }
+
+    #[test]
+    fn test_owner_human_preserved_in_roundtrip() {
+        // Create annotation with owner "human"
+        let text = Annotation::new(AnnotationType::Text {
+            position: Point::new(50.0, 50.0),
+            content: "Human annotation".to_string(),
+            font_size: 16.0,
+            align: TextAlign::Left,
+            background: None,
+            max_width: None,
+        })
+        .with_owner("human");
+
+        assert_eq!(text.owner, "human");
+
+        // Convert to AnnotationData
+        let data = annotation_to_data(&text);
+        assert_eq!(data.owner, "human");
+
+        // Convert back to Annotation
+        let restored = data_to_annotation(text.id.0, &data);
+        assert_eq!(restored.owner, "human");
+    }
+
+    #[test]
+    fn test_owner_based_filtering() {
+        // Simulate the GUI filtering logic: filter out owner == "claude"
+        // This tests the same pattern used in send_to_claude()
+        use std::collections::HashSet;
+
+        let claude_arrow = Annotation::new(AnnotationType::Arrow {
+            start: Point::new(100.0, 100.0),
+            end: Point::new(200.0, 150.0),
+            head: ArrowHead::End,
+            stroke_width: 2.0,
+        })
+        .with_owner("claude");
+
+        let human_text = Annotation::new(AnnotationType::Text {
+            position: Point::new(50.0, 50.0),
+            content: "Human drew this".to_string(),
+            font_size: 16.0,
+            align: TextAlign::Left,
+            background: None,
+            max_width: None,
+        })
+        .with_owner("human");
+
+        let human_box = Annotation::new(AnnotationType::Box {
+            region: Region::new(0.0, 0.0, 100.0, 50.0),
+            stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
+            filled: false,
+            corner_radius: 0.0,
+        })
+        .with_owner("human");
+
+        let annotations = vec![claude_arrow.clone(), human_text.clone(), human_box.clone()];
+        let sent_annotation_ids: HashSet<u64> = HashSet::new();
+
+        // Filter: only human annotations that haven't been sent
+        let delta_annotations: Vec<_> = annotations
+            .iter()
+            .filter(|a| !sent_annotation_ids.contains(&a.id.0) && a.owner != "claude")
+            .collect();
+
+        // Should only include human annotations
+        assert_eq!(delta_annotations.len(), 2);
+        assert!(delta_annotations.iter().all(|a| a.owner == "human"));
+        assert!(delta_annotations.iter().any(|a| matches!(a.annotation_type, AnnotationType::Text { .. })));
+        assert!(delta_annotations.iter().any(|a| matches!(a.annotation_type, AnnotationType::Box { .. })));
+    }
+
+    #[test]
+    fn test_sent_annotation_ids_prevents_duplicates() {
+        // Verify that annotations already in sent_annotation_ids are excluded
+        use std::collections::HashSet;
+
+        let human_arrow = Annotation::new(AnnotationType::Arrow {
+            start: Point::new(100.0, 100.0),
+            end: Point::new(200.0, 150.0),
+            head: ArrowHead::End,
+            stroke_width: 2.0,
+        })
+        .with_owner("human");
+
+        let human_text = Annotation::new(AnnotationType::Text {
+            position: Point::new(50.0, 50.0),
+            content: "Another annotation".to_string(),
+            font_size: 16.0,
+            align: TextAlign::Left,
+            background: None,
+            max_width: None,
+        })
+        .with_owner("human");
+
+        let annotations = vec![human_arrow.clone(), human_text.clone()];
+
+        // First send: both should be included
+        let mut sent_annotation_ids: HashSet<u64> = HashSet::new();
+
+        let first_send: Vec<_> = annotations
+            .iter()
+            .filter(|a| !sent_annotation_ids.contains(&a.id.0) && a.owner != "claude")
+            .collect();
+
+        assert_eq!(first_send.len(), 2);
+
+        // Mark both as sent
+        for a in &first_send {
+            sent_annotation_ids.insert(a.id.0);
+        }
+
+        // Second send: neither should be included (already sent)
+        let second_send: Vec<_> = annotations
+            .iter()
+            .filter(|a| !sent_annotation_ids.contains(&a.id.0) && a.owner != "claude")
+            .collect();
+
+        assert_eq!(second_send.len(), 0);
     }
 }

@@ -13,10 +13,26 @@ use std::time::SystemTime;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AnnotationId(pub u64);
 
+static ANNOTATION_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 impl AnnotationId {
     pub fn new() -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self(COUNTER.fetch_add(1, Ordering::Relaxed))
+        Self(ANNOTATION_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+
+    pub fn bump_to_at_least(next_id: u64) {
+        let mut current = ANNOTATION_ID_COUNTER.load(Ordering::Relaxed);
+        while current < next_id {
+            match ANNOTATION_ID_COUNTER.compare_exchange(
+                current,
+                next_id,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(actual) => current = actual,
+            }
+        }
     }
 }
 
@@ -456,6 +472,8 @@ impl AnnotationType {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Annotation {
     pub id: AnnotationId,
+    /// Who created this annotation: "claude", "human", or "system"
+    pub owner: String,
     pub annotation_type: AnnotationType,
     pub color: Color,
     pub severity: Severity,
@@ -472,6 +490,7 @@ impl Annotation {
         let now = SystemTime::now();
         Self {
             id: AnnotationId::new(),
+            owner: "human".to_string(),
             annotation_type,
             color: Color::default(),
             severity: Severity::default(),
@@ -482,6 +501,11 @@ impl Annotation {
             created_at: now,
             modified_at: now,
         }
+    }
+
+    pub fn with_owner(mut self, owner: impl Into<String>) -> Self {
+        self.owner = owner.into();
+        self
     }
 
     pub fn with_color(mut self, color: Color) -> Self {

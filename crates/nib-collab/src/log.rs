@@ -357,6 +357,7 @@ mod tests {
                         severity: "error".to_string(),
                         label: None,
                         z_index: 0,
+                        owner: "human".to_string(),
                     },
                 },
             );
@@ -428,6 +429,7 @@ mod tests {
                     severity: "error".to_string(),
                     label: None,
                     z_index: 0,
+                    owner: "human".to_string(),
                 },
             },
         );

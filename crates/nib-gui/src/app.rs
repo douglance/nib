@@ -379,6 +379,7 @@ impl EditorView {
         };
 
         view.load_annotations();
+        view.sync_sent_annotations_baseline();
         view.regenerate_blur_preview_sync();
         view.update_sidecar_modified_time();
         if view.nib_file.is_some() {
@@ -521,11 +522,12 @@ impl EditorView {
 
     /// Send annotations to Claude (writes signal file)
     fn send_to_claude(&mut self, cx: &mut Context<Self>) {
-        // Compute delta: only annotations not yet sent
+        // Compute delta: only human annotations not yet sent
+        // Filter out Claude's own annotations (owner == "claude")
         let delta_annotations: Vec<_> = self
             .annotations
             .iter()
-            .filter(|a| !self.sent_annotation_ids.contains(&a.id.0))
+            .filter(|a| !self.sent_annotation_ids.contains(&a.id.0) && a.owner != "claude")
             .collect();
 
         if delta_annotations.is_empty() {
@@ -616,6 +618,8 @@ impl EditorView {
                     if let AnnotationOp::Add { id, data } = &op.operation {
                         let annotation = data_to_annotation(*id, data);
                         self.annotations.push(annotation);
+                        self.sent_annotation_ids.insert(*id);
+                        AnnotationId::bump_to_at_least(id.saturating_add(1));
                         needs_blur_regen = true;
                         cx.notify();
                     }
@@ -1621,6 +1625,18 @@ impl EditorView {
         if elapsed.as_millis() > 10 {
             eprintln!("[PERF] load_annotations (json): {:?}", elapsed);
         }
+    }
+
+    fn sync_sent_annotations_baseline(&mut self) {
+        let mut max_id = 0;
+        for annotation in &self.annotations {
+            let id = annotation.id.0;
+            if id > max_id {
+                max_id = id;
+            }
+            self.sent_annotation_ids.insert(id);
+        }
+        AnnotationId::bump_to_at_least(max_id.saturating_add(1));
     }
 
     /// Handle tool selection from toolbar

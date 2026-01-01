@@ -189,6 +189,7 @@ impl AnnotationInput {
             severity: "none".to_string(),
             label: None,
             z_index: 0,
+            owner: "claude".to_string(), // CLI annotations are from Claude
         }
     }
 }

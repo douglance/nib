@@ -5,10 +5,9 @@ use std::path::PathBuf;
 
 /// Nib - Fast, native screenshot annotation tool
 ///
-/// When called with just a file path (no subcommand), nib will:
-/// - Create a .nib file from an image if needed
-/// - Start watching for annotation changes (blocking mode)
-/// - Exit after first event, outputting JSON
+/// Human-AI collaboration through visual feedback:
+/// - Humans use the GUI to draw annotations
+/// - Claude uses the CLI to capture, annotate, and inspect images
 #[derive(Parser, Debug)]
 #[command(name = "nib")]
 #[command(author, version, about, long_about = None)]
@@ -21,34 +20,56 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "text")]
     pub format: OutputFormat,
 
-    /// File to watch (image or .nib). If omitted, a subcommand is required.
-    /// Images (.png, .jpg, .webp) will be converted to .nib first.
-    #[arg(value_name = "FILE")]
-    pub file: Option<PathBuf>,
-
-    /// Timeout in seconds for watching (default: 30, 0 = no timeout)
-    #[arg(short = 't', long, default_value = "30")]
-    pub timeout: u64,
-
     #[command(subcommand)]
-    pub command: Option<Command>,
+    pub command: Command,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
+    // === Human Interface ===
+    /// Launch the GUI editor (human's entry point)
+    Gui(GuiArgs),
+
+    // === Claude Actions ===
     /// Capture a screen region
     Capture(CaptureArgs),
 
-    /// Open annotator or add annotations headlessly
-    Annotate(AnnotateArgs),
+    /// Ask human for visual feedback (spawns GUI, awaits response)
+    #[command(name = "feedback", alias = "ask-human")]
+    Feedback(FeedbackArgs),
 
-    /// Open collaborative editing session (CLI and GUI can edit same image)
-    Edit(EditArgs),
+    /// Wait for annotation submit event from GUI
+    AwaitSubmit(AwaitSubmitArgs),
 
-    /// Extract and display QML from an image
-    Read(ReadArgs),
+    /// Manage annotations (add/remove/clear/list)
+    #[command(subcommand)]
+    Annotation(AnnotationCommand),
 
-    /// Validate QML syntax in an image
+    /// Render annotations onto image
+    Render(RenderArgs),
+
+    /// Import image to .nib format
+    Import(ImportArgs),
+
+    /// Export .nib file (rendered, json, or qml format)
+    Export(ExportArgs),
+
+    // === Claude Inspection ===
+    /// Overlay a coordinate grid on an image
+    Grid(GridArgs),
+
+    /// Find text in an image using OCR
+    FindText(FindTextArgs),
+
+    /// Show comprehensive info about a .nib file
+    Info(InfoArgs),
+
+    /// Manage tiled captures (query/extract/list)
+    #[command(subcommand)]
+    Tile(TileCommand),
+
+    // === Utilities ===
+    /// Validate QML syntax
     Validate(ValidateArgs),
 
     /// List recent captures
@@ -57,127 +78,45 @@ pub enum Command {
     /// List active collaboration sessions
     Sessions,
 
-    /// Open the Nib storage folder
-    Folder,
-
-    /// Launch the GUI editor
-    Gui(GuiArgs),
-
-    /// Read annotations from a sidecar JSON file
-    Annotations(AnnotationsArgs),
-
-    /// Add an annotation to an image
-    AddAnnotation(AddAnnotationArgs),
-
-    /// Find text in an image using OCR and get precise coordinates
-    FindText(FindTextArgs),
-
-    /// Render annotations onto image and output to file (for Claude to view)
-    Render(RenderArgs),
-
-    /// Remove a specific annotation by ID
-    RemoveAnnotation(RemoveAnnotationArgs),
-
-    /// Clear all annotations from an image
-    ClearAnnotations(ClearAnnotationsArgs),
-
-    /// Overlay a coordinate grid on an image for precise positioning
-    Grid(GridArgs),
-
-    /// Show comprehensive info about a .nib file
-    Info(InfoArgs),
-
-    /// Import an image, create .nib file, and open in GUI
-    Open(OpenArgs),
-
-    /// Create .nib file from image without opening GUI
-    Import(ImportArgs),
-
-    /// Watch a .nib file for annotation changes in real-time
-    Watch(WatchArgs),
-
-    /// Migrate from JSON sidecar format to .nib SQLite format
-    Migrate(MigrateArgs),
-
-    /// Export .nib file to PNG (with annotations baked, as sidecar JSON, or as QML)
-    Export(ExportArgs),
-
-    /// Query a tiled capture for point or region information
-    Query(QueryArgs),
-
-    /// Extract a region from a tiled capture at full resolution
-    Extract(ExtractArgs),
-
-    /// List tiles in a tiled capture at a specific zoom level
-    Tiles(TilesArgs),
-
     /// Start MCP server for Claude Code integration
     McpServer(McpServerArgs),
-
-    /// Wait for human annotation feedback, spawn GUI, then render and exit
-    Feedback(FeedbackArgs),
 }
 
-#[derive(Parser, Debug)]
-pub struct McpServerArgs {
-    /// Optional image file to work with
-    pub image: Option<PathBuf>,
+// === Subcommand Enums ===
+
+#[derive(Subcommand, Debug)]
+pub enum AnnotationCommand {
+    /// Add an annotation to an image
+    Add(AnnotationAddArgs),
+
+    /// Remove a specific annotation by ID
+    Remove(AnnotationRemoveArgs),
+
+    /// Clear all annotations from an image
+    Clear(AnnotationClearArgs),
+
+    /// List annotations for an image
+    List(AnnotationListArgs),
 }
 
-#[derive(Parser, Debug)]
-pub struct FeedbackArgs {
-    /// Image or .nib file to get feedback on
-    pub file: PathBuf,
+#[derive(Subcommand, Debug)]
+pub enum TileCommand {
+    /// Query a tiled capture for point or region information
+    Query(TileQueryArgs),
 
-    /// Timeout in seconds (default: 60, 0 = no timeout)
-    #[arg(short = 't', long, default_value = "60")]
-    pub timeout: u64,
+    /// Extract a region from a tiled capture at full resolution
+    Extract(TileExtractArgs),
 
-    /// Don't auto-open GUI (use when GUI is already open)
-    #[arg(long)]
-    pub no_gui: bool,
-
-    /// Don't auto-render after annotation detected
-    #[arg(long)]
-    pub no_render: bool,
-
-    /// Message to display in GUI (shown as toast/question)
-    #[arg(short = 'm', long)]
-    pub message: Option<String>,
-
-    /// JSON array of annotations to add before waiting
-    #[arg(long)]
-    pub annotations: Option<String>,
-
-    /// Request GUI to quit after human sends response
-    #[arg(long)]
-    pub quit_after: bool,
+    /// List tiles in a tiled capture
+    List(TileListArgs),
 }
 
-#[derive(Parser, Debug)]
-pub struct AnnotationsArgs {
-    /// Image file to read annotations for (reads from {file}.annotations.json)
-    pub file: PathBuf,
-
-    /// Output as raw JSON instead of formatted text
-    #[arg(long)]
-    pub json: bool,
-
-    /// Only show annotations modified after this Unix timestamp
-    #[arg(long)]
-    pub since: Option<i64>,
-}
+// === Argument Structs ===
 
 #[derive(Parser, Debug)]
 pub struct GuiArgs {
     /// Optional image file to open in the editor
     pub file: Option<PathBuf>,
-}
-
-#[derive(Debug, Clone, ValueEnum)]
-pub enum OutputFormat {
-    Text,
-    Json,
 }
 
 #[derive(Parser, Debug)]
@@ -226,94 +165,47 @@ pub enum CaptureMode {
 }
 
 #[derive(Parser, Debug)]
-pub struct AnnotateArgs {
-    /// Image file to annotate
-    #[arg(required_unless_present = "clipboard")]
-    pub file: Option<PathBuf>,
-
-    /// Read image from clipboard
-    #[arg(long, conflicts_with = "file")]
-    pub clipboard: bool,
-
-    /// Export immediately without opening GUI
-    #[arg(long)]
-    pub export_only: bool,
-
-    /// Add annotations via QML string (for headless mode)
-    #[arg(long)]
-    pub add: Option<String>,
-
-    /// Add annotations from QML file
-    #[arg(long)]
-    pub qml_file: Option<PathBuf>,
-
-    /// Output file for export
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
-}
-
-#[derive(Parser, Debug)]
-pub struct EditArgs {
-    /// Image file to edit collaboratively
+pub struct FeedbackArgs {
+    /// Image or .nib file to get feedback on
     pub file: PathBuf,
 
-    /// Add annotations via QML string
-    #[arg(long)]
-    pub add: Option<String>,
+    /// Message to display in GUI (question for human)
+    #[arg(short = 'm', long)]
+    pub message: Option<String>,
 
-    /// Add annotations from QML file
-    #[arg(long)]
-    pub qml_file: Option<PathBuf>,
+    /// Annotations JSON array (visual prompts from Claude)
+    #[arg(short = 'a', long)]
+    pub annotations: Option<String>,
 
-    /// Watch for changes from other clients (GUI)
-    #[arg(long)]
-    pub watch: bool,
-
-    /// Output file to save when done (or saves to original)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    /// Timeout in seconds (0 = no timeout, default: 60)
+    #[arg(short = 't', long, default_value = "60")]
+    pub timeout: u64,
 }
 
 #[derive(Parser, Debug)]
-pub struct ReadArgs {
-    /// Image file to read QML from
+pub struct AwaitSubmitArgs {
+    /// .nib file to watch for annotation changes
     pub file: PathBuf,
 
-    /// Output raw QML without formatting
+    /// Stream events continuously instead of exiting after first event
     #[arg(long)]
-    pub raw: bool,
-}
+    pub stream: bool,
 
-#[derive(Parser, Debug)]
-pub struct ValidateArgs {
-    /// Image file or QML file to validate
-    pub file: PathBuf,
+    /// Timeout in seconds (0 = no timeout, default: 30)
+    #[arg(short = 't', long, default_value = "30")]
+    pub timeout: u64,
 
-    /// Treat input as raw QML text file
+    /// Output changes as JSON instead of formatted text
     #[arg(long)]
-    pub qml_file: bool,
+    pub json: bool,
+
+    /// Poll interval in milliseconds
+    #[arg(long, default_value = "100")]
+    pub interval: u64,
 }
 
 #[derive(Parser, Debug)]
-pub struct ListArgs {
-    /// Maximum number of items to show
-    #[arg(short = 'n', long, default_value = "10")]
-    pub limit: usize,
-
-    /// Sort order
-    #[arg(short, long, default_value = "date")]
-    pub sort: SortOrder,
-}
-
-#[derive(Debug, Clone, ValueEnum)]
-pub enum SortOrder {
-    Date,
-    Name,
-    Size,
-}
-
-#[derive(Parser, Debug)]
-pub struct AddAnnotationArgs {
+pub struct AnnotationAddArgs {
     /// Image file to annotate
     pub file: PathBuf,
 
@@ -355,33 +247,32 @@ pub struct AddAnnotationArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct FindTextArgs {
-    /// Image file to search for text
+pub struct AnnotationRemoveArgs {
+    /// Image file containing the annotation
     pub file: PathBuf,
 
-    /// Search for specific text (case-insensitive substring match)
-    #[arg(short, long)]
-    pub search: Option<String>,
+    /// Annotation ID to remove (e.g., "a1", "a2")
+    pub id: String,
+}
 
-    /// Output as JSON for easy parsing
+#[derive(Parser, Debug)]
+pub struct AnnotationClearArgs {
+    /// Image file to clear annotations from
+    pub file: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+pub struct AnnotationListArgs {
+    /// Image file to read annotations for
+    pub file: PathBuf,
+
+    /// Output as raw JSON instead of formatted text
     #[arg(long)]
     pub json: bool,
 
-    /// Minimum confidence level (0-100, default: 60)
-    #[arg(short, long, default_value = "60")]
-    pub confidence: i32,
-
-    /// Automatically add highlight annotation for found text
+    /// Only show annotations modified after this Unix timestamp
     #[arg(long)]
-    pub highlight: bool,
-
-    /// Color for highlight annotation (hex format)
-    #[arg(long, default_value = "#ffff00")]
-    pub color: String,
-
-    /// Limit search to a specific region (format: "x,y,width,height")
-    #[arg(short, long)]
-    pub region: Option<String>,
+    pub since: Option<i64>,
 }
 
 #[derive(Parser, Debug)]
@@ -395,76 +286,6 @@ pub struct RenderArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct RemoveAnnotationArgs {
-    /// Image file containing the annotation
-    pub file: PathBuf,
-
-    /// Annotation ID to remove (e.g., "a1", "a2")
-    pub id: String,
-}
-
-#[derive(Parser, Debug)]
-pub struct ClearAnnotationsArgs {
-    /// Image file to clear annotations from
-    pub file: PathBuf,
-}
-
-#[derive(Parser, Debug)]
-pub struct GridArgs {
-    /// Image file to overlay grid on (PNG or .tiles/ directory)
-    pub file: PathBuf,
-
-    /// Grid line spacing in pixels
-    #[arg(short = 's', long, default_value = "100")]
-    pub spacing: u32,
-
-    /// Region to focus on (format: "x1,y1,x2,y2")
-    /// If specified, outputs a cropped view of just that region with the grid
-    #[arg(short = 'r', long)]
-    pub region: Option<String>,
-
-    /// Output file (default: {file}.grid.png or stdout for --json)
-    #[arg(short = 'o', long)]
-    pub output: Option<PathBuf>,
-
-    /// Grid line color in hex format (default: semi-transparent gray)
-    #[arg(short = 'c', long, default_value = "#80808080")]
-    pub color: String,
-
-    /// Major line color in hex format (default: semi-transparent red)
-    #[arg(long, default_value = "#ff0000a0")]
-    pub major_color: String,
-
-    /// Interval for major lines with labels (every N lines)
-    #[arg(long, default_value = "5")]
-    pub major_interval: u32,
-
-    /// Output grid metadata as JSON instead of rendering image
-    #[arg(long)]
-    pub json: bool,
-}
-
-#[derive(Parser, Debug)]
-pub struct InfoArgs {
-    /// The .nib file to inspect
-    pub file: PathBuf,
-
-    /// Output as JSON instead of formatted text
-    #[arg(long)]
-    pub json: bool,
-}
-
-#[derive(Parser, Debug)]
-pub struct OpenArgs {
-    /// Image file to import (PNG, JPEG, WebP)
-    pub file: PathBuf,
-
-    /// Output .nib file path (default: same name with .nib extension)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
-}
-
-#[derive(Parser, Debug)]
 pub struct ImportArgs {
     /// Image file to import (PNG, JPEG, WebP)
     pub file: PathBuf,
@@ -472,38 +293,10 @@ pub struct ImportArgs {
     /// Output .nib file path (default: same name with .nib extension)
     #[arg(short, long)]
     pub output: Option<PathBuf>,
-}
 
-#[derive(Parser, Debug)]
-pub struct WatchArgs {
-    /// .nib file to watch for annotation changes
-    pub file: PathBuf,
-
-    /// Output changes as JSON instead of formatted text
+    /// Migrate from JSON sidecar format (deletes sidecar after migration)
     #[arg(long)]
-    pub json: bool,
-
-    /// Poll interval in milliseconds
-    #[arg(long, default_value = "100")]
-    pub interval: u64,
-
-    /// Stream events continuously instead of exiting after first event
-    #[arg(long)]
-    pub stream: bool,
-
-    /// Timeout in seconds (0 = no timeout, default: 30)
-    #[arg(long, default_value = "30")]
-    pub timeout: u64,
-}
-
-#[derive(Parser, Debug)]
-pub struct MigrateArgs {
-    /// Image file or directory to migrate
-    pub path: PathBuf,
-
-    /// Output .nib file (for single file migration)
-    #[arg(short, long)]
-    pub output: Option<PathBuf>,
+    pub migrate_sidecar: bool,
 
     /// Delete sidecar JSON files after successful migration
     #[arg(long)]
@@ -539,7 +332,81 @@ pub enum ExportFormat {
 }
 
 #[derive(Parser, Debug)]
-pub struct QueryArgs {
+pub struct GridArgs {
+    /// Image file to overlay grid on (PNG or .tiles/ directory)
+    pub file: PathBuf,
+
+    /// Grid line spacing in pixels
+    #[arg(short = 's', long, default_value = "100")]
+    pub spacing: u32,
+
+    /// Region to focus on (format: "x1,y1,x2,y2")
+    #[arg(short = 'r', long)]
+    pub region: Option<String>,
+
+    /// Output file (default: {file}.grid.png or stdout for --json)
+    #[arg(short = 'o', long)]
+    pub output: Option<PathBuf>,
+
+    /// Grid line color in hex format (default: semi-transparent gray)
+    #[arg(short = 'c', long, default_value = "#80808080")]
+    pub color: String,
+
+    /// Major line color in hex format (default: semi-transparent red)
+    #[arg(long, default_value = "#ff0000a0")]
+    pub major_color: String,
+
+    /// Interval for major lines with labels (every N lines)
+    #[arg(long, default_value = "5")]
+    pub major_interval: u32,
+
+    /// Output grid metadata as JSON instead of rendering image
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct FindTextArgs {
+    /// Image file to search for text
+    pub file: PathBuf,
+
+    /// Search for specific text (case-insensitive substring match)
+    #[arg(short, long)]
+    pub search: Option<String>,
+
+    /// Output as JSON for easy parsing
+    #[arg(long)]
+    pub json: bool,
+
+    /// Minimum confidence level (0-100, default: 60)
+    #[arg(short, long, default_value = "60")]
+    pub confidence: i32,
+
+    /// Automatically add highlight annotation for found text
+    #[arg(long)]
+    pub highlight: bool,
+
+    /// Color for highlight annotation (hex format)
+    #[arg(long, default_value = "#ffff00")]
+    pub color: String,
+
+    /// Limit search to a specific region (format: "x,y,width,height")
+    #[arg(short, long)]
+    pub region: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+pub struct InfoArgs {
+    /// The .nib file to inspect
+    pub file: PathBuf,
+
+    /// Output as JSON instead of formatted text
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct TileQueryArgs {
     /// Tiled capture directory (containing manifest.json)
     pub capture_dir: PathBuf,
 
@@ -561,7 +428,7 @@ pub struct QueryArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct ExtractArgs {
+pub struct TileExtractArgs {
     /// Tiled capture directory (containing manifest.json)
     pub capture_dir: PathBuf,
 
@@ -579,7 +446,7 @@ pub struct ExtractArgs {
 }
 
 #[derive(Parser, Debug)]
-pub struct TilesArgs {
+pub struct TileListArgs {
     /// Tiled capture directory (containing manifest.json)
     pub capture_dir: PathBuf,
 
@@ -590,4 +457,44 @@ pub struct TilesArgs {
     /// Show detailed bounds for each tile
     #[arg(short, long)]
     pub verbose: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ValidateArgs {
+    /// Image file or QML file to validate
+    pub file: PathBuf,
+
+    /// Treat input as raw QML text file
+    #[arg(long)]
+    pub qml_file: bool,
+}
+
+#[derive(Parser, Debug)]
+pub struct ListArgs {
+    /// Maximum number of items to show
+    #[arg(short = 'n', long, default_value = "10")]
+    pub limit: usize,
+
+    /// Sort order
+    #[arg(short, long, default_value = "date")]
+    pub sort: SortOrder,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum SortOrder {
+    Date,
+    Name,
+    Size,
+}
+
+#[derive(Parser, Debug)]
+pub struct McpServerArgs {
+    /// Optional image file to work with
+    pub image: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, ValueEnum)]
+pub enum OutputFormat {
+    Text,
+    Json,
 }

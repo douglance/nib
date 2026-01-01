@@ -14,11 +14,11 @@ This is your main tool. One command that:
 2. Shows your annotations
 3. Displays your question as a toast
 4. Waits for human to respond
-5. Returns their annotations as JSON
+5. Returns their annotations as JSON (excludes your own)
 
 ```bash
 nib feedback image.png \
-  --annotations '[{"type":"arrow","from":[100,100],"to":[200,150]}]' \
+  -a '[{"type":"arrow","from":[100,100],"to":[200,150]}]' \
   -m "Where should the button go?"
 ```
 
@@ -39,47 +39,42 @@ nib feedback image.png \
 
 ### Response Format
 
-Human's annotations come back as JSON:
+Human's annotations come back as JSON (your annotations are filtered out):
 ```json
-{"annotations":[{"id":"a1","type":"rectangle","at":[150,200,300,100]}]}
+{"annotations":[{"id":"a1","type":"rectangle","at":[150,200,300,100],"owner":"human"}]}
 ```
 
 ### Flags
 
 | Flag | Purpose |
 |------|---------|
-| `--annotations` | JSON array of your annotations |
+| `-a, --annotations` | JSON array of your annotations |
 | `-m, --message` | Question/context shown as toast |
 | `-t, --timeout` | Seconds to wait (default: 60) |
-| `--quit-after` | Close GUI after response |
-| `--no-gui` | Error if GUI not already open |
 
 ### Example: Multi-Turn Conversation
 
 ```bash
 # Round 1: Ask about layout
 nib feedback mockup.png \
-  --annotations '[{"type":"text","at":[50,30],"content":"HEADER"}]' \
+  -a '[{"type":"text","at":[50,30],"content":"HEADER"}]' \
   -m "Where should the navigation go?"
-# Human draws rectangle → returns JSON
+# Human draws rectangle → returns JSON with human annotations only
 
 # Round 2: Confirm and ask next question
 nib feedback mockup.png \
-  --annotations '[{"type":"rectangle","at":[50,80],"size":[200,40],"color":"#22c55e"}]' \
+  -a '[{"type":"rectangle","at":[50,80],"size":[200,40],"color":"#22c55e"}]' \
   -m "Got it. Where should the sidebar be?"
 # Human draws again → returns JSON
 
-# Round 3: One-shot (close GUI when done)
-nib feedback mockup.png \
-  --annotations '[{"type":"rectangle","at":[50,130],"size":[60,300],"color":"#3b82f6"}]' \
-  -m "Last one - where does the logo go?" \
-  --quit-after
+# Round 3: Just open and wait (no prompt)
+nib feedback mockup.png -t 300
 ```
 
 ### Human Shortcuts
 
-- `⌘↵` (Cmd+Enter) - Send response, keep GUI open
-- `⇧⌘↵` (Shift+Cmd+Enter) - Send and close GUI
+- `⌘↵` (Cmd+Enter) - Send response to Claude (GUI stays open)
+- Human can close GUI when done with session
 
 ---
 
@@ -106,13 +101,16 @@ When you don't need human response:
 
 ```bash
 # Add annotation
-nib add-annotation image.png -t highlight -x 100 -y 50 -w 200 -H 30 -c "#ffff00"
+nib annotation add image.png -t highlight -x 100 -y 50 -w 200 -H 30 -c "#ffff00"
 
 # Remove by ID
-nib remove-annotation image.png a1
+nib annotation remove image.png a1
 
 # Clear all
-nib clear-annotations image.png
+nib annotation clear image.png
+
+# List annotations
+nib annotation list image.png --json
 
 # Render annotations onto image
 nib render image.png  # creates image.rendered.png

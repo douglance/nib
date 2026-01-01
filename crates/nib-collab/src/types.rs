@@ -362,6 +362,13 @@ pub struct AnnotationData {
     pub severity: String,
     pub label: Option<String>,
     pub z_index: i32,
+    /// Owner of the annotation: "claude", "human", or "system"
+    #[serde(default = "default_owner")]
+    pub owner: String,
+}
+
+fn default_owner() -> String {
+    "human".to_string()
 }
 
 /// Serializable annotation type variants
