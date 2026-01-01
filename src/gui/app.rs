@@ -17,6 +17,38 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+/// Embedded SVG icons (compile-time included for portable binary)
+mod embedded_icons {
+    pub static SELECT: &[u8] = include_bytes!("../../assets/icons/select.svg");
+    pub static ARROW: &[u8] = include_bytes!("../../assets/icons/arrow.svg");
+    pub static RECTANGLE: &[u8] = include_bytes!("../../assets/icons/rectangle.svg");
+    pub static ELLIPSE: &[u8] = include_bytes!("../../assets/icons/ellipse.svg");
+    pub static TEXT: &[u8] = include_bytes!("../../assets/icons/text.svg");
+    pub static NUMBER: &[u8] = include_bytes!("../../assets/icons/number.svg");
+    pub static BLUR: &[u8] = include_bytes!("../../assets/icons/blur.svg");
+    pub static HIGHLIGHT: &[u8] = include_bytes!("../../assets/icons/highlight.svg");
+    pub static LINE: &[u8] = include_bytes!("../../assets/icons/line.svg");
+    pub static CROP: &[u8] = include_bytes!("../../assets/icons/crop.svg");
+    pub static PENCIL: &[u8] = include_bytes!("../../assets/icons/pencil.svg");
+
+    pub fn get(path: &str) -> Option<&'static [u8]> {
+        match path {
+            "assets/icons/select.svg" => Some(SELECT),
+            "assets/icons/arrow.svg" => Some(ARROW),
+            "assets/icons/rectangle.svg" => Some(RECTANGLE),
+            "assets/icons/ellipse.svg" => Some(ELLIPSE),
+            "assets/icons/text.svg" => Some(TEXT),
+            "assets/icons/number.svg" => Some(NUMBER),
+            "assets/icons/blur.svg" => Some(BLUR),
+            "assets/icons/highlight.svg" => Some(HIGHLIGHT),
+            "assets/icons/line.svg" => Some(LINE),
+            "assets/icons/crop.svg" => Some(CROP),
+            "assets/icons/pencil.svg" => Some(PENCIL),
+            _ => None,
+        }
+    }
+}
+
 /// Asset source for loading SVG icons and other assets
 struct Assets {
     base: PathBuf,
@@ -24,6 +56,11 @@ struct Assets {
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> GpuiResult<Option<Cow<'static, [u8]>>> {
+        // First check embedded assets (for portable binary)
+        if let Some(data) = embedded_icons::get(path) {
+            return Ok(Some(Cow::Borrowed(data)));
+        }
+        // Fall back to filesystem
         fs::read(self.base.join(path))
             .map(|data| Some(Cow::Owned(data)))
             .map_err(|err| err.into())
