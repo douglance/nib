@@ -140,6 +140,18 @@ pub struct FeedbackArgs {
     /// Don't auto-render after annotation detected
     #[arg(long)]
     pub no_render: bool,
+
+    /// Message to display in GUI (shown as toast/question)
+    #[arg(short = 'm', long)]
+    pub message: Option<String>,
+
+    /// JSON array of annotations to add before waiting
+    #[arg(long)]
+    pub annotations: Option<String>,
+
+    /// Request GUI to quit after human sends response
+    #[arg(long)]
+    pub quit_after: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -336,6 +348,10 @@ pub struct AddAnnotationArgs {
     /// Number value (for number annotations)
     #[arg(long)]
     pub value: Option<u32>,
+
+    /// Message to display as toast in GUI (for Claude->human communication)
+    #[arg(short = 'm', long)]
+    pub message: Option<String>,
 }
 
 #[derive(Parser, Debug)]

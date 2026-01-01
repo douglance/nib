@@ -256,6 +256,21 @@ pub enum CollabMessage {
 
     /// Error message
     Error { message: String },
+
+    /// Display a message/question to the user in the GUI
+    ShowMessage {
+        message: String,
+        source: String,
+    },
+
+    /// Add multiple annotations at once (for batch Claude annotations)
+    AddAnnotations {
+        annotations: Vec<AnnotationData>,
+        client_id: ClientId,
+    },
+
+    /// Request that the GUI quit gracefully
+    RequestQuit { client_id: ClientId },
 }
 
 /// A collaborative operation with metadata for sync
@@ -330,6 +345,13 @@ pub enum AnnotationOp {
 
     /// Set lock state
     SetLocked { id: u64, locked: bool },
+
+    /// Signal from GUI that user wants to send annotations to agent
+    /// Contains JSON payload of annotation deltas (new/changed since last send)
+    SendToAgent {
+        /// Serialized annotation deltas as JSON
+        payload: String,
+    },
 }
 
 /// Serializable annotation data for network transfer

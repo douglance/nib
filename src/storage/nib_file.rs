@@ -806,6 +806,15 @@ impl NibFile {
                 opened_at INTEGER,
                 last_activity INTEGER
             );
+
+            -- Messages for GUI/CLI communication (toasts)
+            CREATE TABLE messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'agent',
+                read INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
             "#,
         )?;
         Ok(())
@@ -835,18 +844,63 @@ impl NibFile {
 
     /// Migrate schema to latest version
     fn migrate(&self) -> StorageResult<()> {
-        let version: i32 = self
+        let _version: i32 = self
             .conn
             .query_row("SELECT version FROM schema_version", [], |row| row.get(0))?;
 
-        // Future migrations go here
-        if version < 2 {
-            // Example: Add new column in version 2
-            // self.conn.execute("ALTER TABLE annotations ADD COLUMN new_col TEXT", [])?;
-            // self.conn.execute("UPDATE schema_version SET version = 2", [])?;
+        // Add messages table if not exists (for files created before messages feature)
+        let has_messages: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='messages'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if !has_messages {
+            self.conn.execute(
+                r#"CREATE TABLE messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'agent',
+                    read INTEGER DEFAULT 0,
+                    created_at INTEGER NOT NULL
+                )"#,
+                [],
+            )?;
         }
 
         Ok(())
+    }
+
+    // --- Message Methods (for GUI/CLI communication) ---
+
+    /// Add a message (for toast display in GUI)
+    pub fn add_message(&self, content: &str, source: &str) -> StorageResult<i64> {
+        let now = system_time_to_unix(SystemTime::now());
+        self.conn.execute(
+            "INSERT INTO messages (content, source, created_at) VALUES (?1, ?2, ?3)",
+            params![content, source, now],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Get unread messages and mark them as read
+    pub fn get_and_mark_messages_read(&self) -> StorageResult<Vec<(i64, String, String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, content, source, created_at FROM messages WHERE read = 0 ORDER BY created_at",
+        )?;
+        let messages: Vec<_> = stmt
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        self.conn
+            .execute("UPDATE messages SET read = 1 WHERE read = 0", [])?;
+        Ok(messages)
     }
 }
 

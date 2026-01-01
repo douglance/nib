@@ -8,6 +8,7 @@
 //! - list: List recent captures
 //! - folder: Open storage directory
 
+pub mod annotation_json;
 pub mod args;
 pub mod commands;
 

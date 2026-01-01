@@ -49,6 +49,8 @@ pub struct CollabHandle {
     pub receiver: Receiver<CollabMessage>,
     /// Shared session state
     state: Arc<RwLock<SharedState>>,
+    /// Direct broadcast channel for local handles (None for remote clients)
+    broadcast_tx: Option<broadcast::Sender<CollabMessage>>,
 }
 
 impl CollabHandle {
@@ -61,9 +63,20 @@ impl CollabHandle {
 
         let collab_op = CollabOperation::new(timestamp, op);
 
-        self.sender
-            .send(CollabMessage::Operation(collab_op))
-            .map_err(|e| format!("Failed to send operation: {}", e))
+        // For local handles, broadcast directly
+        // For remote clients, send via socket channel
+        if let Some(ref broadcast_tx) = self.broadcast_tx {
+            // Local handle: broadcast directly to all clients
+            broadcast_tx
+                .send(CollabMessage::Operation(collab_op))
+                .map_err(|e| format!("Failed to broadcast operation: {}", e))?;
+            Ok(())
+        } else {
+            // Remote client: send via socket channel
+            self.sender
+                .send(CollabMessage::Operation(collab_op))
+                .map_err(|e| format!("Failed to send operation: {}", e))
+        }
     }
 
     /// Request a save to disk
@@ -100,6 +113,13 @@ impl CollabHandle {
         let _ = self.sender.send(CollabMessage::Leave {
             client_id: self.client_id,
         });
+    }
+}
+
+impl CollabServer {
+    /// Subscribe to broadcast messages
+    pub fn subscribe(&self) -> broadcast::Receiver<CollabMessage> {
+        self.broadcast_tx.subscribe()
     }
 }
 
@@ -188,6 +208,7 @@ impl CollabServer {
             sender: tx,
             receiver: rx,
             state: Arc::clone(&self.state),
+            broadcast_tx: Some(self.broadcast_tx.clone()),
         }
     }
 
@@ -282,6 +303,58 @@ impl CollabServer {
                 Some(CollabMessage::SaveComplete {
                     timestamp: state.clock,
                 })
+            }
+
+            CollabMessage::ShowMessage { message, source } => {
+                // Broadcast to all clients (especially GUI)
+                let _ = self.broadcast_tx.send(CollabMessage::ShowMessage {
+                    message,
+                    source,
+                });
+                None
+            }
+
+            CollabMessage::AddAnnotations {
+                annotations,
+                client_id: _,
+            } => {
+                // Generate IDs and create operations for each annotation
+                static NEXT_ID: std::sync::atomic::AtomicU64 =
+                    std::sync::atomic::AtomicU64::new(1);
+
+                for data in annotations {
+                    let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let timestamp = {
+                        let mut state = self.state.write();
+                        state.clock.increment()
+                    };
+
+                    let op = CollabOperation::new(
+                        timestamp,
+                        AnnotationOp::Add { id, data },
+                    );
+
+                    // Persist to log
+                    {
+                        let mut log = self.log.write();
+                        if let Err(e) = log.append(op.clone()) {
+                            tracing::error!("Failed to persist annotation: {}", e);
+                        }
+                    }
+
+                    // Broadcast to all clients
+                    let _ = self.broadcast_tx.send(CollabMessage::Operation(op));
+                }
+
+                Some(CollabMessage::Ack {
+                    timestamp: self.state.read().clock,
+                })
+            }
+
+            CollabMessage::RequestQuit { client_id } => {
+                // Broadcast quit request to all clients (GUI will handle it)
+                let _ = self.broadcast_tx.send(CollabMessage::RequestQuit { client_id });
+                None
             }
 
             _ => None,
@@ -406,6 +479,7 @@ pub async fn connect_to_session(
             clock: current_timestamp,
             clients: Vec::new(),
         })),
+        broadcast_tx: None, // Remote clients don't broadcast directly
     })
 }
 
@@ -459,10 +533,38 @@ async fn handle_client(
     stream: interprocess::local_socket::tokio::Stream,
     server: Arc<CollabServer>,
 ) -> Result<(), String> {
-    let (reader, mut writer) = stream.split();
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
+    use tokio::io::AsyncBufReadExt;
 
+    let (reader, writer) = stream.split();
+    let mut reader = BufReader::new(reader);
+    let writer = Arc::new(tokio::sync::Mutex::new(writer));
+
+    // Subscribe to broadcasts for this client
+    let mut broadcast_rx = server.subscribe();
+
+    // Spawn task to forward broadcasts to client socket
+    let writer_clone = Arc::clone(&writer);
+    let broadcast_task = tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+        while let Ok(msg) = broadcast_rx.recv().await {
+            if let Ok(json) = serde_json::to_string(&msg) {
+                let mut w = writer_clone.lock().await;
+                if w.write_all(format!("{}\n", json).as_bytes())
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                // Flush immediately so CLI receives the message
+                if w.flush().await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    // Read messages from client
+    let mut line = String::new();
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
@@ -472,17 +574,23 @@ async fn handle_client(
                     .map_err(|e| format!("Invalid message: {}", e))?;
 
                 if let Some(response) = server.process_message(msg) {
+                    use tokio::io::AsyncWriteExt;
                     let json = serde_json::to_string(&response).map_err(|e| e.to_string())?;
-                    writer
-                        .write_all(format!("{}\n", json).as_bytes())
+                    let mut w = writer.lock().await;
+                    w.write_all(format!("{}\n", json).as_bytes())
                         .await
                         .map_err(|e| format!("Write error: {}", e))?;
+                    w.flush().await.map_err(|e| format!("Flush error: {}", e))?;
                 }
             }
-            Err(e) => return Err(format!("Read error: {}", e)),
+            Err(e) => {
+                broadcast_task.abort();
+                return Err(format!("Read error: {}", e));
+            }
         }
     }
 
+    broadcast_task.abort();
     Ok(())
 }
 

@@ -401,6 +401,9 @@ pub fn apply_operation(annotations: &mut Vec<Annotation>, op: &AnnotationOp) {
                 annotation.touch();
             }
         }
+
+        // SendToAgent is a signal, not a state mutation - no-op for annotation list
+        AnnotationOp::SendToAgent { .. } => {}
     }
 }
 
@@ -570,6 +573,9 @@ pub fn inverse_operation(
                 changes: inverse_changes,
             })
         }
+
+        // SendToAgent is a signal, not invertible
+        AnnotationOp::SendToAgent { .. } => None,
     }
 }
 

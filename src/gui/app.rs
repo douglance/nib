@@ -9,7 +9,8 @@ use gpui::{
     Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement,
     Styled, StyledImage, Task, Window, WindowBounds, WindowKind, WindowOptions,
 };
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
 use std::fs;
@@ -41,6 +42,8 @@ impl AssetSource for Assets {
     }
 }
 
+use crate::collab::session::Session;
+use crate::collab::types::ClientType;
 use crate::core::blur::apply_blur_region;
 use crate::core::types::{Annotation, AnnotationId, AnnotationStyle, AnnotationType, Color, Region};
 use crate::core::types::Point as NibPoint;
@@ -344,6 +347,31 @@ pub struct TextInputState {
     pub editing_annotation_id: Option<AnnotationId>,
 }
 
+/// Toast message for GUI display
+#[derive(Clone)]
+struct Toast {
+    id: u64,
+    message: String,
+    created_at: Instant,
+    duration: Duration,
+}
+
+impl Toast {
+    fn new(message: String) -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        Self {
+            id: COUNTER.fetch_add(1, Ordering::Relaxed),
+            message,
+            created_at: Instant::now(),
+            duration: Duration::from_secs(4),
+        }
+    }
+
+    fn is_expired(&self) -> bool {
+        self.created_at.elapsed() > self.duration
+    }
+}
+
 /// Main application struct for GPUI
 pub struct NibApp {
     file_path: Option<PathBuf>,
@@ -458,6 +486,21 @@ pub struct EditorView {
     blur_annotations_hash: u64,
     /// Pending debounced blur regeneration task (cancelled when replaced)
     blur_regen_task: Option<Task<()>>,
+    /// Toast messages to display
+    toasts: Vec<Toast>,
+    /// Pending messages from .nib file to convert to toasts
+    pending_messages: Vec<String>,
+    /// Tokio runtime for collab session (kept alive for socket server)
+    #[allow(dead_code)]
+    collab_runtime: Option<tokio::runtime::Runtime>,
+    /// Collab session for real-time sync with CLI
+    collab_session: Option<Session>,
+    /// IDs of annotations that have been sent to agent (for delta tracking)
+    sent_annotation_ids: std::collections::HashSet<u64>,
+    /// Question/message from Claude to display to user
+    claude_question: Option<String>,
+    /// Whether GUI should quit after sending response
+    quit_requested: bool,
 }
 
 impl EditorView {
@@ -554,11 +597,18 @@ impl EditorView {
             text_input_state: None,
             tool_manager: ToolManager::with_all_tools(),
             nib_file,
-            nib_path,
+            nib_path: nib_path.clone(),
             last_nib_modified: None,
             blur_preview_path: None,
             blur_annotations_hash: 0,
             blur_regen_task: None,
+            toasts: Vec::new(),
+            pending_messages: Vec::new(),
+            collab_runtime: None,
+            collab_session: None,
+            sent_annotation_ids: std::collections::HashSet::new(),
+            claude_question: None,
+            quit_requested: false,
         };
 
         view.load_annotations();
@@ -568,7 +618,76 @@ impl EditorView {
             view.update_nib_modified_time();
         }
 
+        // Start collab session for .nib files
+        if let Some(ref path) = nib_path {
+            view.start_collab_session(path.clone());
+        }
+
         view
+    }
+
+    /// Start a collab session for the given .nib file path
+    ///
+    /// Spawns a dedicated background thread for the tokio runtime to avoid
+    /// conflicts with GPUI's event loop. The Session is moved back to the
+    /// GUI thread via a channel (its internal channels are thread-safe).
+    fn start_collab_session(&mut self, nib_path: PathBuf) {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        // Channel to receive the session from the background thread
+        let (tx, rx) = mpsc::channel::<Option<Session>>();
+
+        // Spawn a dedicated thread for the tokio runtime
+        // This thread stays alive to keep the socket server running
+        std::thread::spawn(move || {
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => {
+                    // Create session using block_on (this also starts socket server)
+                    match rt.block_on(Session::open(&nib_path, ClientType::Gui)) {
+                        Ok(session) => {
+                            tracing::info!(
+                                "Started collab session for {} (session_id: {})",
+                                nib_path.display(),
+                                session.session_id()
+                            );
+                            // Send session to GUI thread
+                            let _ = tx.send(Some(session));
+                            // Keep runtime alive by blocking this thread
+                            // The socket server runs in a spawned tokio task
+                            rt.block_on(async {
+                                // Park until the process exits
+                                loop {
+                                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to start collab session: {}", e);
+                            let _ = tx.send(None);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to create tokio runtime for collab: {}", e);
+                    let _ = tx.send(None);
+                }
+            }
+        });
+
+        // Wait briefly for the session to be created
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Some(session)) => {
+                self.collab_session = Some(session);
+                // Note: we don't store collab_runtime anymore since it lives in the background thread
+            }
+            Ok(None) => {
+                tracing::warn!("Collab session creation failed");
+            }
+            Err(_) => {
+                tracing::warn!("Timeout waiting for collab session");
+            }
+        }
     }
 
 
@@ -588,6 +707,279 @@ impl EditorView {
             if let Ok(Some(modified_at)) = nib.latest_annotation_modified_at() {
                 self.last_nib_modified = Some(modified_at);
             }
+        }
+    }
+
+    /// Add a toast message to display
+    fn add_toast(&mut self, message: String, cx: &mut Context<Self>) {
+        self.toasts.push(Toast::new(message));
+        cx.notify();
+        // Toast cleanup happens in render loop via cleanup_expired_toasts()
+    }
+
+    /// Clean up expired toasts (called from render loop)
+    fn cleanup_expired_toasts(&mut self) {
+        let original_len = self.toasts.len();
+        self.toasts.retain(|t| !t.is_expired());
+        if self.toasts.len() != original_len {
+            // Toasts were removed, notify will happen naturally in render
+        }
+    }
+
+    /// Render toast messages in top-right corner
+    fn render_toasts(&self) -> impl IntoElement {
+        div()
+            .absolute()
+            .top_4()
+            .right_4()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(self.toasts.iter().map(|toast| {
+                div()
+                    .px_4()
+                    .py_2()
+                    .bg(rgba(0x000000dd))
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(rgba(0xffffff33))
+                    .child(
+                        div()
+                            .text_color(rgb(0xffffff))
+                            .text_size(px(14.))
+                            .child(toast.message.clone()),
+                    )
+            }))
+    }
+
+    /// Send annotations to Claude (writes signal file)
+    fn send_to_claude(&mut self, cx: &mut Context<Self>) {
+        // Compute delta: only annotations not yet sent
+        let delta_annotations: Vec<_> = self
+            .annotations
+            .iter()
+            .filter(|a| !self.sent_annotation_ids.contains(&a.id.0))
+            .collect();
+
+        if delta_annotations.is_empty() {
+            self.add_toast("No new annotations to send".to_string(), cx);
+            // Still clear question and check quit even if no new annotations
+            self.claude_question = None;
+            if self.quit_requested {
+                std::process::exit(0);
+            }
+            return;
+        }
+
+        // Build JSON payload for delta annotations
+        let payload = self.annotations_to_json(&delta_annotations);
+
+        // Send via collab session (required)
+        match &self.collab_session {
+            Some(session) => {
+                match session.send_to_agent(payload) {
+                    Ok(_) => {
+                        for a in &delta_annotations {
+                            self.sent_annotation_ids.insert(a.id.0);
+                        }
+                        self.add_toast(format!("Sent {} annotation(s)", delta_annotations.len()), cx);
+
+                        // Clear question after sending
+                        self.claude_question = None;
+
+                        // Exit if quit was requested
+                        if self.quit_requested {
+                            std::process::exit(0);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Collab send failed: {}", e);
+                        self.add_toast(format!("Send failed: {}", e), cx);
+                    }
+                }
+            }
+            None => {
+                tracing::error!("No collab session - cannot send");
+                self.add_toast("Error: No collab session".to_string(), cx);
+            }
+        }
+    }
+
+    /// Send to Claude and request GUI exit
+    fn send_to_claude_and_quit(&mut self, cx: &mut Context<Self>) {
+        self.quit_requested = true;
+        self.send_to_claude(cx);
+    }
+
+    /// Process incoming collab messages (non-blocking)
+    fn process_collab_messages(&mut self, cx: &mut Context<Self>) {
+        use crate::collab::types::CollabMessage;
+        use crate::collab::operation::data_to_annotation;
+
+        // Collect messages first to avoid borrow conflict
+        let messages: Vec<CollabMessage> = {
+            let Some(session) = &self.collab_session else {
+                return;
+            };
+
+            let Some(handle) = session.handle() else {
+                return;
+            };
+
+            // Collect all pending messages
+            let mut msgs = Vec::new();
+            while let Ok(msg) = handle.receiver.try_recv() {
+                msgs.push(msg);
+            }
+            msgs
+        };
+
+        // Now process messages with full mutable access to self
+        let mut needs_blur_regen = false;
+        for msg in messages {
+            match msg {
+                CollabMessage::ShowMessage { message, source } => {
+                    tracing::info!("Received message from {}: {}", source, message);
+                    self.claude_question = Some(message);
+                    cx.notify();
+                }
+                CollabMessage::Operation(op) => {
+                    // Handle AddAnnotations that were converted to Operations
+                    use crate::collab::types::AnnotationOp;
+                    if let AnnotationOp::Add { id, data } = &op.operation {
+                        let annotation = data_to_annotation(*id, data);
+                        self.annotations.push(annotation);
+                        needs_blur_regen = true;
+                        cx.notify();
+                    }
+                }
+                CollabMessage::RequestQuit { client_id: _ } => {
+                    tracing::info!("Received quit request");
+                    self.quit_requested = true;
+                    cx.notify();
+                }
+                _ => {
+                    // Other messages handled elsewhere or ignored
+                }
+            }
+        }
+
+        // Regenerate blur preview if any annotations were added
+        if needs_blur_regen {
+            self.regenerate_blur_preview_sync();
+        }
+    }
+
+    /// Render Claude question/message banner at top center
+    fn render_claude_question(&self) -> impl IntoElement {
+        if let Some(ref question) = self.claude_question {
+            div()
+                .absolute()
+                .top_4()
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .max_w(px(600.))
+                        .px_6()
+                        .py_4()
+                        .bg(rgba(0x1a365dff)) // Dark blue background
+                        .rounded_lg()
+                        .border_2()
+                        .border_color(rgba(0x3182ceff)) // Blue border
+                        .shadow_lg()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .text_color(rgba(0x90cdf4ff)) // Light blue header
+                                        .text_size(px(12.))
+                                        .font_weight(gpui::FontWeight::BOLD)
+                                        .child("Claude asks:"),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(rgb(0xffffff))
+                                        .text_size(px(16.))
+                                        .child(question.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_color(rgba(0x90cdf4aa)) // Muted hint
+                                        .text_size(px(11.))
+                                        .child("Press Cmd+Enter to send response"),
+                                ),
+                        ),
+                )
+        } else {
+            div()
+        }
+    }
+
+    /// Convert annotations to minimal JSON for agent consumption
+    fn annotations_to_json(&self, annotations: &[&Annotation]) -> String {
+        use serde_json::json;
+
+        let items: Vec<_> = annotations
+            .iter()
+            .map(|a| {
+                let (type_name, coords, content) = match &a.annotation_type {
+                    AnnotationType::Arrow { start, end, .. } => {
+                        ("arrow", json!([start.x, start.y, end.x, end.y]), None)
+                    }
+                    AnnotationType::Box { region, .. } => {
+                        ("rectangle", json!([region.x, region.y, region.width, region.height]), None)
+                    }
+                    AnnotationType::Text { position, content, .. } => {
+                        ("text", json!([position.x, position.y]), Some(content.clone()))
+                    }
+                    AnnotationType::Number { position, value, .. } => {
+                        ("number", json!([position.x, position.y]), Some(value.to_string()))
+                    }
+                    AnnotationType::Highlight { region, .. } => {
+                        ("highlight", json!([region.x, region.y, region.width, region.height]), None)
+                    }
+                    AnnotationType::Ellipse { center, radius_x, radius_y, .. } => {
+                        ("ellipse", json!([center.x, center.y, *radius_x, *radius_y]), None)
+                    }
+                    AnnotationType::Line { start, end, .. } => {
+                        ("line", json!([start.x, start.y, end.x, end.y]), None)
+                    }
+                    AnnotationType::Blur { region, .. } => {
+                        ("blur", json!([region.x, region.y, region.width, region.height]), None)
+                    }
+                    AnnotationType::Crop { region } => {
+                        ("crop", json!([region.x, region.y, region.width, region.height]), None)
+                    }
+                    AnnotationType::Path { points, .. } => {
+                        let coords: Vec<_> = points.iter().map(|p| [p.x, p.y]).collect();
+                        ("path", json!(coords), None)
+                    }
+                };
+
+                let mut obj = json!({
+                    "id": format!("a{}", a.id.0),
+                    "type": type_name,
+                    "at": coords,
+                });
+
+                if let Some(c) = content {
+                    obj["content"] = json!(c);
+                }
+
+                obj
+            })
+            .collect();
+
+        if items.len() == 1 {
+            items[0].to_string()
+        } else {
+            json!({ "annotations": items }).to_string()
         }
     }
 
@@ -1082,16 +1474,31 @@ impl EditorView {
     fn check_and_reload_annotations(&mut self) {
         let t0 = std::time::Instant::now();
 
-        // For .nib files, check the annotation modification timestamp
+        // For .nib files, check the annotation modification timestamp and messages
         if let Some(ref nib) = self.nib_file {
+            // Check for new messages from CLI
+            if let Ok(messages) = nib.get_and_mark_messages_read() {
+                for (_id, content, _source, _created) in messages {
+                    self.pending_messages.push(content);
+                }
+            }
+
             match nib.latest_annotation_modified_at() {
                 Ok(Some(current_modified)) => {
                     if self.last_nib_modified != Some(current_modified) {
                         let before_count = self.annotations.len();
                         self.load_annotations();
+                        let after_count = self.annotations.len();
                         self.last_nib_modified = Some(current_modified);
                         nib_log!("human detected external change ({} -> {} annotations)",
-                            before_count, self.annotations.len());
+                            before_count, after_count);
+
+                        // Show toast for new annotations added externally (by Claude)
+                        if after_count > before_count {
+                            let new_count = after_count - before_count;
+                            self.pending_messages.push(format!("Claude added {} annotation{}",
+                                new_count, if new_count > 1 { "s" } else { "" }));
+                        }
                     }
                 }
                 Ok(None) => {
@@ -1790,7 +2197,39 @@ impl EditorView {
                                 this.current_style = style_copy;
                                 cx.notify();
                             }))
-                    })),
+                    }))
+                    // Separator before Send button
+                    .child(
+                        div()
+                            .w(px(1.))
+                            .h(px(40.))
+                            .mx_2()
+                            .bg(rgba(0xffffff33))
+                    )
+                    // Send button
+                    .child(
+                        div()
+                            .id("send-button")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(80.))  // Explicit width for click target
+                            .h(px(44.))
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(rgb(0x0078d4))  // Blue
+                            .hover(|s| s.bg(rgb(0x1084d8)))
+                            .child(
+                                div()
+                                    .text_color(rgb(0xffffff))
+                                    .text_size(px(14.))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child("Send ⌘↵")
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.send_to_claude(cx);
+                            }))
+                    ),
             ) // Close inner toolbar container
     }
 
@@ -2253,6 +2692,18 @@ impl EditorView {
     fn handle_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
 
+        // Handle Shift+Cmd+Enter to send to Claude and quit
+        if keystroke.modifiers.shift && keystroke.modifiers.platform && keystroke.key.as_str() == "enter" {
+            self.send_to_claude_and_quit(cx);
+            return;
+        }
+
+        // Handle Cmd+Enter to send to Claude
+        if keystroke.modifiers.platform && keystroke.key.as_str() == "enter" {
+            self.send_to_claude(cx);
+            return;
+        }
+
         // Handle zoom keyboard shortcuts (Cmd/Ctrl + key)
         // Skip if in text input mode
         if keystroke.modifiers.platform && self.text_input_state.is_none() {
@@ -2490,6 +2941,17 @@ impl Render for EditorView {
         // Check if sidecar file has changed and reload annotations if needed
         self.check_and_reload_annotations();
 
+        // Process pending messages from CLI as toasts
+        for message in std::mem::take(&mut self.pending_messages) {
+            self.add_toast(message, cx);
+        }
+
+        // Clean up expired toasts
+        self.cleanup_expired_toasts();
+
+        // Process incoming collab messages (non-blocking)
+        self.process_collab_messages(cx);
+
         // Inline text editing is now rendered directly on the canvas (Figma-style)
         // No separate overlay needed
         div()
@@ -2498,5 +2960,7 @@ impl Render for EditorView {
             .relative()
             .child(self.render_canvas(cx))
             .child(self.render_toolbar(cx)) // Toolbar floats over canvas
+            .child(self.render_toasts()) // Toasts in top-right corner
+            .child(self.render_claude_question()) // Claude question banner at top center
     }
 }

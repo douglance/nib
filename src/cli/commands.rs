@@ -984,6 +984,12 @@ pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
         let annotation = Annotation::new(annotation_type).with_color(color);
         let id = nib.add_annotation(&annotation)?;
 
+        // Store message for GUI toast if provided
+        if let Some(ref message) = args.message {
+            nib.add_message(message, "agent")?;
+        }
+        nib.save()?;
+
         println!("[NIB {}] claude added [{}] {} at ({}, {})",
             crate::events::timestamp_ms(),
             id,
@@ -2778,11 +2784,16 @@ pub async fn run_mcp_server(args: &McpServerArgs) -> Result<()> {
 /// Wait for human annotation feedback, spawn GUI, render, and exit
 ///
 /// This command is optimized for Claude-human collaboration:
-/// 1. Convert image to .nib if needed
-/// 2. Spawn GUI as subprocess (unless --no-gui)
-/// 3. Block watching for annotation changes
-/// 4. On annotation detected: kill GUI, render, output JSON
+/// 1. Try connecting to existing GUI session
+/// 2. If no session and not --no-gui, spawn GUI subprocess
+/// 3. Retry connection with backoff
+/// 4. Send annotations (--annotations) and message (-m) if provided
+/// 5. Request quit after response if --quit-after
+/// 6. Wait for SendToAgent response
+/// 7. Print JSON and optionally render
 pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
+    use super::annotation_json;
+
     tracing::info!(?args, "Running feedback");
 
     // Verify file exists
@@ -2823,241 +2834,142 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
         args.file.clone()
     };
 
-    // Spawn GUI as subprocess (unless --no-gui)
-    let mut gui_process = if !args.no_gui {
-        // Get path to current executable
-        let exe_path = std::env::current_exe().map_err(|e| {
-            crate::core::NibError::Other(format!("Failed to get executable path: {}", e))
-        })?;
+    let timeout_duration = if args.timeout > 0 {
+        Duration::from_secs(args.timeout)
+    } else {
+        Duration::from_secs(3600) // 1 hour default
+    };
 
-        let child = std::process::Command::new(&exe_path)
-            .arg("gui")
-            .arg(&nib_path)
-            .spawn()
-            .map_err(|e| {
-                crate::core::NibError::Other(format!("Failed to spawn GUI: {}", e))
+    // Step 1: Try connecting to an existing GUI session first
+    let session = match Session::connect(&nib_path, ClientType::Cli).await {
+        Ok(session) => {
+            tracing::info!("Connected to existing collab session");
+            session
+        }
+        Err(e) => {
+            tracing::debug!("No existing session: {}", e);
+
+            // Step 2: If no existing session and --no-gui, fail
+            if args.no_gui {
+                return Err(crate::core::NibError::Other(
+                    "No GUI session found and --no-gui specified".to_string(),
+                ));
+            }
+
+            // Step 3: Spawn GUI subprocess
+            let exe_path = std::env::current_exe().map_err(|e| {
+                crate::core::NibError::Other(format!("Failed to get executable path: {}", e))
             })?;
 
-        Some(child)
-    } else {
-        None
-    };
+            let _child = std::process::Command::new(&exe_path)
+                .arg("gui")
+                .arg(&nib_path)
+                .spawn()
+                .map_err(|e| {
+                    crate::core::NibError::Other(format!("Failed to spawn GUI: {}", e))
+                })?;
 
-    // Open the .nib file to get initial state
-    let nib = NibFile::open(&nib_path)?;
-    let last_modified_at = nib.latest_annotation_modified_at()?.unwrap_or(0);
-    drop(nib);
-
-    let poll_duration = Duration::from_millis(100);
-    let start_time = std::time::Instant::now();
-    let timeout_duration = if args.timeout > 0 {
-        Some(Duration::from_secs(args.timeout))
-    } else {
-        None
-    };
-
-    // Watch loop - wait for annotations
-    let annotations_received = loop {
-        // Check timeout
-        if let Some(timeout) = timeout_duration {
-            if start_time.elapsed() >= timeout {
-                // Kill GUI on timeout
-                if let Some(ref mut proc) = gui_process {
-                    let _ = proc.kill();
+            // Step 4: Retry connection with backoff (200ms intervals, 25 attempts = 5 seconds)
+            let mut session_result = Err("No connection".to_string());
+            for attempt in 1..=25 {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                match Session::connect(&nib_path, ClientType::Cli).await {
+                    Ok(s) => {
+                        tracing::info!("Connected to collab session on attempt {}", attempt);
+                        session_result = Ok(s);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::debug!("Connection attempt {} failed: {}", attempt, e);
+                    }
                 }
+            }
 
-                let output = serde_json::json!({
-                    "event": "timeout",
-                    "reason": "no_annotations"
-                });
+            session_result.map_err(|e| {
+                crate::core::NibError::Other(format!(
+                    "Failed to connect to GUI session after 25 attempts: {}",
+                    e
+                ))
+            })?
+        }
+    };
+
+    // Step 5: Parse and send annotations if provided
+    if let Some(ref annotations_json) = args.annotations {
+        let inputs = annotation_json::parse_annotations(annotations_json)
+            .map_err(crate::core::NibError::Other)?;
+
+        let annotation_data: Vec<_> = inputs.iter().map(|i| i.to_annotation_data()).collect();
+
+        if !annotation_data.is_empty() {
+            session.send_annotations(annotation_data).map_err(crate::core::NibError::Other)?;
+            tracing::info!("Sent {} annotations to GUI", inputs.len());
+        }
+    }
+
+    // Step 6: Send message if provided
+    if let Some(ref message) = args.message {
+        session
+            .send_message(message.clone(), "claude")
+            .map_err(crate::core::NibError::Other)?;
+        tracing::info!("Sent message to GUI: {}", message);
+    }
+
+    // Step 7: Request quit after response if specified
+    if args.quit_after {
+        session.request_quit().map_err(crate::core::NibError::Other)?;
+        tracing::info!("Requested GUI to quit after response");
+    }
+
+    // Step 8: Wait for SendToAgent response
+    match session.wait_for_send(timeout_duration) {
+        Ok(payload) => {
+            // GUI already prepared the JSON payload with delta annotations
+            println!("{}", payload);
+
+            // Optionally render (the GUI may have already done this)
+            if !args.no_render {
+                let nib = NibFile::open(&nib_path)?;
+                let all_annotations = nib.list_annotations()?;
+                let (image_data, image_info) = nib.get_image()?;
+
+                let stem = nib_path.file_stem().unwrap_or_default().to_string_lossy();
+                let rendered_path = nib_path.with_file_name(format!("{}.rendered.png", stem));
+
+                let nib_image = NibImage {
+                    image_data,
+                    width: image_info.width,
+                    height: image_info.height,
+                    source: crate::core::ImageSource::File(nib_path.clone()),
+                    annotations: all_annotations,
+                    title: None,
+                    description: None,
+                    tags: Vec::new(),
+                    file_path: Some(nib_path.clone()),
+                    created_at: SystemTime::now(),
+                    modified_at: SystemTime::now(),
+                };
+
+                let options = export::ExportOptions {
+                    bake_annotations: true,
+                    ..Default::default()
+                };
+                let _ = export::export_image(&nib_image, &rendered_path, &options);
+            }
+
+            Ok(())
+        }
+        Err(e) => {
+            if e.contains("Timeout") {
+                let output = serde_json::json!({"event": "timeout"});
                 println!("{}", serde_json::to_string(&output).unwrap_or_default());
-                return Ok(());
+                Ok(())
+            } else {
+                tracing::warn!("Collab wait failed: {}", e);
+                Err(crate::core::NibError::Other(format!("Wait failed: {}", e)))
             }
         }
-
-        tokio::time::sleep(poll_duration).await;
-
-        // Reopen the file to check for changes
-        let nib = match NibFile::open(&nib_path) {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::warn!("Error opening .nib file: {}", e);
-                continue;
-            }
-        };
-
-        // Check for new/modified annotations since last check
-        let new_annotations = match nib.list_annotations_since(last_modified_at) {
-            Ok(a) => a,
-            Err(e) => {
-                tracing::warn!("Error listing annotations: {}", e);
-                continue;
-            }
-        };
-
-        if !new_annotations.is_empty() {
-            break new_annotations;
-        }
-    };
-
-    // Kill GUI
-    if let Some(ref mut proc) = gui_process {
-        let _ = proc.kill();
     }
-
-    // Open the .nib file to get image info for OCR and zoom
-    let nib = NibFile::open(&nib_path)?;
-    let (image_data, image_info) = nib.get_image()?;
-    let all_annotations = nib.list_annotations()?;
-
-    // Determine the original image path for OCR (we need the PNG, not .nib)
-    let original_image_path = if is_image {
-        args.file.clone()
-    } else {
-        // For .nib files, we need to extract image temporarily for OCR
-        let temp_image_path = nib_path.with_extension("_temp_ocr.png");
-        std::fs::write(&temp_image_path, &image_data)?;
-        temp_image_path
-    };
-
-    // Build full annotation summaries with OCR context
-    let annotation_summaries: Vec<serde_json::Value> = annotations_received
-        .iter()
-        .map(|ann| {
-            let mut full_json = annotation_to_full_json(ann);
-
-            // Add OCR "near" - what text is closest to the annotation
-            let bounds = ann.annotation_type.bounds();
-            if let Some(near) = extract_ocr_context(
-                &original_image_path,
-                &bounds,
-                200, // padding
-                image_info.width,
-                image_info.height,
-            ) {
-                full_json
-                    .as_object_mut()
-                    .unwrap()
-                    .insert("near".to_string(), near);
-            }
-
-            full_json
-        })
-        .collect();
-
-    // Render (unless --no-render)
-    let rendered_path = if !args.no_render {
-        // Determine rendered output path
-        let stem = nib_path.file_stem().unwrap_or_default().to_string_lossy();
-        let rendered_path = nib_path.with_file_name(format!("{}.rendered.png", stem));
-
-        // Create NibImage and export with baked annotations
-        let nib_image = NibImage {
-            image_data: image_data.clone(),
-            width: image_info.width,
-            height: image_info.height,
-            source: crate::core::ImageSource::File(nib_path.clone()),
-            annotations: all_annotations,
-            title: None,
-            description: None,
-            tags: Vec::new(),
-            file_path: Some(nib_path.clone()),
-            created_at: SystemTime::now(),
-            modified_at: SystemTime::now(),
-        };
-
-        let options = export::ExportOptions {
-            bake_annotations: true,
-            ..Default::default()
-        };
-        export::export_image(&nib_image, &rendered_path, &options)?;
-
-        Some(rendered_path)
-    } else {
-        None
-    };
-
-    // Generate zoom image centered on annotations
-    let zoom_info = if !annotations_received.is_empty() {
-        // Calculate combined bounds of all new annotations
-        let mut min_x = f64::MAX;
-        let mut min_y = f64::MAX;
-        let mut max_x = f64::MIN;
-        let mut max_y = f64::MIN;
-
-        for ann in &annotations_received {
-            let bounds = ann.annotation_type.bounds();
-            min_x = min_x.min(bounds.x);
-            min_y = min_y.min(bounds.y);
-            max_x = max_x.max(bounds.x + bounds.width);
-            max_y = max_y.max(bounds.y + bounds.height);
-        }
-
-        let combined_bounds = crate::core::Region::new(
-            min_x,
-            min_y,
-            max_x - min_x,
-            max_y - min_y,
-        );
-
-        // Use rendered image for zoom if available, otherwise original
-        let source_for_zoom = rendered_path
-            .as_ref()
-            .map(|p| p.as_path())
-            .unwrap_or(&original_image_path);
-
-        let stem = nib_path.file_stem().unwrap_or_default().to_string_lossy();
-        let zoom_path = nib_path.with_file_name(format!("{}.zoom.png", stem));
-
-        match generate_zoom_image(
-            source_for_zoom,
-            &zoom_path,
-            &combined_bounds,
-            200, // padding
-            50,  // grid spacing
-            image_info.width,
-            image_info.height,
-        ) {
-            Ok(zoom_json) => Some(zoom_json),
-            Err(e) => {
-                tracing::warn!("Failed to generate zoom image: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Clean up temporary image if we created one
-    if !is_image {
-        let temp_path = nib_path.with_extension("_temp_ocr.png");
-        let _ = std::fs::remove_file(&temp_path);
-    }
-
-    // Output minimal JSON - recipient knows nib well
-    let zoom_path = zoom_info
-        .as_ref()
-        .and_then(|z| z.get("path"))
-        .and_then(|p| p.as_str())
-        .map(|s| s.to_string());
-
-    // For single annotation, output flat structure
-    // For multiple, output array
-    if annotation_summaries.len() == 1 {
-        let mut output = annotation_summaries[0].clone();
-        if let Some(path) = &zoom_path {
-            output.as_object_mut().unwrap().insert("zoom".to_string(), serde_json::json!(path));
-        }
-        println!("{}", serde_json::to_string(&output).unwrap_or_default());
-    } else {
-        let output = serde_json::json!({
-            "annotations": annotation_summaries,
-            "zoom": zoom_path
-        });
-        println!("{}", serde_json::to_string(&output).unwrap_or_default());
-    }
-
-    Ok(())
 }
 
 // =============================================================================

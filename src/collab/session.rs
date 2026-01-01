@@ -30,7 +30,49 @@ pub struct Session {
 }
 
 impl Session {
-    /// Join or create a session for the given image
+    /// Connect to an existing session (client mode - never creates)
+    ///
+    /// Use this when you want to connect to a session created by another process.
+    /// Returns an error if no session exists or connection fails.
+    pub async fn connect(
+        image_path: impl AsRef<Path>,
+        client_type: ClientType,
+    ) -> Result<Self, String> {
+        let image_path = image_path.as_ref().to_path_buf();
+        let manager = SessionManager::new(SessionManager::default_dir())
+            .map_err(|e| format!("Failed to create session manager: {}", e))?;
+
+        // Load existing session
+        let existing_state = manager
+            .load_session(&image_path)
+            .map_err(|e| format!("Failed to load session: {}", e))?
+            .ok_or_else(|| format!("No session exists for {}", image_path.display()))?;
+
+        // Check socket exists
+        if !existing_state.socket_path.exists() {
+            return Err(format!(
+                "Session socket not found: {}",
+                existing_state.socket_path.display()
+            ));
+        }
+
+        // Connect to existing session
+        let handle =
+            super::ipc::connect_to_session(&existing_state.socket_path, client_type).await?;
+
+        Ok(Self {
+            state: existing_state,
+            manager,
+            server: None,
+            handle: Some(handle),
+            annotations: Arc::new(RwLock::new(Vec::new())),
+            shutdown_tx: None,
+        })
+    }
+
+    /// Join or create a session for the given image (server mode)
+    ///
+    /// Use this when you want to create a session if none exists.
     pub async fn open(
         image_path: impl AsRef<Path>,
         client_type: ClientType,
@@ -292,6 +334,97 @@ impl Session {
     pub fn request_save(&self) -> Result<(), String> {
         let handle = self.handle.as_ref().ok_or("No session handle")?;
         handle.request_save()
+    }
+
+    /// Get a reference to the collab handle for direct message access
+    pub fn handle(&self) -> Option<&CollabHandle> {
+        self.handle.as_ref()
+    }
+
+    /// Send annotation deltas to waiting CLI agents
+    /// Used by GUI when user clicks "Send to Claude"
+    pub fn send_to_agent(&self, payload: String) -> Result<(), String> {
+        let handle = self.handle.as_ref().ok_or("No session handle")?;
+        handle.send_operation(AnnotationOp::SendToAgent { payload })
+    }
+
+    /// Send a message to be displayed in the GUI
+    /// Used by CLI to show questions/prompts to the user
+    pub fn send_message(&self, message: String, source: &str) -> Result<(), String> {
+        let handle = self.handle.as_ref().ok_or("No session handle")?;
+        handle
+            .sender
+            .send(CollabMessage::ShowMessage {
+                message,
+                source: source.to_string(),
+            })
+            .map_err(|e| format!("Failed to send message: {}", e))
+    }
+
+    /// Send multiple annotations to be added in the GUI
+    /// Used by CLI to batch-add annotations
+    pub fn send_annotations(&self, annotations: Vec<AnnotationData>) -> Result<(), String> {
+        let handle = self.handle.as_ref().ok_or("No session handle")?;
+        handle
+            .sender
+            .send(CollabMessage::AddAnnotations {
+                annotations,
+                client_id: handle.client_id,
+            })
+            .map_err(|e| format!("Failed to send annotations: {}", e))
+    }
+
+    /// Request the GUI to quit gracefully
+    /// Used by CLI to signal the GUI should exit after responding
+    pub fn request_quit(&self) -> Result<(), String> {
+        let handle = self.handle.as_ref().ok_or("No session handle")?;
+        handle
+            .sender
+            .send(CollabMessage::RequestQuit {
+                client_id: handle.client_id,
+            })
+            .map_err(|e| format!("Failed to request quit: {}", e))
+    }
+
+    /// Block waiting for a SendToAgent message from GUI
+    /// Returns the JSON payload when received
+    /// Used by CLI feedback command to wait for user to click "Send"
+    pub fn wait_for_send(&self, timeout: Duration) -> Result<String, String> {
+        use super::types::CollabMessage;
+
+        let handle = self.handle.as_ref().ok_or("No session handle")?;
+        let deadline = std::time::Instant::now() + timeout;
+
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Err("Timeout waiting for send".to_string());
+            }
+
+            // Try to receive with timeout
+            match handle.receiver.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                Ok(CollabMessage::Operation(op)) => {
+                    // Check if this is a SendToAgent operation
+                    if let AnnotationOp::SendToAgent { payload } = op.operation {
+                        return Ok(payload);
+                    }
+                    // Other operations: apply to local state and continue waiting
+                    apply_operation(&mut self.annotations.write(), &op.operation);
+                }
+                Ok(CollabMessage::Pong { .. }) => {
+                    // Keepalive, continue waiting
+                }
+                Ok(_) => {
+                    // Other messages, continue waiting
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    // Continue waiting
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
+                    return Err("Session disconnected".to_string());
+                }
+            }
+        }
     }
 
     /// Close the session
