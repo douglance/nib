@@ -9,7 +9,9 @@ use crate::collab::{
     types::ClientType,
 };
 use crate::core::{qml, NibImage, Result, TileBounds, TileId};
-use crate::gui::{NibApp, annotations_file_path, AnnotationsFile};
+use crate::{annotations_file_path, AnnotationsFile, AnnotationGeometry};
+#[cfg(feature = "gui")]
+use crate::gui::NibApp;
 use crate::storage::{
     self, convert, export, index::Index, nib_file::NibFile, qml_file, sessions::SessionRegistry,
 };
@@ -615,6 +617,7 @@ pub fn run_folder() -> Result<()> {
 }
 
 /// Execute the gui command (launch the graphical editor)
+#[cfg(feature = "gui")]
 pub fn run_gui(args: &GuiArgs) -> Result<()> {
     tracing::info!(?args, "Launching GUI");
 
@@ -740,16 +743,16 @@ pub fn run_annotations(args: &AnnotationsArgs) -> Result<()> {
 
                     for (i, annotation) in file.annotations.iter().enumerate() {
                         let geometry_info = match &annotation.geometry {
-                            crate::gui::AnnotationGeometry::Rectangle { x, y, width, height } => {
+                            AnnotationGeometry::Rectangle { x, y, width, height } => {
                                 format!("x={:.0}, y={:.0}, w={:.0}, h={:.0}", x, y, width, height)
                             }
-                            crate::gui::AnnotationGeometry::Line { start_x, start_y, end_x, end_y } => {
+                            AnnotationGeometry::Line { start_x, start_y, end_x, end_y } => {
                                 format!("({:.0},{:.0}) -> ({:.0},{:.0})", start_x, start_y, end_x, end_y)
                             }
-                            crate::gui::AnnotationGeometry::Ellipse { center_x, center_y, radius_x, radius_y } => {
+                            AnnotationGeometry::Ellipse { center_x, center_y, radius_x, radius_y } => {
                                 format!("center=({:.0},{:.0}), rx={:.0}, ry={:.0}", center_x, center_y, radius_x, radius_y)
                             }
-                            crate::gui::AnnotationGeometry::Point { x, y, value, content } => {
+                            AnnotationGeometry::Point { x, y, value, content } => {
                                 let mut info = format!("({:.0},{:.0})", x, y);
                                 if let Some(v) = value {
                                     info.push_str(&format!(" value={}", v));
@@ -759,7 +762,7 @@ pub fn run_annotations(args: &AnnotationsArgs) -> Result<()> {
                                 }
                                 info
                             }
-                            crate::gui::AnnotationGeometry::Path { points } => {
+                            AnnotationGeometry::Path { points } => {
                                 format!("{} points", points.len())
                             }
                         };
@@ -1002,70 +1005,96 @@ pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Handle regular image files with JSON sidecar format
-    let annotations_path = annotations_file_path(&args.file);
+    // Handle regular image files - use .nib SQLite format
+    let nib_path = args.file.with_extension("nib");
 
-    // Load existing annotations or create empty file
-    let mut annotations_file = if annotations_path.exists() {
-        let json_content = std::fs::read_to_string(&annotations_path)?;
-        serde_json::from_str::<AnnotationsFile>(&json_content).unwrap_or_else(|_| {
-            AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new())
-        })
+    // Open existing .nib or create new one from the image
+    let nib = if nib_path.exists() {
+        NibFile::open(&nib_path)?
     } else {
-        AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new())
+        // Create new .nib file from image
+        let image_data = std::fs::read(&args.file)?;
+        let img = image::load_from_memory(&image_data).map_err(|e| {
+            crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+        })?;
+        let extension = args.file
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("png")
+            .to_lowercase();
+        let format = match extension.as_str() {
+            "jpg" | "jpeg" => "jpeg",
+            "webp" => "webp",
+            _ => "png",
+        };
+        NibFile::create(&nib_path, &image_data, format, img.width(), img.height())?
     };
 
-    // Determine next annotation ID (a1, a2, etc.)
-    let next_id = annotations_file
-        .annotations
-        .iter()
-        .filter_map(|a| {
-            a.id.strip_prefix('a')
-                .and_then(|n| n.parse::<u32>().ok())
-        })
-        .max()
-        .unwrap_or(0) + 1;
-
-    // Create the geometry based on annotation type
-    let geometry = match args.annotation_type.as_str() {
-        "rectangle" | "highlight" | "blur" | "crop" => {
-            crate::gui::AnnotationGeometry::Rectangle {
-                x: args.x,
-                y: args.y,
-                width: args.width,
-                height: args.height,
-            }
-        }
-        "arrow" | "line" => {
-            crate::gui::AnnotationGeometry::Line {
-                start_x: args.x,
-                start_y: args.y,
-                end_x: args.x + args.width,
-                end_y: args.y + args.height,
-            }
-        }
-        "ellipse" => {
-            crate::gui::AnnotationGeometry::Ellipse {
-                center_x: args.x + args.width / 2.0,
-                center_y: args.y + args.height / 2.0,
-                radius_x: args.width / 2.0,
-                radius_y: args.height / 2.0,
-            }
-        }
-        "text" => {
-            crate::gui::AnnotationGeometry::Point {
-                x: args.x,
-                y: args.y,
-                value: None,
-                content: args.text.clone().or_else(|| Some("Text".to_string())),
-            }
-        }
+    // Create the annotation type based on args
+    let annotation_type = match args.annotation_type.as_str() {
+        "rectangle" => AnnotationType::Box {
+            region: Region::new(args.x, args.y, args.width, args.height),
+            stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
+            filled: false,
+            corner_radius: 0.0,
+        },
+        "highlight" => AnnotationType::Highlight {
+            region: Region::new(args.x, args.y, args.width, args.height),
+            corner_radius: 0.0,
+        },
+        "blur" => AnnotationType::Blur {
+            region: Region::new(args.x, args.y, args.width, args.height),
+            intensity: BlurIntensity::Medium,
+        },
+        "crop" => AnnotationType::Crop {
+            region: Region::new(args.x, args.y, args.width, args.height),
+        },
+        "arrow" => AnnotationType::Arrow {
+            start: Point::new(args.x, args.y),
+            end: Point::new(args.x + args.width, args.y + args.height),
+            head: ArrowHead::End,
+            stroke_width: 2.0,
+        },
+        "line" => AnnotationType::Line {
+            start: Point::new(args.x, args.y),
+            end: Point::new(args.x + args.width, args.y + args.height),
+            stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
+        },
+        "ellipse" => AnnotationType::Ellipse {
+            center: Point::new(args.x + args.width / 2.0, args.y + args.height / 2.0),
+            radius_x: args.width / 2.0,
+            radius_y: args.height / 2.0,
+            stroke_width: 2.0,
+            filled: false,
+        },
+        "text" => AnnotationType::Text {
+            position: Point::new(args.x, args.y),
+            content: args.text.clone().unwrap_or_else(|| "Text".to_string()),
+            font_size: 32.0,
+            align: TextAlign::Left,
+            background: None,
+            max_width: None,
+        },
         "number" => {
-            crate::gui::AnnotationGeometry::Point {
-                x: args.x,
-                y: args.y,
-                value: args.value.or(Some(next_id)),
-                content: None,
+            // Get next number value from existing annotations
+            let next_num = nib.list_annotations()?
+                .iter()
+                .filter_map(|a| {
+                    if let AnnotationType::Number { value, .. } = &a.annotation_type {
+                        Some(*value)
+                    } else {
+                        None
+                    }
+                })
+                .max()
+                .unwrap_or(0) + 1;
+
+            AnnotationType::Number {
+                position: Point::new(args.x, args.y),
+                value: args.value.unwrap_or(next_num),
+                radius: 16.0,
             }
         }
         _ => {
@@ -1076,32 +1105,24 @@ pub fn run_add_annotation(args: &AddAnnotationArgs) -> Result<()> {
         }
     };
 
-    // Create the new annotation
-    let new_annotation = crate::gui::SerializedAnnotation {
-        id: format!("a{}", next_id),
-        annotation_type: args.annotation_type.clone(),
-        geometry,
-        color: args.color.clone(),
-    };
+    // Create and add the annotation
+    let annotation = Annotation::new(annotation_type).with_color(color);
+    let id = nib.add_annotation(&annotation)?;
 
-    // Add to annotations list
-    annotations_file.annotations.push(new_annotation.clone());
-
-    // Write back to sidecar file
-    let json = serde_json::to_string_pretty(&annotations_file).map_err(|e| {
-        crate::core::NibError::Other(format!("Failed to serialize annotations: {}", e))
-    })?;
-
-    std::fs::write(&annotations_path, json)?;
+    // Store message for GUI toast if provided
+    if let Some(ref message) = args.message {
+        nib.add_message(message, "agent")?;
+    }
+    nib.save()?;
 
     println!("[NIB {}] claude added [{}] {} at ({}, {})",
         crate::events::timestamp_ms(),
-        new_annotation.id,
+        id,
         args.annotation_type,
         args.x,
         args.y
     );
-    println!("Saved to: {}", annotations_path.display());
+    println!("Saved to: {}", nib_path.display());
 
     Ok(())
 }
@@ -1221,6 +1242,7 @@ fn load_from_clipboard() -> Result<NibImage> {
 }
 
 /// Parse a region string in "x,y,width,height" format.
+#[cfg(feature = "ocr")]
 fn parse_region(region_str: &str) -> Result<crate::ocr::Region> {
     let parts: Vec<&str> = region_str.split(',').collect();
     if parts.len() != 4 {
@@ -1247,6 +1269,7 @@ fn parse_region(region_str: &str) -> Result<crate::ocr::Region> {
 }
 
 /// Execute the find-text command (OCR-based text search with coordinates)
+#[cfg(feature = "ocr")]
 pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
     tracing::info!(?args, "Running find-text");
 
@@ -1341,53 +1364,46 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
 
     // If --highlight flag is set, add annotations for found text
     if args.highlight && !results.is_empty() {
-        let annotations_path = annotations_file_path(&args.file);
+        use crate::core::{Annotation, AnnotationType, Region};
 
-        // Load existing annotations or create empty file
-        let mut annotations_file = if annotations_path.exists() {
-            let json_content = std::fs::read_to_string(&annotations_path)?;
-            serde_json::from_str::<AnnotationsFile>(&json_content).unwrap_or_else(|_| {
-                AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new())
-            })
+        let nib_path = args.file.with_extension("nib");
+
+        // Open existing .nib or create new one from the image
+        let nib = if nib_path.exists() {
+            NibFile::open(&nib_path)?
         } else {
-            AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new())
+            // Create new .nib file from image
+            let image_data = std::fs::read(&args.file)?;
+            let img = image::load_from_memory(&image_data).map_err(|e| {
+                crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+            })?;
+            let extension = args.file
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("png")
+                .to_lowercase();
+            let format = match extension.as_str() {
+                "jpg" | "jpeg" => "jpeg",
+                "webp" => "webp",
+                _ => "png",
+            };
+            NibFile::create(&nib_path, &image_data, format, img.width(), img.height())?
         };
 
-        // Determine next annotation ID
-        let mut next_id = annotations_file
-            .annotations
-            .iter()
-            .filter_map(|a| {
-                a.id.strip_prefix('a')
-                    .and_then(|n| n.parse::<u32>().ok())
-            })
-            .max()
-            .unwrap_or(0) + 1;
+        // Parse the color
+        let color = parse_hex_color(&args.color).unwrap_or(crate::core::Color::rgba(255, 255, 0, 128));
 
         // Add highlight for each match
         for m in &results {
-            let new_annotation = crate::gui::SerializedAnnotation {
-                id: format!("a{}", next_id),
-                annotation_type: "highlight".to_string(),
-                geometry: crate::gui::AnnotationGeometry::Rectangle {
-                    x: m.x as f64,
-                    y: m.y as f64,
-                    width: m.width as f64,
-                    height: m.height as f64,
-                },
-                color: args.color.clone(),
-            };
-            annotations_file.annotations.push(new_annotation);
-            next_id += 1;
+            let annotation = Annotation::new(AnnotationType::Highlight {
+                region: Region::new(m.x as f64, m.y as f64, m.width as f64, m.height as f64),
+                corner_radius: 0.0,
+            }).with_color(color);
+            nib.add_annotation(&annotation)?;
         }
 
-        // Write back to sidecar file
-        let json = serde_json::to_string_pretty(&annotations_file).map_err(|e| {
-            crate::core::NibError::Other(format!("Failed to serialize annotations: {}", e))
-        })?;
-
-        std::fs::write(&annotations_path, json)?;
-        println!("Added {} highlight annotation(s) to: {}", results.len(), annotations_path.display());
+        nib.save()?;
+        println!("Added {} highlight annotation(s) to: {}", results.len(), nib_path.display());
     }
 
     Ok(())
@@ -1443,34 +1459,42 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
         ));
     }
 
-    let annotations_path = annotations_file_path(&args.file);
+    // Check if this is a .nib file or an image file
+    let is_nib_file = args.file.extension().map(|e| e == "nib").unwrap_or(false);
 
-    // Load annotations from sidecar file
-    let annotations: Vec<crate::core::Annotation> = if annotations_path.exists() {
-        let json_content = std::fs::read_to_string(&annotations_path)?;
-        match serde_json::from_str::<AnnotationsFile>(&json_content) {
-            Ok(file) => {
-                file.annotations
-                    .iter()
-                    .filter_map(crate::gui::deserialize_annotation)
-                    .collect()
-            }
-            Err(_) => Vec::new(),
-        }
+    let (image_data, width, height, annotations) = if is_nib_file {
+        // Load directly from .nib file
+        let nib = NibFile::open(&args.file)?;
+        let (data, info) = nib.get_image()?;
+        let anns = nib.list_annotations()?;
+        (data, info.width, info.height, anns)
     } else {
-        Vec::new()
-    };
+        // For image files, look for corresponding .nib file
+        let nib_path = args.file.with_extension("nib");
 
-    // Load the base image
-    let image_data = std::fs::read(&args.file)?;
-    let img = image::load_from_memory(&image_data)
-        .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
+        if nib_path.exists() {
+            // Load annotations from .nib file
+            let nib = NibFile::open(&nib_path)?;
+            let anns = nib.list_annotations()?;
+            // But use the image data from the original file for freshness
+            let image_data = std::fs::read(&args.file)?;
+            let img = image::load_from_memory(&image_data)
+                .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
+            (image_data, img.width(), img.height(), anns)
+        } else {
+            // No .nib file exists - render with no annotations
+            let image_data = std::fs::read(&args.file)?;
+            let img = image::load_from_memory(&image_data)
+                .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
+            (image_data, img.width(), img.height(), Vec::new())
+        }
+    };
 
     // Create NibImage with annotations
     let nib_image = NibImage {
         image_data,
-        width: img.width(),
-        height: img.height(),
+        width,
+        height,
         source: crate::core::ImageSource::File(args.file.clone()),
         annotations,
         title: None,
@@ -1483,9 +1507,15 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
 
     // Determine output path
     let output_path = args.output.clone().unwrap_or_else(|| {
-        let stem = args.file.file_stem().unwrap_or_default().to_string_lossy();
-        let ext = args.file.extension().unwrap_or_default().to_string_lossy();
-        args.file.with_file_name(format!("{}.rendered.{}", stem, ext))
+        if is_nib_file {
+            // For .nib files, output as .rendered.png
+            let stem = args.file.file_stem().unwrap_or_default().to_string_lossy();
+            args.file.with_file_name(format!("{}.rendered.png", stem))
+        } else {
+            let stem = args.file.file_stem().unwrap_or_default().to_string_lossy();
+            let ext = args.file.extension().unwrap_or_default().to_string_lossy();
+            args.file.with_file_name(format!("{}.rendered.{}", stem, ext))
+        }
     });
 
     // Export with baked annotations
@@ -1504,7 +1534,7 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
 pub fn run_remove_annotation(args: &RemoveAnnotationArgs) -> Result<()> {
     tracing::info!(?args, "Running remove-annotation");
 
-    // Verify the image file exists
+    // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
             crate::core::StorageError::NotFound(format!(
@@ -1514,38 +1544,41 @@ pub fn run_remove_annotation(args: &RemoveAnnotationArgs) -> Result<()> {
         ));
     }
 
-    let annotations_path = annotations_file_path(&args.file);
+    // Check if this is a .nib file or an image file
+    let is_nib_file = args.file.extension().map(|e| e == "nib").unwrap_or(false);
 
-    // Load existing annotations
-    if !annotations_path.exists() {
+    let nib_path = if is_nib_file {
+        args.file.clone()
+    } else {
+        args.file.with_extension("nib")
+    };
+
+    // Verify the .nib file exists
+    if !nib_path.exists() {
         return Err(crate::core::NibError::Other(format!(
-            "No annotations file found: {}",
-            annotations_path.display()
+            "No .nib file found: {}",
+            nib_path.display()
         )));
     }
 
-    let json_content = std::fs::read_to_string(&annotations_path)?;
-    let mut annotations_file = serde_json::from_str::<AnnotationsFile>(&json_content)
-        .map_err(|e| crate::core::NibError::Other(format!("Failed to parse annotations: {}", e)))?;
+    // Open the .nib file
+    let nib = NibFile::open(&nib_path)?;
 
-    // Find and remove the annotation
-    let original_count = annotations_file.annotations.len();
-    annotations_file.annotations.retain(|a| a.id != args.id);
+    // Delete the annotation
+    let deleted = nib.delete_annotation(&args.id)?;
 
-    if annotations_file.annotations.len() == original_count {
+    if !deleted {
         return Err(crate::core::NibError::Other(format!(
             "Annotation not found: {}",
             args.id
         )));
     }
 
-    // Write back to file
-    let json = serde_json::to_string_pretty(&annotations_file)
-        .map_err(|e| crate::core::NibError::Other(format!("Failed to serialize: {}", e)))?;
-    std::fs::write(&annotations_path, json)?;
+    nib.save()?;
 
+    let remaining = nib.annotation_count()?;
     println!("Removed annotation [{}]", args.id);
-    println!("Remaining annotations: {}", annotations_file.annotations.len());
+    println!("Remaining annotations: {}", remaining);
 
     Ok(())
 }
@@ -1554,7 +1587,7 @@ pub fn run_remove_annotation(args: &RemoveAnnotationArgs) -> Result<()> {
 pub fn run_clear_annotations(args: &ClearAnnotationsArgs) -> Result<()> {
     tracing::info!(?args, "Running clear-annotations");
 
-    // Verify the image file exists
+    // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
             crate::core::StorageError::NotFound(format!(
@@ -1564,23 +1597,35 @@ pub fn run_clear_annotations(args: &ClearAnnotationsArgs) -> Result<()> {
         ));
     }
 
-    let annotations_path = annotations_file_path(&args.file);
+    // Check if this is a .nib file or an image file
+    let is_nib_file = args.file.extension().map(|e| e == "nib").unwrap_or(false);
 
-    if !annotations_path.exists() {
+    let nib_path = if is_nib_file {
+        args.file.clone()
+    } else {
+        args.file.with_extension("nib")
+    };
+
+    // Check if .nib file exists
+    if !nib_path.exists() {
         println!("No annotations to clear");
         return Ok(());
     }
 
-    // Load to get count, then clear
-    let json_content = std::fs::read_to_string(&annotations_path)?;
-    let old_file = serde_json::from_str::<AnnotationsFile>(&json_content).ok();
-    let removed_count = old_file.map(|f| f.annotations.len()).unwrap_or(0);
+    // Open the .nib file
+    let nib = NibFile::open(&nib_path)?;
 
-    // Create empty annotations file
-    let empty_file = AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new());
-    let json = serde_json::to_string_pretty(&empty_file)
-        .map_err(|e| crate::core::NibError::Other(format!("Failed to serialize: {}", e)))?;
-    std::fs::write(&annotations_path, json)?;
+    // Get count before clearing
+    let annotations = nib.list_annotations()?;
+    let removed_count = annotations.len();
+
+    // Delete all annotations
+    for ann in &annotations {
+        let id = format!("a{}", ann.id.0);
+        nib.delete_annotation(&id)?;
+    }
+
+    nib.save()?;
 
     println!("Cleared {} annotation(s)", removed_count);
 
@@ -1836,6 +1881,7 @@ pub fn run_info(args: &super::args::InfoArgs) -> Result<()> {
 }
 
 /// Execute the open command (import image, create .nib, open in GUI)
+#[cfg(feature = "gui")]
 pub fn run_open(args: &super::args::OpenArgs) -> Result<()> {
     tracing::info!(?args, "Running open");
 
@@ -2775,6 +2821,7 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
 
 
 /// Run the MCP server for Claude Code integration
+#[cfg(feature = "mcp")]
 pub async fn run_mcp_server(args: &McpServerArgs) -> Result<()> {
     tracing::info!(?args, "Starting MCP server");
 
@@ -3018,6 +3065,7 @@ fn annotation_to_full_json(ann: &crate::core::Annotation) -> serde_json::Value {
 }
 
 /// Extract nearest OCR text around an annotation - returns just the closest text
+#[cfg(feature = "ocr")]
 fn extract_ocr_context(
     image_path: &Path,
     bounds: &crate::core::Region,

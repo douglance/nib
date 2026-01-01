@@ -71,16 +71,34 @@ async fn run() -> Result<()> {
         Some(Command::List(args)) => cli::run_list(&args),
         Some(Command::Sessions) => cli::run_sessions(),
         Some(Command::Folder) => cli::run_folder(),
+        #[cfg(feature = "gui")]
         Some(Command::Gui(args)) => cli::run_gui(&args),
+        #[cfg(not(feature = "gui"))]
+        Some(Command::Gui(_)) => {
+            eprintln!("Error: GUI feature not enabled. Rebuild with --features gui");
+            std::process::exit(1);
+        }
         Some(Command::Annotations(args)) => cli::run_annotations(&args),
         Some(Command::AddAnnotation(args)) => cli::run_add_annotation(&args),
+        #[cfg(feature = "ocr")]
         Some(Command::FindText(args)) => cli::run_find_text(&args),
+        #[cfg(not(feature = "ocr"))]
+        Some(Command::FindText(_)) => {
+            eprintln!("Error: OCR feature not enabled. Rebuild with --features ocr");
+            std::process::exit(1);
+        }
         Some(Command::Render(args)) => cli::run_render(&args),
         Some(Command::RemoveAnnotation(args)) => cli::run_remove_annotation(&args),
         Some(Command::ClearAnnotations(args)) => cli::run_clear_annotations(&args),
         Some(Command::Grid(args)) => cli::run_grid(&args),
         Some(Command::Info(args)) => cli::run_info(&args),
+        #[cfg(feature = "gui")]
         Some(Command::Open(args)) => cli::run_open(&args),
+        #[cfg(not(feature = "gui"))]
+        Some(Command::Open(_)) => {
+            eprintln!("Error: GUI feature not enabled. Rebuild with --features gui");
+            std::process::exit(1);
+        }
         Some(Command::Import(args)) => cli::run_import(&args),
         Some(Command::Watch(args)) => cli::run_watch(&args).await,
         Some(Command::Migrate(args)) => cli::run_migrate(&args),
@@ -88,7 +106,13 @@ async fn run() -> Result<()> {
         Some(Command::Query(args)) => cli::run_query(&args, &cli.format),
         Some(Command::Extract(args)) => cli::run_extract(&args),
         Some(Command::Tiles(args)) => cli::run_tiles(&args, &cli.format),
+        #[cfg(feature = "mcp")]
         Some(Command::McpServer(args)) => cli::run_mcp_server(&args).await,
+        #[cfg(not(feature = "mcp"))]
+        Some(Command::McpServer(_)) => {
+            eprintln!("Error: MCP feature not enabled. Rebuild with --features mcp");
+            std::process::exit(1);
+        }
         Some(Command::Feedback(args)) => cli::run_feedback(&args).await,
         None => {
             eprintln!("Error: No file or command specified. Use --help for usage.");

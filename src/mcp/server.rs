@@ -18,7 +18,7 @@ use rmcp::{
 use tokio::sync::Mutex;
 
 use crate::core::{ImageSource, NibImage, Result as NibResult};
-use crate::gui::{annotations_file_path, AnnotationsFile, AnnotationGeometry, SerializedAnnotation, deserialize_annotation};
+use crate::{annotations_file_path, AnnotationsFile, AnnotationGeometry, SerializedAnnotation, deserialize_annotation};
 use crate::storage::export;
 
 use super::tools::*;

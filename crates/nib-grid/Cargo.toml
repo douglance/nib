@@ -1,0 +1,16 @@
+[package]
+name = "nib-grid"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Coordinate grid overlays for Nib"
+authors.workspace = true
+repository.workspace = true
+license-file.workspace = true
+
+[dependencies]
+nib-core.workspace = true
+image.workspace = true
+imageproc.workspace = true
+rstar.workspace = true
+serde.workspace = true

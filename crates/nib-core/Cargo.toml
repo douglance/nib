@@ -1,0 +1,20 @@
+[package]
+name = "nib-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Core types and pure business logic for Nib"
+authors.workspace = true
+repository.workspace = true
+license-file.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+image.workspace = true
+rstar.workspace = true
+rusqlite.workspace = true

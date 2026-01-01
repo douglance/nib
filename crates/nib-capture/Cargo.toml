@@ -1,0 +1,24 @@
+[package]
+name = "nib-capture"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+description = "Screen and region capture for Nib"
+authors.workspace = true
+repository.workspace = true
+license-file.workspace = true
+
+[dependencies]
+nib-core.workspace = true
+screenshots.workspace = true
+image.workspace = true
+rstar.workspace = true
+lru.workspace = true
+bincode.workspace = true
+rayon.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

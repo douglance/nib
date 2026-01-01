@@ -35,10 +35,19 @@ pub mod collab;
 pub mod core;
 pub mod events;
 pub mod grid;
+#[cfg(feature = "gui")]
 pub mod gui;
+#[cfg(feature = "mcp")]
 pub mod mcp;
+#[cfg(feature = "ocr")]
 pub mod ocr;
 pub mod storage;
+
+// Re-export serialization types from nib-serde for use without gui feature
+pub use nib_serde::{
+    annotations_file_path, deserialize_annotation, serialize_annotation,
+    AnnotationGeometry, AnnotationsFile, SerializedAnnotation,
+};
 
 /// Re-export commonly used types
 pub mod prelude {

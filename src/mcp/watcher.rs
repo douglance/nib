@@ -13,7 +13,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex as SyncMutex;
 use tokio::sync::broadcast;
 
-use crate::gui::{annotations_file_path, AnnotationsFile, AnnotationGeometry, SerializedAnnotation};
+use crate::{annotations_file_path, AnnotationsFile, AnnotationGeometry, SerializedAnnotation};
 
 use super::tools::{AnnotationEvent, EventAnnotation};
 

@@ -1,21 +1,5 @@
-//! GUI module - GPUI-based graphical interface
+//! GPUI-based graphical interface
 //!
-//! This module provides the graphical annotation editor using GPUI.
-//! Note: GPUI requires special setup. See https://www.gpui.rs/
+//! This module re-exports from the nib-gui workspace crate.
 
-pub mod app;
-pub mod canvas;
-pub mod color_picker;
-pub mod elements;
-pub mod sidebar;
-pub mod toolbar;
-pub mod tools;
-
-pub use app::NibApp;
-pub use app::{annotations_file_path, deserialize_annotation, AnnotationsFile, AnnotationGeometry, SerializedAnnotation};
-
-// Re-export commonly used tool types for convenience
-pub use tools::{
-    Modifiers, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolManager, ToolMode,
-    ToolPreview, ToolResult,
-};
+pub use nib_gui::*;
