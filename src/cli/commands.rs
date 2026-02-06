@@ -30,22 +30,41 @@ pub fn run_capture(args: &CaptureArgs) -> Result<()> {
         std::thread::sleep(Duration::from_secs(args.delay as u64));
     }
 
-    // Capture based on mode
-    let image = match args.mode {
-        CaptureMode::Screen => {
-            println!("Capturing full screen...");
-            screen::capture_primary()?
-        }
-        CaptureMode::Region => {
-            // For now, fall back to full screen capture
-            // TODO: Implement interactive region selection
-            println!("Region selection not yet implemented, capturing full screen...");
-            screen::capture_primary()?
-        }
-        CaptureMode::Window => {
-            // TODO: Implement window capture
-            println!("Window capture not yet implemented, capturing full screen...");
-            screen::capture_primary()?
+    // Capture based on --app/--title flags or mode
+    let image = if let Some(ref app) = args.app {
+        println!("Capturing window for app: {}", app);
+        crate::capture::window::capture_by_app(app)?
+    } else if let Some(ref title) = args.title {
+        println!("Capturing window with title: {}", title);
+        crate::capture::window::capture_by_title(title)?
+    } else {
+        match args.mode {
+            CaptureMode::Screen => {
+                println!("Capturing full screen...");
+                screen::capture_primary()?
+            }
+            CaptureMode::Region => {
+                // For now, fall back to full screen capture
+                // TODO: Implement interactive region selection
+                println!("Region selection not yet implemented, capturing full screen...");
+                screen::capture_primary()?
+            }
+            CaptureMode::Window => {
+                // Capture the focused window
+                let windows = crate::capture::window::list_windows()
+                    .map_err(|e| crate::core::NibError::Other(format!("{}", e)))?;
+                let focused = windows.iter().find(|w| w.is_focused);
+                if let Some(w) = focused {
+                    println!(
+                        "Capturing focused window: {} - \"{}\"",
+                        w.app_name, w.title
+                    );
+                    crate::capture::window::capture_by_app(&w.app_name)?
+                } else {
+                    println!("No focused window found, capturing full screen...");
+                    screen::capture_primary()?
+                }
+            }
         }
     };
 
@@ -1395,6 +1414,119 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
     Ok(())
 }
 
+/// Execute the pick-color command (sample color from image)
+pub fn run_pick_color(args: &super::args::PickColorArgs) -> Result<()> {
+    use image::GenericImageView;
+
+    tracing::info!(?args, "Running pick-color");
+
+    // Verify the file exists
+    if !args.file.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::NotFound(format!(
+                "File not found: {}",
+                args.file.display()
+            )),
+        ));
+    }
+
+    // Load the image
+    let image_data = std::fs::read(&args.file)?;
+    let img = image::load_from_memory(&image_data)
+        .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
+    let (width, height) = img.dimensions();
+
+    // Validate coordinates
+    if args.x >= width || args.y >= height {
+        return Err(crate::core::NibError::Other(format!(
+            "Coordinates ({}, {}) out of bounds for image {}x{}",
+            args.x, args.y, width, height
+        )));
+    }
+
+    // Sample color(s)
+    let rgba = if args.radius == 0 {
+        // Single pixel sample
+        let pixel = img.get_pixel(args.x, args.y);
+        [pixel[0], pixel[1], pixel[2], pixel[3]]
+    } else {
+        // Average pixels within radius
+        let mut r_sum: u64 = 0;
+        let mut g_sum: u64 = 0;
+        let mut b_sum: u64 = 0;
+        let mut a_sum: u64 = 0;
+        let mut count: u64 = 0;
+
+        let x_center = args.x as i64;
+        let y_center = args.y as i64;
+        let radius = args.radius as i64;
+
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                // Check if within circular radius
+                if dx * dx + dy * dy > radius * radius {
+                    continue;
+                }
+
+                let px = x_center + dx;
+                let py = y_center + dy;
+
+                // Bounds check
+                if px >= 0 && px < width as i64 && py >= 0 && py < height as i64 {
+                    let pixel = img.get_pixel(px as u32, py as u32);
+                    r_sum += pixel[0] as u64;
+                    g_sum += pixel[1] as u64;
+                    b_sum += pixel[2] as u64;
+                    a_sum += pixel[3] as u64;
+                    count += 1;
+                }
+            }
+        }
+
+        if count == 0 {
+            return Err(crate::core::NibError::Other(
+                "No pixels sampled within radius".to_string(),
+            ));
+        }
+
+        [
+            (r_sum / count) as u8,
+            (g_sum / count) as u8,
+            (b_sum / count) as u8,
+            (a_sum / count) as u8,
+        ]
+    };
+
+    // Format colors
+    let hex = format!("#{:02x}{:02x}{:02x}", rgba[0], rgba[1], rgba[2]);
+    let hex_alpha = format!("#{:02x}{:02x}{:02x}{:02x}", rgba[0], rgba[1], rgba[2], rgba[3]);
+
+    if args.json {
+        let output = serde_json::json!({
+            "hex": hex,
+            "hex_alpha": hex_alpha,
+            "rgb": [rgba[0], rgba[1], rgba[2]],
+            "rgba": rgba,
+            "r": rgba[0],
+            "g": rgba[1],
+            "b": rgba[2],
+            "a": rgba[3],
+            "x": args.x,
+            "y": args.y,
+            "radius": args.radius,
+            "file": args.file.display().to_string(),
+        });
+        println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    } else {
+        println!("{}", hex);
+        if args.radius > 0 {
+            println!("(averaged from {} radius)", args.radius);
+        }
+    }
+
+    Ok(())
+}
+
 /// Execute the info command (show .nib file info)
 pub fn run_info(args: &super::args::InfoArgs) -> Result<()> {
     tracing::info!(?args, "Running info");
@@ -2411,6 +2543,62 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
     Ok(())
 }
 
+
+/// Execute the windows command (list capturable windows)
+pub fn run_windows(args: &WindowsArgs) -> Result<()> {
+    tracing::info!(?args, "Running windows");
+
+    let windows = crate::capture::window::list_windows()
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to list windows: {}", e)))?;
+
+    // Filter by app name if provided
+    let filtered: Vec<_> = if let Some(ref app) = args.app {
+        let app_lower = app.to_lowercase();
+        windows
+            .into_iter()
+            .filter(|w| w.app_name.to_lowercase().contains(&app_lower))
+            .collect()
+    } else {
+        windows
+    };
+
+    if args.json {
+        let json_windows: Vec<serde_json::Value> = filtered
+            .iter()
+            .map(|w| {
+                serde_json::json!({
+                    "id": w.id,
+                    "app_name": w.app_name,
+                    "title": w.title,
+                    "x": w.x,
+                    "y": w.y,
+                    "width": w.width,
+                    "height": w.height,
+                    "focused": w.is_focused,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_windows).unwrap()
+        );
+    } else {
+        if filtered.is_empty() {
+            println!("No windows found.");
+            return Ok(());
+        }
+        for w in &filtered {
+            let focus = if w.is_focused { " [FOCUSED]" } else { "" };
+            println!(
+                "{}: \"{}\" ({}x{} at {},{}){}",
+                w.app_name, w.title, w.width, w.height, w.x, w.y, focus
+            );
+        }
+        println!("\n{} window(s) found", filtered.len());
+    }
+
+    Ok(())
+}
 
 /// Run the MCP server for Claude Code integration
 #[cfg(feature = "mcp")]

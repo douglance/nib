@@ -9,8 +9,10 @@
 pub mod region;
 pub mod screen;
 pub mod tiled;
+pub mod window;
 
 pub use tiled::{generate_tiles, TiledCapture};
+pub use window::{capture_by_app, capture_by_title, list_windows, WindowInfo};
 
 use nib_core::{CaptureError, ImageSource, NibImage};
 use std::time::SystemTime;

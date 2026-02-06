@@ -61,6 +61,12 @@ pub enum Command {
     /// Find text in an image using OCR
     FindText(FindTextArgs),
 
+    /// Pick a color from an image at specific coordinates
+    PickColor(PickColorArgs),
+
+    /// List capturable windows
+    Windows(WindowsArgs),
+
     /// Show comprehensive info about a .nib file
     Info(InfoArgs),
 
@@ -140,6 +146,14 @@ pub struct CaptureArgs {
     /// Delay before capture (seconds)
     #[arg(short, long, default_value = "0")]
     pub delay: u32,
+
+    /// Capture a specific app's window (case-insensitive substring match)
+    #[arg(long)]
+    pub app: Option<String>,
+
+    /// Capture window matching this title (case-insensitive substring match)
+    #[arg(long)]
+    pub title: Option<String>,
 
     /// Enable tiled capture for large images (creates tile pyramid)
     #[arg(long)]
@@ -396,6 +410,28 @@ pub struct FindTextArgs {
 }
 
 #[derive(Parser, Debug)]
+pub struct PickColorArgs {
+    /// Image file to pick color from
+    pub file: PathBuf,
+
+    /// X coordinate
+    #[arg(short = 'x', long)]
+    pub x: u32,
+
+    /// Y coordinate
+    #[arg(short = 'y', long)]
+    pub y: u32,
+
+    /// Sample radius for averaging (0 = single pixel, default: 0)
+    #[arg(short = 'r', long, default_value = "0")]
+    pub radius: u32,
+
+    /// Output as JSON for easy parsing
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Parser, Debug)]
 pub struct InfoArgs {
     /// The .nib file to inspect
     pub file: PathBuf,
@@ -485,6 +521,17 @@ pub enum SortOrder {
     Date,
     Name,
     Size,
+}
+
+#[derive(Parser, Debug)]
+pub struct WindowsArgs {
+    /// Filter by app name (case-insensitive substring match)
+    #[arg(short, long)]
+    pub app: Option<String>,
+
+    /// Output as JSON for easy parsing
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Parser, Debug)]

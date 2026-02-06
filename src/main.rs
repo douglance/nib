@@ -90,6 +90,8 @@ async fn run() -> Result<()> {
             eprintln!("Error: OCR feature not enabled. Rebuild with --features ocr");
             std::process::exit(1);
         }
+        Command::PickColor(args) => cli::run_pick_color(&args),
+        Command::Windows(args) => cli::run_windows(&args),
         Command::Info(args) => cli::run_info(&args),
         Command::Tile(subcmd) => match subcmd {
             TileCommand::Query(args) => cli::run_tile_query(&args, &cli.format),

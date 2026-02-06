@@ -65,6 +65,7 @@ rayon = "1.10"
 rmcp = { version = "0.12", features = ["server", "transport-io", "macros"] }
 schemars = "1.0"
 libc = "0.2"
+xcap = "0.8"
 
 # Dev dependencies
 tempfile = "3.14"
@@ -174,6 +175,9 @@ rayon.workspace = true
 # MCP (Model Context Protocol) server - feature-gated
 rmcp = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
+
+# Window capture
+xcap.workspace = true
 
 # Platform-specific utilities
 [target.'cfg(unix)'.dependencies]
