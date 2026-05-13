@@ -1,0 +1,32 @@
+{
+  "id": "https://doug-mm.tail5d92b4.ts.net/",
+  "name": "prtl",
+  "short_name": "prtl",
+  "description": "Tailscale portal for local project servers.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#11151b",
+  "theme_color": "#11151b",
+  "icons": [
+    {
+      "src": "/icons/prtl-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/prtl-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/prtl-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

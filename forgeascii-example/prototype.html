@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Checkout Interaction For Failed Payment</title>
+  <style>
+    body { margin: 0; padding: 24px; background: #101214; color: #eceff1; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    main { max-width: 1200px; margin: 0 auto; }
+    h1, h2 { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 0; }
+    h1 { font-size: 20px; margin: 0 0 18px; }
+    h2 { font-size: 14px; margin: 20px 0 8px; color: #b7c0c7; }
+    .stage { position: relative; display: inline-block; max-width: 100%; }
+    pre { overflow: auto; padding: 16px; border: 1px solid #30363d; border-radius: 6px; background: #050607; line-height: 1.18; }
+    .hotspots { position: absolute; inset: 16px auto auto 16px; line-height: 1.18; }
+    .hotspot { position: absolute; height: 1.3em; border: 1px solid transparent; background: rgba(136, 211, 155, 0.08); color: transparent; cursor: pointer; font: inherit; padding: 0; }
+    .hotspot:hover, .hotspot:focus { border-color: #88d39b; background: rgba(136, 211, 155, 0.18); color: #e8ffee; outline: none; }
+    .meta { color: #9aa4ad; font-size: 13px; }
+    .state { color: #c7d0d8; font-size: 13px; }
+    .modal { position: fixed; inset: auto 24px 24px auto; background: #050607; color: #eceff1; border: 1px solid #88d39b; border-radius: 6px; padding: 16px; min-width: 260px; box-shadow: 0 16px 48px rgba(0,0,0,0.45); }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Checkout Interaction For Failed Payment</h1>
+    <p class="meta">checkout interaction for failed payment recovery with support modal</p>
+    <section class="screen" data-screen="main"><h2>Checkout Interaction For Failed Payment</h2><div class="stage"><pre>+--------------------------------------------------------------------------------------------------+
+| CHECKOUT INTERACTION FOR FAILED PAYMENT                                                          |
+|                                                                                                  |
++--------------------------------------------------------------------------------------------------+
+|                                                                                                  |
+|   +------------------------------------------------------------------------------------------+   |
+|   |                                                                                          |   |
+|   |  Payment recovery                                                                        |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |  Card failed. Keep the user in flow with one clear next action.                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |  [ Try again ] [ Use saved card ] [ Contact support ]                                    |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   |                                                                                          |   |
+|   +------------------------------------------------------------------------------------------+   |
+|                                                                                                  |
+|                                                                                                  |
+| [Tab] Focus   [Enter] Activate   [q] Quit                                                        |
++--------------------------------------------------------------------------------------------------+</pre><div class="hotspots"><button class="hotspot" style="left:7ch;top:16.52em;width:13ch" data-screen="main" data-index="0" data-action="noop" data-target="">Try again</button>
+<button class="hotspot" style="left:21ch;top:16.52em;width:18ch" data-screen="main" data-index="1" data-action="noop" data-target="">Use saved card</button>
+<button class="hotspot" style="left:40ch;top:16.52em;width:19ch" data-screen="main" data-index="2" data-action="modal" data-target="support-modal">Contact support</button></div></div><p class="state" id="state-main">Focus: none</p></section>
+    <h2>Iteration History</h2>
+    <ul class="meta"><li><code>new</code>: checkout interaction for failed payment recovery with support modal</li></ul>
+  </main>
+  <div id="modal" class="modal hidden"></div>
+  <script>
+    const modal = document.getElementById("modal");
+    const states = new Map();
+    function setState(screen, text) {
+      const node = document.getElementById("state-" + screen);
+      if (node) node.textContent = text;
+    }
+    function activate(button) {
+      const screen = button.dataset.screen;
+      const action = button.dataset.action;
+      const target = button.dataset.target || button.textContent;
+      states.set(screen, { focus: button.textContent, action, target });
+      setState(screen, "Focus: " + button.textContent + " / action: " + action);
+      if (action === "modal" || action === "toggle") {
+        modal.textContent = action === "toggle" ? button.textContent + " toggled" : "Modal: " + target;
+        modal.classList.remove("hidden");
+      } else if (action === "route") {
+        setState(screen, "Route target: " + target);
+      }
+    }
+    document.querySelectorAll(".hotspot").forEach((button) => {
+      button.addEventListener("click", () => activate(button));
+      button.addEventListener("focus", () => setState(button.dataset.screen, "Focus: " + button.textContent));
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") modal.classList.add("hidden");
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,40 @@
+{
+  "name": "prtl",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "prtl": "./bin/prtl"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "npm run typecheck && vite build",
+    "build:cli": "npm run typecheck",
+    "cli": "bin/prtl",
+    "typecheck": "tsc --noEmit",
+    "server": "tsx src/server/index.ts",
+    "preview": "npm run build && NODE_ENV=production tsx src/server/index.ts",
+    "serve:tailscale": "tailscale serve --bg 4070",
+    "install:global": "bash scripts/install-global.sh",
+    "launchd:install": "bash scripts/install-launchd.sh",
+    "launchd:uninstall": "launchctl bootout gui/$UID ~/Library/LaunchAgents/com.douglance.prtl.plist 2>/dev/null || true; rm -f ~/Library/LaunchAgents/com.douglance.prtl.plist"
+  },
+  "dependencies": {
+    "@types/web-push": "^3.6.4",
+    "@vitejs/plugin-react": "^5.0.4",
+    "incur": "^0.4.4",
+    "lucide-react": "^0.542.0",
+    "playwright": "^1.59.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^8.0.8",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2"
+  }
+}
