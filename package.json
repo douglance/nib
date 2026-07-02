@@ -12,7 +12,7 @@
     "build:cli": "npm run typecheck",
     "cli": "bin/prtl",
     "test": "npm run test:server && npm run test:web",
-    "test:server": "node --import tsx --test src/server/index.test.ts src/server/devices.test.ts src/server/requests.test.ts src/server/notifications.test.ts src/server/waiting/detect.test.ts src/server/waiting/watcher.test.ts",
+    "test:server": "node --import tsx --test src/server/index.test.ts src/server/devices.test.ts src/server/requests.test.ts src/server/retention.test.ts src/server/notifications.test.ts src/server/waiting/detect.test.ts src/server/waiting/watcher.test.ts",
     "test:web": "node --test src/client/sw.test.mjs",
     "typecheck": "tsc --noEmit",
     "verify": "npm test && npm run build",

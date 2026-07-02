@@ -88,6 +88,21 @@ export async function readStore(): Promise<StoreShape> {
   }
 }
 
+export async function mutateStore(mutate: (store: StoreShape) => void): Promise<StoreShape> {
+  let mutated: StoreShape | undefined;
+  const nextWrite = writeChain.then(async () => {
+    const store = await readStore();
+    mutate(store);
+    await fs.mkdir(DATA_DIR, { recursive: true });
+    await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+    mutated = store;
+  });
+  writeChain = nextWrite.catch(() => undefined);
+  await nextWrite;
+  if (!mutated) throw new Error("store mutation failed");
+  return mutated;
+}
+
 export async function writeStore(store: StoreShape): Promise<void> {
   const nextWrite = writeChain.then(() => writeStoreNow(store));
   writeChain = nextWrite.catch(() => undefined);

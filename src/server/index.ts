@@ -46,6 +46,7 @@ import {
   respondRequest
 } from "./requests";
 import { requestPageHtml } from "./requestPage";
+import { runRetentionSweep } from "./retention";
 import { captureScreenshots } from "./screenshots";
 import { serveFile } from "./static";
 import { ensureDataDirs, readStore, writeStore } from "./store";
@@ -592,6 +593,10 @@ server.on("upgrade", async (req, socket, head) => {
 server.listen(PORT, HOST, () => {
   console.log(`prtl listening at ${PUBLIC_BASE_URL}`);
 });
+
+const retentionSweep = () => runRetentionSweep().catch((error) => console.error("retention sweep failed", error));
+void retentionSweep();
+setInterval(retentionSweep, 60 * 60 * 1000).unref();
 
 function sendJson(res: http.ServerResponse, payload: unknown, statusCode = 200): void {
   res.writeHead(statusCode, {
