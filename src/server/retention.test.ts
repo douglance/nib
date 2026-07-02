@@ -27,15 +27,71 @@ test("removes answered requests older than retention along with their attachment
   assert.equal(await fileExists("old-attachment.png"), false);
 });
 
-test("keeps open requests regardless of age", async () => {
+test("removes abandoned open requests older than the open-stale threshold", async () => {
+  const attachment = makeAttachment("stale-open", "stale-open.png");
   await seedStore({
-    requests: { "ancient-open": makeRequest({ id: "ancient-open", status: "open", updatedAt: daysAgo(400) }) }
+    requests: { "stale-open": makeRequest({ id: "stale-open", status: "open", updatedAt: daysAgo(30), attachments: [attachment] }) },
+    attachments: { [attachment.id]: attachment }
+  });
+  await writeAttachmentFile("stale-open.png");
+
+  await runRetentionSweep();
+
+  const store = await readStoreFile();
+  assert.equal(store.requests["stale-open"], undefined);
+  assert.equal(store.attachments[attachment.id], undefined);
+  assert.equal(await fileExists("stale-open.png"), false);
+});
+
+test("keeps a fresh open request that is only minutes old", async () => {
+  await seedStore({
+    requests: { "fresh-open": makeRequest({ id: "fresh-open", status: "open", updatedAt: minutesAgo(40) }) }
   });
 
   await runRetentionSweep();
 
   const store = await readStoreFile();
-  assert.ok(store.requests["ancient-open"]);
+  assert.ok(store.requests["fresh-open"]);
+});
+
+test("still removes answered requests older than the answered retention", async () => {
+  await seedStore({
+    requests: { "answered-ten": makeRequest({ id: "answered-ten", status: "answered", updatedAt: daysAgo(10) }) }
+  });
+
+  await runRetentionSweep();
+
+  const store = await readStoreFile();
+  assert.equal(store.requests["answered-ten"], undefined);
+});
+
+test("defaults the open-stale threshold to 21 days and honors PRTL_OPEN_STALE_DAYS", async () => {
+  await seedStore({
+    requests: {
+      "twenty-days": makeRequest({ id: "twenty-days", status: "open", updatedAt: daysAgo(20) }),
+      "twenty-two-days": makeRequest({ id: "twenty-two-days", status: "open", updatedAt: daysAgo(22) })
+    }
+  });
+
+  await runRetentionSweep();
+
+  let store = await readStoreFile();
+  assert.ok(store.requests["twenty-days"], "20-day open request survives the 21-day default");
+  assert.equal(store.requests["twenty-two-days"], undefined, "22-day open request is swept by the 21-day default");
+
+  process.env.PRTL_OPEN_STALE_DAYS = "45";
+  try {
+    await seedStore({
+      requests: { "thirty-days": makeRequest({ id: "thirty-days", status: "open", updatedAt: daysAgo(30) }) }
+    });
+
+    await runRetentionSweep();
+
+    store = await readStoreFile();
+    assert.ok(store.requests["thirty-days"], "override lengthens the threshold so a 30-day open request survives");
+  } finally {
+    delete process.env.PRTL_OPEN_STALE_DAYS;
+  }
 });
 
 test("keeps recently answered requests and their attachment files", async () => {
@@ -117,6 +173,10 @@ test("respects PRTL_RETENTION_DAYS override", async () => {
 
 function daysAgo(days: number): string {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function minutesAgo(minutes: number): string {
+  return new Date(Date.now() - minutes * 60 * 1000).toISOString();
 }
 
 function makeRequest(overrides: Partial<RequestRecord> & { id: string; status: RequestStatus; updatedAt: string }): RequestRecord {

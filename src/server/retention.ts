@@ -6,6 +6,7 @@ import { mutateStore, type StoreShape } from "./store";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const removableRequestStatuses = new Set<RequestStatus>(["answered", "acted", "resolved", "expired"]);
+const openStaleRequestStatuses = new Set<RequestStatus>(["open", "viewed", "stale"]);
 const removableFeedbackStatuses = new Set<FeedbackStatus>(["answered", "resolved"]);
 
 export interface RetentionSweepSummary {
@@ -20,14 +21,22 @@ export function retentionDays(): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 7;
 }
 
+export function openStaleDays(): number {
+  const parsed = Number(process.env.PRTL_OPEN_STALE_DAYS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 21;
+}
+
 export async function runRetentionSweep(now = Date.now()): Promise<RetentionSweepSummary> {
   const cutoff = now - retentionDays() * DAY_MS;
+  const openStaleCutoff = now - openStaleDays() * DAY_MS;
   let removedRequests = 0;
   let removedFeedback = 0;
   let prunedCacheEntries = 0;
   const store = await mutateStore((store) => {
     for (const [id, request] of Object.entries(store.requests)) {
-      if (removableRequestStatuses.has(request.status) && recordTime(request) < cutoff) {
+      const answeredExpired = removableRequestStatuses.has(request.status) && recordTime(request) < cutoff;
+      const abandonedOpen = openStaleRequestStatuses.has(request.status) && recordTime(request) < openStaleCutoff;
+      if (answeredExpired || abandonedOpen) {
         delete store.requests[id];
         removedRequests += 1;
       }
