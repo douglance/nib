@@ -14,6 +14,10 @@ export default defineConfig({
     proxy: {
       "/api": `http://127.0.0.1:${serverPort}`,
       "/screenshots": `http://127.0.0.1:${serverPort}`,
+      "/attachments": `http://127.0.0.1:${serverPort}`,
+      "/lab": `http://127.0.0.1:${serverPort}`,
+      "/feedback-surfaces": `http://127.0.0.1:${serverPort}`,
+      "/artifacts": `http://127.0.0.1:${serverPort}`,
       "/p": {
         target: `http://127.0.0.1:${serverPort}`,
         ws: true

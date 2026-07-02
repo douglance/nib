@@ -374,6 +374,7 @@ export async function feedbackMetrics(): Promise<FeedbackMetricsSummary> {
 
 export function streamFeedbackEvents(id: string, res: http.ServerResponse): void {
   res.writeHead(200, {
+    "access-control-allow-origin": "*",
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
     connection: "keep-alive"

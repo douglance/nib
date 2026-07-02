@@ -7,4 +7,8 @@ while [ -L "$SOURCE" ]; do
   [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
 done
 ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+PORTLESS_CA="${HOME}/.portless/ca.pem"
+if [[ -z "${NODE_EXTRA_CA_CERTS:-}" && -f "$PORTLESS_CA" ]]; then
+  export NODE_EXTRA_CA_CERTS="$PORTLESS_CA"
+fi
 exec "$ROOT/node_modules/.bin/tsx" "$ROOT/src/cli/index.ts" "$@"

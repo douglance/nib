@@ -1,4 +1,4 @@
-const CACHE_NAME = "prtl-shell-v3";
+const CACHE_NAME = "prtl-shell-v4";
 const SHELL_ASSETS = ["/", "/manifest.webmanifest", "/icons/prtl.svg", "/icons/prtl-192.png", "/icons/prtl-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -41,18 +41,20 @@ self.addEventListener("push", (event) => {
   } catch {
     data = {};
   }
-  const title = data.title || (data.projectName ? `Feedback: ${data.projectName}` : "Feedback request");
+  const title = data.title || (data.projectName ? `Feedback: ${data.projectName}` : "prtl request");
   const body = data.request || data.body || "Tap to give feedback.";
+  const tag = data.feedbackId ? `feedback:${data.feedbackId}` : data.tag || (data.requestId ? `request:${data.requestId}` : "prtl-request");
+  const actions = notificationActions(data);
   const options = {
     body,
-    tag: data.feedbackId ? `feedback:${data.feedbackId}` : "prtl-feedback",
-    renotify: Boolean(data.feedbackId),
-    requireInteraction: Boolean(data.feedbackId),
+    tag,
+    renotify: data.renotify !== undefined ? Boolean(data.renotify) : Boolean(data.feedbackId || data.requestId),
+    requireInteraction: data.requireInteraction !== undefined ? Boolean(data.requireInteraction) : Boolean(data.feedbackId || data.requestId),
     timestamp: data.createdAt ? new Date(data.createdAt).getTime() : Date.now(),
     data,
     icon: "/icons/prtl-192.png",
     badge: "/icons/prtl-192.png",
-    actions: data.feedbackId ? [{ action: "open-feedback", title: "Give feedback" }] : []
+    actions
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });
@@ -60,13 +62,37 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data || {};
+  const action = event.action || "open-request";
   const url = data.url || "/";
   const feedbackId = data.feedbackId;
+  const requestId = data.requestId;
   event.waitUntil(
     (async () => {
+      if (requestId && action.startsWith("choice:")) {
+        const choiceIndex = Number(action.slice("choice:".length));
+        if (Number.isInteger(choiceIndex)) {
+          try {
+            await fetch(`/api/requests/${encodeURIComponent(requestId)}/respond`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ choiceIndex, deviceId: "web-notification" })
+            });
+            return;
+          } catch {
+            // Fall through to opening the app; the user can still answer there.
+          }
+        }
+      }
       if (feedbackId) {
         try {
           await fetch(`/api/feedback/${encodeURIComponent(feedbackId)}/notification-click`, { method: "POST" });
+        } catch {
+          // Ignore analytics failures; opening the app is the priority.
+        }
+      }
+      if (requestId) {
+        try {
+          await fetch(`/api/requests/${encodeURIComponent(requestId)}/notification-click`, { method: "POST" });
         } catch {
           // Ignore analytics failures; opening the app is the priority.
         }
@@ -83,3 +109,17 @@ self.addEventListener("notificationclick", (event) => {
     })()
   );
 });
+
+function notificationActions(data) {
+  if (!data.feedbackId && !data.requestId) return [];
+  const actions = [];
+  if (data.requestId && Array.isArray(data.choices)) {
+    for (const [index, choice] of data.choices.slice(0, 2).entries()) {
+      if (typeof choice === "string" && choice.trim()) {
+        actions.push({ action: `choice:${index}`, title: choice.slice(0, 24) });
+      }
+    }
+  }
+  actions.push({ action: "open-request", title: "Open" });
+  return actions.slice(0, 3);
+}

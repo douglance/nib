@@ -12,6 +12,7 @@ export const TAILSCALE_IP = process.env.TAILSCALE_IP ?? "100.68.227.98";
 export const DATA_DIR = process.env.PRTL_DATA_DIR ?? path.join(process.cwd(), ".prtl");
 export const SCREENSHOT_DIR = path.join(DATA_DIR, "screenshots");
 export const ARTIFACT_DIR = path.join(DATA_DIR, "artifacts");
+export const ATTACHMENT_DIR = path.join(DATA_DIR, "attachments");
 
 export const ignoredPorts = new Set([
   9222,

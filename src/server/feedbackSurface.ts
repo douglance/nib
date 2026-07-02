@@ -1,4 +1,4 @@
-import type { FeedbackSurface } from "../shared/types";
+import type { FeedbackRequest, FeedbackSurface } from "../shared/types";
 import { validateFeedbackSurfaceHtml } from "../html/validate";
 
 interface FeedbackSurfaceInput {
@@ -30,6 +30,75 @@ export function createFeedbackSurface(input: FeedbackSurfaceInput): FeedbackSurf
     createdAt,
     validation
   };
+}
+
+export function feedbackSurfaceHtmlForNative(request: FeedbackRequest): string {
+  const html = request.feedbackSurface?.html;
+  if (!html) return "<!doctype html><html><body></body></html>";
+  const bridge = `<script id="prtl-feedback-native-bridge">
+(() => {
+  if (window.prtl && window.prtl.feedback) return;
+  const requestId = ${JSON.stringify(request.id)};
+  const endpoint = (suffix) => "/api/feedback/" + encodeURIComponent(requestId) + suffix;
+  async function send(path, payload = {}) {
+    const response = await fetch(endpoint(path), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) throw new Error("prtl feedback failed: " + response.status);
+    return response.json();
+  }
+  window.prtl = Object.assign(window.prtl || {}, {
+    feedback: {
+      ready(detail = {}) {
+        document.documentElement.dataset.prtlFeedbackReady = "1";
+        if (typeof detail.height === "number") this.resize(detail.height);
+      },
+      resize(height) {
+        document.documentElement.dataset.prtlFeedbackHeight = String(height || "");
+      },
+      capture() {
+        return send("/capture");
+      },
+      submit(payload = {}) {
+        return send("/respond", {
+          kind: payload.kind || "note",
+          text: payload.text || payload.choice || "Feedback submitted",
+          choice: payload.choice,
+          data: payload.data || null
+        });
+      }
+    }
+  });
+  function handleFeedbackMessage(message) {
+    if (!message || typeof message !== "object" || typeof message.type !== "string") return;
+    if (message.type === "prtl.feedback.capture") {
+      window.prtl.feedback.capture();
+      return;
+    }
+    if (message.type === "prtl.feedback.submit") {
+      window.prtl.feedback.submit({
+        kind: message.kind || "note",
+        text: message.text || message.choice || "Feedback submitted",
+        choice: message.choice,
+        data: message.data || null
+      });
+    }
+  }
+  const originalPostMessage = window.postMessage.bind(window);
+  window.postMessage = (message, targetOrigin, transfer) => {
+    handleFeedbackMessage(message);
+    return originalPostMessage(message, targetOrigin, transfer);
+  };
+  window.addEventListener("message", (event) => {
+    handleFeedbackMessage(event.data || {});
+  });
+})();
+</script>`;
+  if (/<head\b[^>]*>/i.test(html)) return html.replace(/<head\b([^>]*)>/i, `<head$1>${bridge}`);
+  if (/<html\b[^>]*>/i.test(html)) return html.replace(/<html\b([^>]*)>/i, `<html$1>${bridge}`);
+  return `${bridge}${html}`;
 }
 
 function defaultFeedbackSurfaceHtml(input: FeedbackSurfaceInput): string {
@@ -171,7 +240,26 @@ function defaultFeedbackSurfaceHtml(input: FeedbackSurfaceInput): string {
     let selectedChoice = "";
 
     function post(type, payload = {}) {
-      window.parent.postMessage({ type, ...payload }, "*");
+      const message = { type, ...payload };
+      if (window.prtl && window.prtl.feedback) {
+        if (type === "prtl.feedback.submit") {
+          window.prtl.feedback.submit(payload);
+          return;
+        }
+        if (type === "prtl.feedback.capture") {
+          window.prtl.feedback.capture();
+          return;
+        }
+        if (type === "prtl.feedback.resize") {
+          window.prtl.feedback.resize(payload.height);
+          return;
+        }
+        if (type === "prtl.feedback.ready") {
+          window.prtl.feedback.ready(payload);
+          return;
+        }
+      }
+      window.parent.postMessage(message, "*");
     }
 
     function collectData() {

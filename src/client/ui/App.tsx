@@ -14,7 +14,8 @@ import {
   ShieldAlert,
   Smartphone,
   Tablet,
-  TriangleAlert
+  TriangleAlert,
+  X
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
@@ -27,10 +28,23 @@ import type {
   ProjectInfo,
   ProjectsResponse,
   ProjectWorkspace,
+  RequestRecord,
   RouteMode,
   ViewerState,
-  ViewportKey
+  ViewportKey,
+  WaitingPane
 } from "../../shared/types";
+import {
+  apiUrl,
+  assetUrl,
+  closeNativeWebView,
+  ensureNativeWebView,
+  isNativeShell,
+  measureNativeFrame,
+  nativeFeedbackSurfaceUrl,
+  nativeTargetUrl,
+  prtlFetch
+} from "../native";
 
 const viewportIcons = {
   phone: Smartphone,
@@ -57,13 +71,23 @@ export function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [artifacts, setArtifacts] = useState<HtmlArtifactSummary[]>([]);
   const [copied, setCopied] = useState(false);
+  const [activePanel, setActivePanel] = useState<"waiting" | "requests" | null>(null);
   const autoCaptured = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (activePanel === null) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setActivePanel(null);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activePanel]);
 
   async function load(refresh = false) {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/projects${refresh ? "?refresh=1" : ""}`);
+      const response = await prtlFetch(`/api/projects${refresh ? "?refresh=1" : ""}`);
       if (!response.ok) throw new Error(`Discovery failed: ${response.status}`);
       setData(await response.json());
       void loadHealth();
@@ -77,7 +101,7 @@ export function App() {
 
   async function loadHealth() {
     try {
-      const response = await fetch("/api/health");
+      const response = await prtlFetch("/api/health");
       if (response.ok) setHealth(await response.json());
     } catch {
       setHealth(null);
@@ -86,7 +110,7 @@ export function App() {
 
   async function loadArtifacts() {
     try {
-      const response = await fetch("/api/html/artifacts");
+      const response = await prtlFetch("/api/html/artifacts");
       if (response.ok) {
         const payload = await response.json() as { artifacts: HtmlArtifactSummary[] };
         setArtifacts(payload.artifacts);
@@ -99,15 +123,32 @@ export function App() {
   async function copyInstallUrl() {
     const value = health?.publicBaseUrl ?? data?.publicBaseUrl;
     if (!value) return;
-    await navigator.clipboard.writeText(value);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1800);
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = value;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const copiedOk = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        if (!copiedOk) throw new Error("execCommand copy failed");
+      }
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError("Couldn't copy URL — copy it manually.");
+    }
   }
 
   async function refreshScreenshots(projectId: string) {
     setRefreshingId(projectId);
     try {
-      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/screenshots`, {
+      const response = await prtlFetch(`/api/projects/${encodeURIComponent(projectId)}/screenshots`, {
         method: "POST"
       });
       if (!response.ok) throw new Error(`Screenshot failed: ${response.status}`);
@@ -132,7 +173,7 @@ export function App() {
     setKillingId(projectId);
     setError(null);
     try {
-      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/kill`, {
+      const response = await prtlFetch(`/api/projects/${encodeURIComponent(projectId)}/kill`, {
         method: "POST"
       });
       if (!response.ok) {
@@ -149,7 +190,7 @@ export function App() {
 
   async function setPreferredRoute(projectId: string, mode: RouteMode) {
     try {
-      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/preferred-route`, {
+      const response = await prtlFetch(`/api/projects/${encodeURIComponent(projectId)}/preferred-route`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ mode })
@@ -228,12 +269,25 @@ export function App() {
             </span>
             <span className="healthPill">
               <Server size={15} />
-              {health ? `${health.onlineProjectCount}/${health.projectCount} online` : "Checking"}
+              {data
+                ? `${data.projects.filter((project) => project.status === "online").length}/${data.projects.length} online`
+                : health
+                  ? `${health.onlineProjectCount}/${health.projectCount} online`
+                  : "Checking"}
             </span>
           </div>
         </div>
         <div className="topActions">
-          <FeedbackInbox />
+          <WaitingPanel
+            open={activePanel === "waiting"}
+            onToggle={() => setActivePanel((p) => (p === "waiting" ? null : "waiting"))}
+            onClose={() => setActivePanel(null)}
+          />
+          <RequestInbox
+            open={activePanel === "requests"}
+            onToggle={() => setActivePanel((p) => (p === "requests" ? null : "requests"))}
+            onClose={() => setActivePanel(null)}
+          />
           <button className="primaryButton" onClick={() => void copyInstallUrl()} disabled={!health && !data}>
             <Copy size={17} />
             {copied ? "Copied" : "Copy URL"}
@@ -283,7 +337,13 @@ export function App() {
 
       <section className="summaryBand">
         <strong>{projects.length}</strong>
-        <span>{loading ? "Scanning..." : "active project servers"}</span>
+        <span>
+          {loading
+            ? "Scanning..."
+            : query.trim() && data?.projects
+              ? `of ${data.projects.length} match`
+              : "active project servers"}
+        </span>
         <span className="summaryDetail">
           {health ? `Uptime ${formatDuration(health.uptimeSeconds)} · Updated ${formatTime(health.generatedAt)}` : null}
         </span>
@@ -322,12 +382,95 @@ export function App() {
       </section>
 
       {!loading && projects.length === 0 ? (
-        <section className="emptyState">
-          <h2>No active web projects found</h2>
-          <p>Start a local dev server and refresh this page.</p>
-        </section>
+        (data?.projects?.length ?? 0) > 0 && query.trim() ? (
+          <section className="emptyState">
+            <h2>No projects match "{query.trim()}"</h2>
+            <button className="openButton" onClick={() => setQuery("")}>Clear search</button>
+          </section>
+        ) : (
+          <section className="emptyState">
+            <h2>No active web projects found</h2>
+            <p>Start a local dev server and refresh this page.</p>
+          </section>
+        )
       ) : null}
     </main>
+  );
+}
+
+function WaitingPanel({ open, onToggle, onClose }: { open: boolean; onToggle: () => void; onClose: () => void }) {
+  const [waiting, setWaiting] = useState<WaitingPane[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  async function loadWaiting() {
+    setLoading(true);
+    try {
+      const response = await prtlFetch("/api/waiting");
+      if (response.ok) setWaiting(await response.json() as WaitingPane[]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadWaiting();
+    const interval = window.setInterval(() => void loadWaiting(), 15000);
+    const onFocus = () => void loadWaiting();
+    const onVisibility = () => {
+      if (!document.hidden) void loadWaiting();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
+  return (
+    <div className="waitingPanel">
+      <button
+        className="waitingPanelButton"
+        onClick={() => {
+          onToggle();
+          void loadWaiting();
+        }}
+        title="Waiting panes"
+      >
+        <TriangleAlert size={17} />
+        <span>Waiting</span>
+        {waiting.length ? <strong>{waiting.length}</strong> : null}
+      </button>
+      {open ? (
+        <section className="waitingPanelMenu">
+          <header>
+            <div>
+              <span>Waiting panes</span>
+              <small>{waiting.length ? `${waiting.length} blocked` : "Clear"}</small>
+            </div>
+            <button onClick={() => void loadWaiting()} title="Refresh waiting panes">
+              <RefreshCw size={14} className={loading ? "spinning" : ""} />
+            </button>
+            <button onClick={onClose} title="Close" aria-label="Close">
+              <X size={14} />
+            </button>
+          </header>
+          <div className="waitingPanelList">
+            {waiting.map((pane) => (
+              <article key={`${pane.session}:${pane.paneId}`}>
+                <div>
+                  <strong>{pane.window}</strong>
+                  <small>{pane.session}:{pane.paneId} · {formatTime(pane.since)}</small>
+                </div>
+                <p>{pane.reason}</p>
+              </article>
+            ))}
+            {!waiting.length ? <p className="waitingPanelEmpty">No blocked panes detected.</p> : null}
+          </div>
+        </section>
+      ) : null}
+    </div>
   );
 }
 
@@ -337,7 +480,7 @@ function ArtifactCard({ artifact }: { artifact: HtmlArtifactSummary }) {
   return (
     <article className="artifactCard">
       <div className="artifactPreview">
-        {screenshot.url ? <img src={screenshot.url} alt={`${artifact.name} screenshot`} /> : <span>No screenshot</span>}
+        {screenshot.url ? <img src={assetUrl(screenshot.url) ?? screenshot.url} alt={`${artifact.name} screenshot`} /> : <span>No screenshot</span>}
       </div>
       <div className="artifactCardBody">
         <div>
@@ -349,7 +492,7 @@ function ArtifactCard({ artifact }: { artifact: HtmlArtifactSummary }) {
         </span>
         <div className="artifactActions">
           <a className="openButton" href={artifact.viewerUrl}>View</a>
-          <a className="openButton" href={artifact.artifactUrl}>Artifact</a>
+          <a className="openButton" href={assetUrl(artifact.artifactUrl) ?? artifact.artifactUrl}>Artifact</a>
         </div>
       </div>
     </article>
@@ -386,7 +529,7 @@ function ProjectCard({ project, viewport, refreshing, killing, onRefresh, onKill
     <article className="projectCard">
       <div className="screenshotFrame">
         {screenshot.url ? (
-          <img src={screenshot.url} alt={`${project.name} ${viewport} screenshot`} />
+          <img src={assetUrl(screenshot.url) ?? screenshot.url} alt={`${project.name} ${viewport} screenshot`} />
         ) : (
           <div className="screenshotEmpty">No screenshot</div>
         )}
@@ -463,6 +606,173 @@ function ProjectCard({ project, viewport, refreshing, killing, onRefresh, onKill
   );
 }
 
+function RequestInbox({ open, onToggle, onClose }: { open: boolean; onToggle: () => void; onClose: () => void }) {
+  const [requests, setRequests] = useState<RequestRecord[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [reply, setReply] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  async function loadRequests() {
+    setLoading(true);
+    try {
+      const response = await prtlFetch("/api/requests");
+      if (response.ok) {
+        const payload = await response.json() as RequestRecord[];
+        setRequests(payload);
+        if (selectedId && !payload.some((request) => request.id === selectedId)) setSelectedId(null);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadRequests();
+    const interval = window.setInterval(() => void loadRequests(), 6000);
+    const onFocus = () => void loadRequests();
+    const onVisibility = () => {
+      if (!document.hidden) void loadRequests();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [selectedId]);
+
+  async function respond(request: RequestRecord, payload: { text?: string; choice?: string; choiceIndex?: number }) {
+    setMessage(null);
+    const response = await prtlFetch(`/api/requests/${encodeURIComponent(request.id)}/respond`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      setMessage(`Response failed: ${response.status}`);
+      return;
+    }
+    const updated = await response.json() as RequestRecord;
+    setRequests((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+    setReply("");
+    setMessage("Response sent.");
+  }
+
+  const active = requests.filter(isActiveRequest);
+  const selected = requests.find((request) => request.id === selectedId) ?? active[0] ?? requests[0] ?? null;
+  const targetUrl = selected ? requestTargetUrl(selected) : null;
+
+  return (
+    <div className="requestInbox">
+      <button
+        className="requestInboxButton"
+        onClick={() => {
+          onToggle();
+          void loadRequests();
+        }}
+        title="Requests"
+      >
+        <Bell size={17} />
+        <span>Requests</span>
+        {active.length ? <strong>{active.length}</strong> : null}
+      </button>
+      {open ? (
+        <section className="requestInboxPanel">
+          <header>
+            <div>
+              <span>Request inbox</span>
+              <small>{active.length ? `${active.length} waiting` : "Clear"}</small>
+            </div>
+            <button onClick={() => void loadRequests()} title="Refresh requests">
+              <RefreshCw size={14} className={loading ? "spinning" : ""} />
+            </button>
+            <button onClick={onClose} title="Close" aria-label="Close">
+              <X size={14} />
+            </button>
+          </header>
+          <div className="requestInboxBody">
+            <div className="requestList">
+              {requests.slice(0, 16).map((request) => (
+                <button
+                  key={request.id}
+                  className={selected?.id === request.id ? "active" : ""}
+                  onClick={() => {
+                    setSelectedId(request.id);
+                    setReply("");
+                    setMessage(null);
+                  }}
+                >
+                  <span className={`requestStatus ${request.status}`} />
+                  <span>
+                    <strong>{request.title}</strong>
+                    <small>{request.kind} · {formatTime(request.updatedAt)}</small>
+                  </span>
+                </button>
+              ))}
+              {!requests.length ? <p className="requestEmpty">No requests yet.</p> : null}
+            </div>
+            {selected ? (
+              <article className="requestDetailCard">
+                <div className="requestDetailHeading">
+                  <span className={`requestKind ${selected.kind}`}>{selected.kind}</span>
+                  <h2>{selected.title}</h2>
+                  <p>{selected.prompt}</p>
+                  {selected.context ? <small>{selected.context}</small> : null}
+                </div>
+                {targetUrl ? (
+                  <a className="requestOpenLink" href={targetUrl}>
+                    <ExternalLink size={15} />
+                    Open context
+                  </a>
+                ) : null}
+                {selected.attachments.length ? (
+                  <div className="requestAttachments">
+                    {selected.attachments.slice(0, 4).map((attachment) => (
+                      <a key={attachment.id} href={assetUrl(attachment.url) ?? attachment.url}>
+                        {attachment.name}
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
+                {isActiveRequest(selected) ? (
+                  <div className="requestActions">
+                    {selected.choices.map((choice, index) => (
+                      <button key={`${choice}-${index}`} onClick={() => void respond(selected, { choice, choiceIndex: index })}>
+                        {choice}
+                      </button>
+                    ))}
+                    {selected.allowText ? (
+                      <form
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          if (reply.trim()) void respond(selected, { text: reply.trim() });
+                        }}
+                      >
+                        <textarea
+                          value={reply}
+                          onChange={(event) => setReply(event.target.value)}
+                          placeholder="Reply"
+                          rows={3}
+                        />
+                        <button type="submit" disabled={!reply.trim()}>Send</button>
+                      </form>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="requestAnswered">Answered {selected.answeredAt ? formatTime(selected.answeredAt) : selected.status}</p>
+                )}
+                {message ? <p className="requestMessage">{message}</p> : null}
+              </article>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
 function FeedbackInbox({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const [feedback, setFeedback] = useState<FeedbackRequest[]>([]);
@@ -473,7 +783,7 @@ function FeedbackInbox({ compact = false }: { compact?: boolean }) {
   async function loadFeedback() {
     setLoading(true);
     try {
-      const response = await fetch("/api/feedback");
+      const response = await prtlFetch("/api/feedback");
       if (response.ok) setFeedback(await response.json());
     } finally {
       setLoading(false);
@@ -546,7 +856,7 @@ function FeedbackInbox({ compact = false }: { compact?: boolean }) {
         return;
       }
       const [{ publicKey }, registration] = await Promise.all([
-        fetch("/api/notifications/vapid-public-key").then((response) => response.json() as Promise<{ publicKey: string }>),
+        prtlFetch("/api/notifications/vapid-public-key").then((response) => response.json() as Promise<{ publicKey: string }>),
         navigator.serviceWorker.ready
       ]);
       const existing = await registration.pushManager.getSubscription();
@@ -556,12 +866,12 @@ function FeedbackInbox({ compact = false }: { compact?: boolean }) {
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToArrayBuffer(publicKey)
         }));
-      await fetch("/api/notifications/subscribe", {
+      await prtlFetch("/api/notifications/subscribe", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ subscription: subscription.toJSON() })
       });
-      const testResponse = await fetch("/api/notifications/test", { method: "POST" });
+      const testResponse = await prtlFetch("/api/notifications/test", { method: "POST" });
       const testPayload = await testResponse.json();
       setNotificationReady(true);
       setNotificationMessage(testPayload.sent ? "Notifications enabled. Latest request sent." : "Notifications enabled.");
@@ -571,7 +881,7 @@ function FeedbackInbox({ compact = false }: { compact?: boolean }) {
   }
 
   async function testNotification() {
-    const response = await fetch("/api/notifications/test", { method: "POST" });
+    const response = await prtlFetch("/api/notifications/test", { method: "POST" });
     const payload = await response.json();
     setNotificationMessage(payload.sent ? "Test notification sent." : "No subscription is available yet.");
   }
@@ -649,6 +959,17 @@ function isActiveFeedbackRequest(request: FeedbackRequest): boolean {
   return ["open", "viewed", "stale"].includes(request.status);
 }
 
+function isActiveRequest(request: RequestRecord): boolean {
+  return ["open", "viewed", "stale"].includes(request.status);
+}
+
+function requestTargetUrl(request: RequestRecord): string | null {
+  if (request.target.url?.startsWith("http://") || request.target.url?.startsWith("/")) return request.target.url;
+  if (!request.target.projectId) return null;
+  const params = new URLSearchParams({ path: request.target.appPath ?? "/" });
+  return `/view/${encodeURIComponent(request.target.projectId)}?${params.toString()}`;
+}
+
 function latestFeedbackArtifacts(artifacts: FeedbackArtifact[]): FeedbackArtifact[] {
   const latestByViewport = new Map<string, FeedbackArtifact>();
   for (const artifact of [...artifacts].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))) {
@@ -718,6 +1039,16 @@ function ProjectViewer({
   const pendingResponseId = useRef<string | null>(null);
   const requestedFeedbackId = getQueryParam("feedback");
   const requestedAppPath = getQueryParam("path");
+  const appPath = requestedAppPath ?? activeFeedback?.appPath ?? "/";
+  const nativeMode = isNativeShell();
+  const targetNative = useNativeWebViewSlot({
+    enabled: nativeMode && Boolean(project),
+    label: "target",
+    url: project ? nativeTargetUrl(project, appPath) : null,
+    layer: 8,
+    bridge: false,
+    reloadKey: frameKey
+  });
 
   useEffect(() => {
     if (!project) return;
@@ -725,8 +1056,24 @@ function ProjectViewer({
   }, [project?.id, requestedFeedbackId]);
 
   useEffect(() => {
+    if (!project || requestedFeedbackId) return;
+    const interval = window.setInterval(() => void loadProjectFeedback(project.id), 4000);
+    const onFocus = () => void loadProjectFeedback(project.id);
+    const onVisibility = () => {
+      if (!document.hidden) void loadProjectFeedback(project.id);
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [project?.id, requestedFeedbackId]);
+
+  useEffect(() => {
     if (!activeFeedback) return;
-    const events = new EventSource(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/events`);
+    const events = new EventSource(apiUrl(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/events`));
     events.addEventListener("feedback", (event) => {
       const next = JSON.parse((event as MessageEvent).data) as FeedbackRequest;
       if (isActiveFeedbackRequest(next)) {
@@ -746,7 +1093,7 @@ function ProjectViewer({
 
   useEffect(() => {
     window.setTimeout(() => enableEditableTarget(), 80);
-  }, [activeFeedback?.id, frameKey, project?.id, requestedAppPath]);
+  }, [activeFeedback?.id, frameKey, nativeMode, project?.id, requestedAppPath]);
 
   useEffect(() => {
     function onMessage(event: MessageEvent) {
@@ -769,10 +1116,10 @@ function ProjectViewer({
 
   async function loadViewerData(projectId: string) {
     const [workspaceResponse, feedbackResponse] = await Promise.all([
-      fetch(`/api/projects/${encodeURIComponent(projectId)}/workspace`),
+      prtlFetch(`/api/projects/${encodeURIComponent(projectId)}/workspace`),
       requestedFeedbackId
-        ? fetch(`/api/feedback/${encodeURIComponent(requestedFeedbackId)}?viewed=1`)
-        : fetch(`/api/feedback?projectId=${encodeURIComponent(projectId)}`)
+        ? prtlFetch(`/api/feedback/${encodeURIComponent(requestedFeedbackId)}?viewed=1`)
+        : prtlFetch(`/api/feedback?projectId=${encodeURIComponent(projectId)}`)
     ]);
     if (workspaceResponse.ok) {
       const nextWorkspace = await workspaceResponse.json();
@@ -785,20 +1132,31 @@ function ProjectViewer({
     }
     if (feedbackResponse.ok) {
       const payload = await feedbackResponse.json();
-      if (Array.isArray(payload)) {
-        setFeedbackRequests(payload);
-        setActiveFeedback(payload.find(isActiveFeedbackRequest) ?? null);
-      } else {
-        setActiveFeedback(isActiveFeedbackRequest(payload) ? payload : null);
-        setFeedbackRequests(isActiveFeedbackRequest(payload) ? [payload] : []);
-      }
+      applyFeedbackPayload(payload);
       broadcastFeedbackSync();
     }
   }
 
+  async function loadProjectFeedback(projectId: string) {
+    const response = await prtlFetch(`/api/feedback?projectId=${encodeURIComponent(projectId)}`);
+    if (!response.ok) return;
+    applyFeedbackPayload(await response.json());
+  }
+
+  function applyFeedbackPayload(payload: FeedbackRequest[] | FeedbackRequest) {
+    if (Array.isArray(payload)) {
+      const active = payload.filter(isActiveFeedbackRequest);
+      setFeedbackRequests(active);
+      setActiveFeedback(active[0] ?? null);
+      return;
+    }
+    setActiveFeedback(isActiveFeedbackRequest(payload) ? payload : null);
+    setFeedbackRequests(isActiveFeedbackRequest(payload) ? [payload] : []);
+  }
+
   async function saveViewerState(patch: Partial<ViewerState>) {
     if (!project || !workspace) return;
-    const response = await fetch(`/api/projects/${encodeURIComponent(project.id)}/workspace`, {
+    const response = await prtlFetch(`/api/projects/${encodeURIComponent(project.id)}/workspace`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ viewer: patch })
@@ -829,7 +1187,7 @@ function ProjectViewer({
     });
     broadcastFeedbackSync({ removeId: request.id });
     try {
-      const response = await fetch(`/api/feedback/${encodeURIComponent(request.id)}/respond`, {
+      const response = await prtlFetch(`/api/feedback/${encodeURIComponent(request.id)}/respond`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ kind, text, choice, data })
@@ -857,7 +1215,7 @@ function ProjectViewer({
 
   async function captureFeedback() {
     if (!activeFeedback) return;
-    const response = await fetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/capture`, { method: "POST" });
+    const response = await prtlFetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/capture`, { method: "POST" });
     if (response.ok) {
       const next = await response.json();
       setActiveFeedback(next);
@@ -868,7 +1226,7 @@ function ProjectViewer({
 
   async function updateFeedbackStatus(status: FeedbackRequest["status"]) {
     if (!activeFeedback) return;
-    const response = await fetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}`, {
+    const response = await prtlFetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ status })
@@ -885,6 +1243,11 @@ function ProjectViewer({
     if (!activeFeedback) {
       setEditStatus("idle");
       setEditMessage(null);
+      return;
+    }
+    if (nativeMode) {
+      setEditStatus("unavailable");
+      setEditMessage("Editable mode unavailable for isolated native WebViews.");
       return;
     }
     const frame = targetFrameRef.current;
@@ -905,7 +1268,7 @@ function ProjectViewer({
 
   async function recordTargetEdit(edit: TargetEditMessage) {
     if (!activeFeedback) return;
-    const response = await fetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/edit`, {
+    const response = await prtlFetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/edit`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(edit)
@@ -986,7 +1349,6 @@ function ProjectViewer({
     );
   }
 
-  const appPath = requestedAppPath ?? activeFeedback?.appPath ?? "/";
   const preferred = project.routes[project.preferredRoute] ?? project.routes.pathProxy;
   const frameRoute = project.targetKind === "website" || (preferred?.mode === "direct" && preferred.url.startsWith("https:"))
     ? preferred
@@ -1031,15 +1393,21 @@ function ProjectViewer({
         </a>
       </header>
 
-      <section className="viewerFrameWrap">
-        <iframe
-          ref={targetFrameRef}
-          key={frameKey}
-          title={project.name}
-          allow="microphone; camera; display-capture; autoplay"
-          src={frameSrc}
-          onLoad={() => enableEditableTarget()}
-        />
+      <section className={`viewerFrameWrap ${nativeMode ? "native" : ""}`}>
+        {nativeMode ? (
+          <div ref={targetNative.ref} className={`nativeWebViewSlot ${targetNative.active ? "active" : ""}`}>
+            {targetNative.error ? <span>{targetNative.error}</span> : null}
+          </div>
+        ) : (
+          <iframe
+            ref={targetFrameRef}
+            key={frameKey}
+            title={project.name}
+            allow="microphone; camera; display-capture; autoplay"
+            src={frameSrc}
+            onLoad={() => enableEditableTarget()}
+          />
+        )}
       </section>
 
         <aside
@@ -1076,6 +1444,7 @@ function ProjectViewer({
                 {activeFeedback.feedbackSurface ? (
                   <FeedbackSurfaceFrame
                     request={activeFeedback}
+                    nativeMode={nativeMode}
                     onCapture={() => void captureFeedback()}
                     onSubmit={(payload) => void respondToFeedback(payload.kind, payload.text, payload.choice, payload.data)}
                   />
@@ -1118,7 +1487,7 @@ function ProjectViewer({
                     <figure key={artifact.id}>
                       {artifact.url ? (
                         <button className="artifactThumb" onClick={() => setSelectedArtifact(artifact)} title="Open screenshot">
-                          <img src={artifact.url} alt={artifact.label} />
+                          <img src={assetUrl(artifact.url) ?? artifact.url} alt={artifact.label} />
                         </button>
                       ) : (
                         <div>No image</div>
@@ -1140,12 +1509,91 @@ function ProjectViewer({
           <button className="artifactLightboxClose" onClick={() => setSelectedArtifact(null)} title="Close screenshot">
             Close
           </button>
-          <img src={selectedArtifact.url} alt={selectedArtifact.label} />
+          <img src={assetUrl(selectedArtifact.url) ?? selectedArtifact.url} alt={selectedArtifact.label} />
           <span>{selectedArtifact.label}</span>
         </div>
       ) : null}
     </main>
   );
+}
+
+interface NativeWebViewSlotOptions {
+  enabled: boolean;
+  label: string;
+  url: string | null;
+  layer: number;
+  bridge?: boolean;
+  transparent?: boolean;
+  reloadKey?: number;
+}
+
+function useNativeWebViewSlot(options: NativeWebViewSlotOptions) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [active, setActive] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      void closeNativeWebView(options.label);
+    };
+  }, [options.label]);
+
+  useEffect(() => {
+    if (!options.enabled || !options.url) {
+      setActive(false);
+      setError(null);
+      void closeNativeWebView(options.label);
+      return;
+    }
+
+    let stopped = false;
+    let raf = 0;
+
+    async function syncFrame() {
+      const frame = measureNativeFrame(ref.current);
+      if (!frame || !options.url) return;
+      try {
+        await ensureNativeWebView({
+          label: options.label,
+          url: options.url,
+          frame,
+          layer: options.layer,
+          bridge: options.bridge,
+          transparent: options.transparent
+        });
+        if (!stopped) {
+          setActive(true);
+          setError(null);
+        }
+      } catch (syncError) {
+        if (!stopped) {
+          setActive(false);
+          setError(syncError instanceof Error ? syncError.message : "Native WebView unavailable");
+        }
+      }
+    }
+
+    function scheduleSync() {
+      window.cancelAnimationFrame(raf);
+      raf = window.requestAnimationFrame(() => void syncFrame());
+    }
+
+    scheduleSync();
+    const observer = new ResizeObserver(scheduleSync);
+    if (ref.current) observer.observe(ref.current);
+    window.addEventListener("resize", scheduleSync);
+    window.addEventListener("orientationchange", scheduleSync);
+
+    return () => {
+      stopped = true;
+      window.cancelAnimationFrame(raf);
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleSync);
+      window.removeEventListener("orientationchange", scheduleSync);
+    };
+  }, [options.bridge, options.enabled, options.label, options.layer, options.reloadKey, options.transparent, options.url]);
+
+  return { ref, active, error };
 }
 
 interface TargetEditMessage {
@@ -1316,15 +1764,23 @@ interface FeedbackSurfaceSubmitPayload {
 
 interface FeedbackSurfaceFrameProps {
   request: FeedbackRequest;
+  nativeMode: boolean;
   onCapture: () => void;
   onSubmit: (payload: FeedbackSurfaceSubmitPayload) => void;
 }
 
-function FeedbackSurfaceFrame({ request, onCapture, onSubmit }: FeedbackSurfaceFrameProps) {
+function FeedbackSurfaceFrame({ request, nativeMode, onCapture, onSubmit }: FeedbackSurfaceFrameProps) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const [height, setHeight] = useState(280);
   const [ready, setReady] = useState(false);
   const surface = request.feedbackSurface;
+  const nativeSurface = useNativeWebViewSlot({
+    enabled: nativeMode && Boolean(surface),
+    label: "feedback-surface",
+    url: surface ? nativeFeedbackSurfaceUrl(request.id) : null,
+    layer: 24,
+    bridge: false
+  });
 
   useEffect(() => {
     setReady(false);
@@ -1363,6 +1819,16 @@ function FeedbackSurfaceFrame({ request, onCapture, onSubmit }: FeedbackSurfaceF
   }, [onCapture, onSubmit]);
 
   if (!surface) return null;
+
+  if (nativeMode) {
+    return (
+      <div className={`feedbackSurface native ${nativeSurface.active ? "ready" : ""}`}>
+        <div ref={nativeSurface.ref} className="nativeWebViewSlot feedback">
+          {nativeSurface.error ? <span>{nativeSurface.error}</span> : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`feedbackSurface ${ready ? "ready" : ""}`}>

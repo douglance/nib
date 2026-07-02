@@ -118,7 +118,8 @@ export async function discoverProjects(force = false): Promise<ProjectInfo[]> {
   const projects = [...projectsById.values(), ...targets];
   projects.push(await createFeedbackLabProject(now));
   projects.sort((a, b) => a.name.localeCompare(b.name) || a.port - b.port);
-  await writeStore(store);
+  const latestStore = await readStore();
+  await writeStore({ ...latestStore, projects: store.projects });
   projectCache = projects;
   cacheAt = now;
   return projects;

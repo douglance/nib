@@ -388,6 +388,105 @@ export interface FeedbackMetricsSummary {
   improvementRate: number | null;
 }
 
+export type RequestKind = "approval" | "choice" | "question" | "review" | "notification" | "tmux";
+
+export type RequestStatus = "open" | "viewed" | "answered" | "acted" | "stale" | "resolved" | "expired";
+
+export type RequestResponseKind = FeedbackResponseKind | "choice" | "text";
+
+export interface RequestTarget {
+  projectId?: string;
+  projectName?: string;
+  appPath?: string;
+  url?: string;
+  tmux?: {
+    session: string;
+    paneId: string;
+    windowName: string;
+    fingerprint: string;
+    reason: string;
+  };
+}
+
+export interface RequestAttachment {
+  id: string;
+  requestId: string;
+  name: string;
+  type: "image" | "file" | "screenshot";
+  contentType: string;
+  bytes: number;
+  url: string;
+  createdAt: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface RequestResponse {
+  id: string;
+  kind: RequestResponseKind;
+  text: string;
+  choice?: string;
+  choiceIndex?: number;
+  data?: Record<string, unknown> | null;
+  deviceId?: string;
+  createdAt: string;
+}
+
+export interface RequestRecord {
+  id: string;
+  kind: RequestKind;
+  title: string;
+  prompt: string;
+  body: string | null;
+  context: string | null;
+  choices: string[];
+  allowText: boolean;
+  target: RequestTarget;
+  status: RequestStatus;
+  priority: "low" | "normal" | "high";
+  source: string | null;
+  createdAt: string;
+  updatedAt: string;
+  viewedAt: string | null;
+  answeredAt: string | null;
+  actedAt: string | null;
+  resolvedAt: string | null;
+  expiresAt: string | null;
+  notifiedAt: string | null;
+  notificationClickedAt: string | null;
+  staleReason: string | null;
+  attachments: RequestAttachment[];
+  responses: RequestResponse[];
+  metadata: Record<string, unknown>;
+}
+
+export type DevicePlatform = "web" | "ios" | "watchos" | "macos" | "unknown";
+
+export type DevicePushKind = "webpush" | "apns";
+
+export interface DeviceRecord {
+  id: string;
+  name: string;
+  platform: DevicePlatform;
+  pushKind: DevicePushKind;
+  token: string;
+  apnsTopic?: string | null;
+  userAgent: string | null;
+  capabilities: string[];
+  createdAt: string;
+  updatedAt: string;
+  lastSuccessAt: string | null;
+  lastError: string | null;
+}
+
+export interface WaitingPane {
+  session: string;
+  paneId: string;
+  window: string;
+  reason: string;
+  since: string;
+  fingerprint: string;
+}
+
 export interface NotificationSubscriptionRecord {
   id: string;
   endpoint: string;

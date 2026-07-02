@@ -6,7 +6,18 @@ import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { checkNormalizedHtml, diffHtmlFiles, summarizeHtmlFile } from "../html/analysis";
 import { buildHtmlContextBundle, scanDesignSystem } from "../html/contextBundles";
-import type { CommandRequest, FeedbackRequest, FeedbackResponseMode, FeedbackStatus, HtmlArtifactSummary, ProjectInfo, RegisteredTarget } from "../shared/types";
+import { notifyWaitingOnce, scanOnce as scanWaitingOnce, startWatch } from "../server/waiting/watcher";
+import type {
+  CommandRequest,
+  DeviceRecord,
+  FeedbackRequest,
+  FeedbackResponseMode,
+  FeedbackStatus,
+  HtmlArtifactSummary,
+  ProjectInfo,
+  RegisteredTarget,
+  RequestRecord
+} from "../shared/types";
 import type { Frame, Locator, Page } from "playwright";
 
 const execFileAsync = promisify(execFile);
@@ -15,10 +26,67 @@ const env = z.object({
   PRTL_BASE_URL: z.string().default("https://doug-mm.tail5d92b4.ts.net")
 });
 
+const requestStatusOutput = z.enum(["open", "viewed", "answered", "acted", "stale", "resolved", "expired"]);
+
+const requestSummaryOutput = z.object({
+  id: z.string(),
+  kind: z.string(),
+  title: z.string(),
+  prompt: z.string(),
+  status: requestStatusOutput,
+  projectId: z.string().optional(),
+  projectName: z.string().optional(),
+  choices: z.array(z.string()),
+  responses: z.number(),
+  attachments: z.number(),
+  updatedAt: z.string(),
+  viewerUrl: z.string()
+});
+
+const requestRecordOutput = z.object({
+  id: z.string(),
+  kind: z.string(),
+  title: z.string(),
+  prompt: z.string(),
+  body: z.string().nullable(),
+  context: z.string().nullable(),
+  choices: z.array(z.string()),
+  allowText: z.boolean(),
+  target: z.unknown(),
+  status: requestStatusOutput,
+  priority: z.string(),
+  source: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  viewedAt: z.string().nullable(),
+  answeredAt: z.string().nullable(),
+  actedAt: z.string().nullable(),
+  resolvedAt: z.string().nullable(),
+  expiresAt: z.string().nullable(),
+  notifiedAt: z.string().nullable(),
+  notificationClickedAt: z.string().nullable(),
+  staleReason: z.string().nullable(),
+  attachments: z.array(z.unknown()),
+  responses: z.array(z.unknown()),
+  metadata: z.record(z.string(), z.unknown()),
+  viewerUrl: z.string()
+});
+
+const requestWaitOutput = z.union([
+  requestRecordOutput,
+  z.object({
+    timeout: z.literal(true),
+    requestId: z.string()
+  })
+]);
+
 export const cli = Cli.create("prtl", {
   version: "0.1.0",
   description: "Operate the prtl interaction chrome for websites and HTML artifacts.",
   env,
+  mcpServer: {
+    cache: { ttlMs: 300000, cacheScope: "private" }
+  },
   sync: {
     depth: 1,
     suggestions: [
@@ -277,6 +345,204 @@ feedback.command("export", {
     if (options.exportFormat === "json") return request;
     const text = formatFeedbackExport(request, options.exportFormat);
     return { requestId: request.id, exportFormat: options.exportFormat, text };
+  }
+});
+
+const request = Cli.create("request", { description: "Unified human request, approval, and unstick workflows", env });
+request.command("create", {
+  description: "Create a unified request for human input.",
+  mcpTool: {
+    title: "Create human request",
+    annotations: { openWorldHint: true, idempotentHint: false }
+  },
+  options: z.object({
+    kind: z.string().default("question").describe("Request kind: approval, choice, question, review, notification, tmux"),
+    title: z.string().optional().describe("Short notification title"),
+    prompt: z.string().describe("Human-facing request prompt"),
+    body: z.string().optional().describe("Optional notification body"),
+    context: z.string().optional().describe("Extra context for the request detail view"),
+    project: z.string().optional().describe("Optional project id, name, or port"),
+    path: z.string().default("/").describe("Project app path"),
+    url: z.string().optional().describe("Optional URL to open"),
+    option: z.array(z.string()).default([]).describe("Choice option. Repeat for multiple choices."),
+    text: z.boolean().default(true).describe("Allow freeform text response"),
+    wait: z.boolean().default(false).describe("Wait for an answer before returning"),
+    timeout: z.coerce.number().default(300000).describe("Wait timeout in milliseconds"),
+    metadata: z.string().optional().describe("JSON metadata for correlation")
+  }),
+  output: requestWaitOutput,
+  run: async ({ options, env }) => {
+    const item = options.project ? await resolveProject(portalBaseUrl(), options.project) : null;
+    const created = await apiPost<RequestRecord>(portalBaseUrl(), "/api/requests", {
+      kind: options.kind,
+      title: options.title,
+      prompt: options.prompt,
+      body: options.body,
+      context: options.context,
+      projectId: item?.id,
+      appPath: options.path,
+      url: options.url,
+      choices: options.option,
+      allowText: options.text,
+      metadata: parseOptionalObject(options.metadata, "--metadata")
+    });
+    return options.wait ? waitForRequest(created.id, options.timeout) : withRequestUrl(created);
+  }
+});
+request.command("list", {
+  description: "List unified requests.",
+  mcpTool: {
+    title: "List human requests",
+    annotations: { readOnlyHint: true, openWorldHint: true }
+  },
+  options: z.object({
+    project: z.string().optional().describe("Optional project id, name, or port")
+  }),
+  output: z.object({ requests: z.array(requestSummaryOutput) }),
+  run: async ({ options, env }) => {
+    const item = options.project ? await resolveProject(portalBaseUrl(), options.project) : null;
+    const suffix = item ? `?projectId=${encodeURIComponent(item.id)}` : "";
+    return { requests: (await apiGet<RequestRecord[]>(portalBaseUrl(), `/api/requests${suffix}`)).map(summarizeRequest) };
+  }
+});
+request.command("show", {
+  description: "Show one unified request.",
+  mcpTool: {
+    title: "Show human request",
+    annotations: { readOnlyHint: true, openWorldHint: true }
+  },
+  args: z.object({
+    requestId: z.string().describe("Request id")
+  }),
+  output: requestRecordOutput,
+  run: async ({ args, env }) => withRequestUrl(await apiGet<RequestRecord>(portalBaseUrl(), `/api/requests/${args.requestId}`))
+});
+request.command("respond", {
+  description: "Respond to one unified request.",
+  mcpTool: {
+    title: "Respond to human request",
+    annotations: { openWorldHint: true, idempotentHint: false }
+  },
+  args: z.object({
+    requestId: z.string().describe("Request id")
+  }),
+  options: z.object({
+    text: z.string().optional().describe("Freeform text response"),
+    choice: z.string().optional().describe("Choice label"),
+    choiceIndex: z.coerce.number().optional().describe("Zero-based choice index"),
+    kind: z.string().optional().describe("Response kind"),
+    data: z.string().optional().describe("JSON object response data")
+  }),
+  output: requestRecordOutput,
+  run: async ({ args, options, env }) =>
+    withRequestUrl(await apiPost<RequestRecord>(portalBaseUrl(), `/api/requests/${args.requestId}/respond`, {
+      text: options.text,
+      choice: options.choice,
+      choiceIndex: options.choiceIndex,
+      kind: options.kind,
+      data: parseOptionalObject(options.data, "--data", undefined)
+    }))
+});
+request.command("wait", {
+  description: "Wait until a unified request is answered, acted, resolved, stale, or expired.",
+  mcpTool: {
+    title: "Wait for human response",
+    annotations: { readOnlyHint: true, openWorldHint: true },
+    task: { required: true, ttlMs: 900000, pollIntervalMs: 1500 }
+  },
+  args: z.object({
+    requestId: z.string().describe("Request id")
+  }),
+  options: z.object({
+    timeout: z.coerce.number().default(300000).describe("Timeout in milliseconds")
+  }),
+  output: requestWaitOutput,
+  run: async ({ args, options, env }) => waitForRequest(args.requestId, options.timeout)
+});
+
+cli.command("ask", {
+  description: "Ask for human input through the unified prtl request system.",
+  mcpTool: {
+    title: "Ask human",
+    annotations: { openWorldHint: true, idempotentHint: false }
+  },
+  options: z.object({
+    prompt: z.string().describe("Human-facing prompt"),
+    title: z.string().optional().describe("Short notification title"),
+    option: z.array(z.string()).default([]).describe("Choice option. Repeat for multiple choices."),
+    text: z.boolean().default(true).describe("Allow text response"),
+    project: z.string().optional().describe("Optional project id, name, or port"),
+    path: z.string().default("/").describe("Project app path"),
+    url: z.string().optional().describe("Optional URL to open"),
+    wait: z.boolean().default(false).describe("Wait for an answer"),
+    timeout: z.coerce.number().default(300000).describe("Wait timeout in milliseconds")
+  }),
+  output: requestWaitOutput,
+  run: async ({ options, env }) => {
+    const item = options.project ? await resolveProject(portalBaseUrl(), options.project) : null;
+    const created = await apiPost<RequestRecord>(portalBaseUrl(), "/api/requests", {
+      kind: options.option.length ? "choice" : "question",
+      title: options.title,
+      prompt: options.prompt,
+      choices: options.option,
+      allowText: options.text,
+      projectId: item?.id,
+      appPath: options.path,
+      url: options.url,
+      source: "cli"
+    });
+    return options.wait ? waitForRequest(created.id, options.timeout) : withRequestUrl(created);
+  }
+});
+
+cli.command("notify", {
+  description: "Send a quick prtl notification through the unified request system.",
+  options: z.object({
+    title: z.string().describe("Notification title"),
+    body: z.string().describe("Notification body"),
+    url: z.string().optional().describe("URL to open")
+  }),
+  run: async ({ options, env }) => apiPost(portalBaseUrl(), "/api/notify", options)
+});
+
+const device = Cli.create("device", { description: "Registered prtl devices and notification endpoints", env });
+device.command("list", {
+  description: "List registered devices.",
+  run: async ({ env }) => apiGet<{ devices: DeviceRecord[] }>(portalBaseUrl(), "/api/devices")
+});
+device.command("register", {
+  description: "Register an APNs device token.",
+  options: z.object({
+    token: z.string().describe("APNs device token"),
+    name: z.string().default("iPhone").describe("Device name"),
+    platform: z.string().default("ios").describe("ios, watchos, macos, web, or unknown")
+  }),
+  run: async ({ options, env }) => apiPost<DeviceRecord>(portalBaseUrl(), "/api/devices", {
+    token: options.token,
+    name: options.name,
+    platform: options.platform,
+    pushKind: "apns",
+    capabilities: ["alert", "actions", "text", "open"]
+  })
+});
+device.command("apns-probe", {
+  description: "Send a native-only APNs probe to registered iOS/watchOS devices.",
+  run: async ({ env }) => apiPost(portalBaseUrl(), "/api/notifications/apns/probe", {})
+});
+
+cli.command("watch", {
+  description: "Watch tmux panes for blocked prompts and create unified requests.",
+  options: z.object({
+    session: z.string().default("0").describe("tmux session to watch"),
+    interval: z.coerce.number().default(20000).describe("Polling interval in milliseconds"),
+    once: z.boolean().default(false).describe("Scan once and exit"),
+    json: z.boolean().default(false).describe("With --once, print waiting panes without notifying"),
+    actuate: z.boolean().default(false).describe("Mark requests as safe for tmux actuation after fingerprint verification")
+  }),
+  run: async ({ options, env }) => {
+    if (options.once && (options.json || process.argv.includes("--json"))) return { waiting: await scanWaitingOnce(options.session) };
+    if (options.once) return notifyWaitingOnce(options.session);
+    await startWatch({ session: options.session, intervalMs: options.interval, actuate: options.actuate });
   }
 });
 
@@ -861,7 +1127,9 @@ cli.command("doctor", {
 
 cli
   .command(project)
+  .command(request)
   .command(feedback)
+  .command(device)
   .command(target)
   .command(library)
   .command(bridge)
@@ -1364,16 +1632,39 @@ async function checkHealth() {
 
 async function checkNotifications() {
   try {
-    const status = await apiGet<{ subscriptionCount: number }>(portalBaseUrl(), "/api/notifications/status");
+    const status = await apiGet<{
+      subscriptionCount: number;
+      apnsDeviceCount?: number;
+      apnsConfigured?: boolean;
+      nativeReady?: boolean;
+      apnsIssues?: string[];
+      apnsLastError?: string | null;
+    }>(portalBaseUrl(), "/api/notifications/status");
+    const nativeCount = status.apnsDeviceCount ?? 0;
+    const channelCount = status.subscriptionCount + nativeCount;
+    const apnsBlocked = nativeCount > 0 && status.apnsConfigured === false;
+    const apnsUnhealthy = nativeCount > 0 && status.nativeReady === false;
+    const ok = channelCount > 0 && !apnsBlocked && !apnsUnhealthy;
+    const channelSummary = `${status.subscriptionCount} web, ${nativeCount} native`;
     return {
       id: "notifications",
-      ok: status.subscriptionCount > 0,
-      level: status.subscriptionCount > 0 ? "pass" : "warn",
-      message: status.subscriptionCount > 0
-        ? `${status.subscriptionCount} subscribed device(s)`
-        : "no subscribed devices; feedback still works but lock-screen notifications will not",
+      ok,
+      level: ok ? "pass" : "warn",
+      message: ok
+        ? `${channelSummary} notification channel(s)`
+        : apnsBlocked
+          ? `${channelSummary}; APNs setup incomplete`
+          : apnsUnhealthy
+            ? `${channelSummary}; APNs delivery failed`
+          : "no subscribed devices; feedback still works but lock-screen notifications will not",
       data: status,
-      fix: status.subscriptionCount > 0 ? undefined : "Open the portal bell on the target device and enable notifications"
+      fix: ok
+        ? undefined
+        : apnsBlocked
+          ? `Set APNs server config: ${(status.apnsIssues ?? ["PRTL_APNS_TEAM_ID", "PRTL_APNS_KEY_ID", "PRTL_APNS_KEY_PATH", "PRTL_APNS_TOPIC"]).join(", ")}`
+          : apnsUnhealthy
+            ? `Fix APNs delivery: ${status.apnsLastError ?? "send a test notification and inspect /api/devices"}`
+          : "Open the portal bell on the target device and enable notifications"
     };
   } catch (error) {
     return {
@@ -1454,6 +1745,48 @@ function summarizeFeedback(request: FeedbackRequest) {
 function feedbackViewerUrl(request: FeedbackRequest): string {
   const params = new URLSearchParams({ path: request.appPath, feedback: request.id });
   return `${portalBaseUrl()}/view/${request.projectId}?${params.toString()}`;
+}
+
+async function waitForRequest(requestId: string, timeout: number): Promise<ReturnType<typeof withRequestUrl> | { timeout: true; requestId: string }> {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const request = await apiGet<RequestRecord>(portalBaseUrl(), `/api/requests/${requestId}`);
+    if (["answered", "acted", "resolved", "stale", "expired"].includes(request.status)) return withRequestUrl(request);
+    await sleep(1500);
+  }
+  return { timeout: true, requestId };
+}
+
+function withRequestUrl(request: RequestRecord) {
+  return {
+    ...request,
+    viewerUrl: requestViewerUrl(request)
+  };
+}
+
+function summarizeRequest(request: RequestRecord) {
+  return {
+    id: request.id,
+    kind: request.kind,
+    title: request.title,
+    prompt: request.prompt,
+    status: request.status,
+    projectId: request.target.projectId,
+    projectName: request.target.projectName,
+    choices: request.choices,
+    responses: request.responses.length,
+    attachments: request.attachments.length,
+    updatedAt: request.updatedAt,
+    viewerUrl: requestViewerUrl(request)
+  };
+}
+
+function requestViewerUrl(request: RequestRecord): string {
+  if (request.target.url?.startsWith("http://") || request.target.url?.startsWith("https://")) return request.target.url;
+  if (request.target.url?.startsWith("/")) return `${portalBaseUrl()}${request.target.url}`;
+  if (!request.target.projectId) return portalBaseUrl();
+  const params = new URLSearchParams({ path: request.target.appPath ?? "/" });
+  return `${portalBaseUrl()}/view/${request.target.projectId}?${params.toString()}`;
 }
 
 function parseOptionalObject(
