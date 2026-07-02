@@ -9,7 +9,9 @@ const contentTypes: Record<string, string> = {
   ".json": "application/json; charset=utf-8",
   ".png": "image/png",
   ".svg": "image/svg+xml",
-  ".webp": "image/webp"
+  ".webp": "image/webp",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
+  ".ico": "image/x-icon"
 };
 
 export function serveFile(res: http.ServerResponse, filePath: string): void {
