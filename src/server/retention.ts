@@ -8,6 +8,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const removableRequestStatuses = new Set<RequestStatus>(["answered", "acted", "resolved", "expired"]);
 const openStaleRequestStatuses = new Set<RequestStatus>(["open", "viewed", "stale"]);
 const removableFeedbackStatuses = new Set<FeedbackStatus>(["answered", "resolved"]);
+const openStaleFeedbackStatuses = new Set<FeedbackStatus>(["open", "viewed", "stale"]);
 
 export interface RetentionSweepSummary {
   removedRequests: number;
@@ -42,7 +43,9 @@ export async function runRetentionSweep(now = Date.now()): Promise<RetentionSwee
       }
     }
     for (const [id, feedback] of Object.entries(store.feedback)) {
-      if (removableFeedbackStatuses.has(feedback.status) && recordTime(feedback) < cutoff) {
+      const answeredExpired = removableFeedbackStatuses.has(feedback.status) && recordTime(feedback) < cutoff;
+      const abandonedOpen = openStaleFeedbackStatuses.has(feedback.status) && recordTime(feedback) < openStaleCutoff;
+      if (answeredExpired || abandonedOpen) {
         delete store.feedback[id];
         removedFeedback += 1;
       }

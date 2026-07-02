@@ -64,11 +64,7 @@ interface AttachmentInput {
 
 export async function listRequests(projectId?: string, includeMissing = true): Promise<RequestRecord[]> {
   const store = await readStore();
-  const requests = Object.values(store.requests ?? {});
-  const feedbackRequests = Object.values(store.feedback ?? {}).map(feedbackToRequest);
-  const byId = new Map<string, RequestRecord>();
-  for (const request of [...feedbackRequests, ...requests]) byId.set(request.id, request);
-  return [...byId.values()]
+  return Object.values(store.requests ?? {})
     .filter((request) => !projectId || request.target.projectId === projectId)
     .filter((request) => includeMissing || request.status !== "stale")
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

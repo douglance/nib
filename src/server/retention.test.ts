@@ -138,11 +138,12 @@ test("prunes attachment cache entries that reference dead request ids", async ()
   assert.equal(store.attachments[attachment.id], undefined);
 });
 
-test("applies the same age rule to legacy feedback records", async () => {
+test("applies the same age rules to legacy feedback records", async () => {
   await seedStore({
     feedback: {
       "old-feedback": makeFeedback("old-feedback", "answered", daysAgo(30)),
-      "open-feedback": makeFeedback("open-feedback", "open", daysAgo(30)),
+      "abandoned-open-feedback": makeFeedback("abandoned-open-feedback", "viewed", daysAgo(49)),
+      "fresh-open-feedback": makeFeedback("fresh-open-feedback", "open", daysAgo(1)),
       "fresh-feedback": makeFeedback("fresh-feedback", "answered", daysAgo(1))
     }
   });
@@ -151,7 +152,12 @@ test("applies the same age rule to legacy feedback records", async () => {
 
   const store = await readStoreFile();
   assert.equal(store.feedback["old-feedback"], undefined);
-  assert.ok(store.feedback["open-feedback"]);
+  assert.equal(
+    store.feedback["abandoned-open-feedback"],
+    undefined,
+    "49-day abandoned open feedback is swept by the 21-day open-stale threshold"
+  );
+  assert.ok(store.feedback["fresh-open-feedback"], "a day-old open feedback survives");
   assert.ok(store.feedback["fresh-feedback"]);
 });
 
