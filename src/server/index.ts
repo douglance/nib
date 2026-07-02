@@ -23,20 +23,35 @@ import {
 } from "./feedback";
 import { getHealth } from "./health";
 import { exportHtmlArtifact, getHtmlArtifact, listHtmlArtifacts } from "./htmlArtifacts";
+import { feedbackSurfaceHtmlForNative } from "./feedbackSurface";
+import { listDevices, registerDevice, removeDevice } from "./devices";
 import {
   getVapidPublicKey,
   notificationStatus,
+  probeApnsDelivery,
   sendTestNotification,
   subscribeNotifications,
   unsubscribeNotifications
 } from "./notifications";
 import { killProject } from "./processes";
 import { proxyHttp, proxyToVite, proxyUpgrade, proxyViteUpgrade } from "./proxy";
+import {
+  addRequestAttachment,
+  attachmentFile,
+  createRequest,
+  getRequest,
+  listRequests,
+  markRequestNotificationClicked,
+  patchRequest,
+  respondRequest
+} from "./requests";
+import { requestPageHtml } from "./requestPage";
 import { captureScreenshots } from "./screenshots";
 import { serveFile } from "./static";
 import { ensureDataDirs, readStore, writeStore } from "./store";
 import type { RouteMode } from "../shared/types";
 import { addHtmlTarget, addUrlTarget, artifactFileForId, listTargets, removeTarget } from "./targets";
+import { getWaiting } from "./waiting/watcher";
 import { appendActivity, getWorkspace, listActivity, patchWorkspace } from "./workspace";
 
 await ensureDataDirs();
@@ -44,6 +59,12 @@ await ensureDataDirs();
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, corsHeaders());
+      res.end();
+      return;
+    }
 
     if (url.pathname === "/api/projects") {
       const projects = await discoverProjects(url.searchParams.get("refresh") === "1");
@@ -58,6 +79,104 @@ const server = http.createServer(async (req, res) => {
 
     if (url.pathname === "/api/activity") {
       sendJson(res, await listActivity(url.searchParams.get("projectId") ?? undefined));
+      return;
+    }
+
+    if (url.pathname === "/api/waiting") {
+      sendJson(res, await getWaiting());
+      return;
+    }
+
+    if (url.pathname === "/api/requests") {
+      if (req.method === "GET") {
+        sendJson(
+          res,
+          await listRequests(
+            url.searchParams.get("projectId") ?? undefined,
+            url.searchParams.get("includeMissing") !== "0"
+          )
+        );
+        return;
+      }
+      if (req.method === "POST") {
+        sendJson(res, await createRequest(await readJsonBody(req)), 201);
+        return;
+      }
+    }
+
+    if (url.pathname.match(/^\/api\/requests\/[^/]+$/)) {
+      const requestId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+      if (req.method === "GET") {
+        const item = await getRequest(requestId);
+        if (!item) sendJson(res, { error: "Request not found" }, 404);
+        else sendJson(res, item);
+        return;
+      }
+      if (req.method === "PATCH") {
+        const item = await patchRequest(requestId, await readJsonBody(req));
+        if (!item) sendJson(res, { error: "Request not found" }, 404);
+        else sendJson(res, item);
+        return;
+      }
+    }
+
+    if (url.pathname.match(/^\/api\/requests\/[^/]+\/respond$/) && req.method === "POST") {
+      const requestId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+      const item = await respondRequest(requestId, await readJsonBody(req));
+      if (!item) sendJson(res, { error: "Request not found" }, 404);
+      else sendJson(res, item);
+      return;
+    }
+
+    if (url.pathname.match(/^\/api\/requests\/[^/]+\/attachments$/) && req.method === "POST") {
+      const requestId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+      const item = await addRequestAttachment(requestId, await readJsonBody(req));
+      if (!item) sendJson(res, { error: "Request not found" }, 404);
+      else sendJson(res, item, 201);
+      return;
+    }
+
+    if (url.pathname.match(/^\/api\/requests\/[^/]+\/notification-click$/) && req.method === "POST") {
+      const requestId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+      const item = await markRequestNotificationClicked(requestId);
+      if (!item) sendJson(res, { error: "Request not found" }, 404);
+      else sendJson(res, item);
+      return;
+    }
+
+    if (url.pathname === "/api/notify" && req.method === "POST") {
+      const body = await readJsonBody<{ title?: string; body?: string; url?: string; tag?: string; kind?: string }>(req);
+      if (!body.title?.trim() || !body.body?.trim()) {
+        sendJson(res, { error: "title and body are required" }, 400);
+        return;
+      }
+      const request = await createRequest({
+        kind: "notification",
+        title: body.title,
+        prompt: body.body,
+        body: body.body,
+        url: body.url,
+        metadata: { tag: body.tag, kind: body.kind },
+        notify: true
+      });
+      sendJson(res, { sent: request.notifiedAt ? 1 : 0, request });
+      return;
+    }
+
+    if (url.pathname === "/api/devices") {
+      if (req.method === "GET") {
+        sendJson(res, { devices: await listDevices() });
+        return;
+      }
+      if (req.method === "POST") {
+        sendJson(res, await registerDevice({ ...(await readJsonBody(req)), userAgent: req.headers["user-agent"] ?? null }), 201);
+        return;
+      }
+    }
+
+    if (url.pathname.match(/^\/api\/devices\/[^/]+$/) && req.method === "DELETE") {
+      const deviceId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
+      sendJson(res, await removeDevice(deviceId));
       return;
     }
 
@@ -262,6 +381,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/notifications/apns/probe" && req.method === "POST") {
+      sendJson(res, await probeApnsDelivery());
+      return;
+    }
+
     if (url.pathname === "/api/cli" || url.pathname.startsWith("/api/cli/")) {
       await handleCliFetch(req, res, url);
       return;
@@ -325,7 +449,11 @@ const server = http.createServer(async (req, res) => {
       store.projects[projectId] = { ...existing, preferredRoute: body.mode };
       await writeStore(store);
       const project = (await discoverProjects(true)).find((item) => item.id === projectId);
-      sendJson(res, project ?? { ok: true, projectId, preferredRoute: body.mode });
+      if (!project) {
+        sendJson(res, { error: "Project not found" }, 404);
+        return;
+      }
+      sendJson(res, project);
       return;
     }
 
@@ -379,8 +507,42 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname.match(/^\/attachments\/[^/]+$/)) {
+      const attachmentId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
+      const attachment = await attachmentFile(attachmentId);
+      if (!attachment) {
+        sendJson(res, { error: "Attachment not found" }, 404);
+        return;
+      }
+      serveFile(res, attachment.file);
+      return;
+    }
+
+    if (url.pathname.match(/^\/r\/[^/]+\/?$/)) {
+      const requestId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
+      const request = await getRequest(requestId);
+      if (!request) {
+        res.writeHead(404, { ...corsHeaders(), "content-type": "text/plain; charset=utf-8" });
+        res.end("Request not found");
+        return;
+      }
+      sendHtml(res, requestPageHtml(request));
+      return;
+    }
+
     if (url.pathname === "/lab/feedback/" || url.pathname === "/lab/feedback") {
       sendHtml(res, feedbackLabHtml());
+      return;
+    }
+
+    if (url.pathname.match(/^\/feedback-surfaces\/[^/]+\/?$/)) {
+      const feedbackId = decodeURIComponent(url.pathname.split("/")[2] ?? "");
+      const request = await getFeedback(feedbackId);
+      if (!request?.feedbackSurface) {
+        sendJson(res, { error: "Feedback surface not found" }, 404);
+        return;
+      }
+      sendHtml(res, feedbackSurfaceHtmlForNative(request));
       return;
     }
 
@@ -433,6 +595,7 @@ server.listen(PORT, HOST, () => {
 
 function sendJson(res: http.ServerResponse, payload: unknown, statusCode = 200): void {
   res.writeHead(statusCode, {
+    ...corsHeaders(),
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-cache"
   });
@@ -441,10 +604,19 @@ function sendJson(res: http.ServerResponse, payload: unknown, statusCode = 200):
 
 function sendHtml(res: http.ServerResponse, html: string, statusCode = 200): void {
   res.writeHead(statusCode, {
+    ...corsHeaders(),
     "content-type": "text/html; charset=utf-8",
     "cache-control": "no-cache"
   });
   res.end(html);
+}
+
+function corsHeaders(): Record<string, string> {
+  return {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
+    "access-control-allow-headers": "content-type,authorization"
+  };
 }
 
 function feedbackLabHtml(): string {
