@@ -129,6 +129,31 @@ Use the human's visual feedback to take action. Then capture again to verify.
 
 All types accept optional `"color"` (hex). Use blue `#3b82f6` for your annotations.
 
+## Image Generation & Judging
+
+nib is also the front door for image generation — it shells out to the configured
+generator/judge (default: `imago`, set in `~/.config/nib/config.toml` or via
+`NIB_GENERATE_COMMAND`/`NIB_JUDGE_COMMAND`):
+
+```bash
+# Generate an image at exact pixel size (long-running: generation can take minutes)
+nib generate --width 1024 --height 1536 --out /tmp/hero.png --format json \
+  "a lighthouse at dusk, photorealistic"
+
+# Generate, then hand straight to the human for one-shot approval
+nib generate --width 1024 --height 768 --out /tmp/mock.png \
+  --feedback -m "Approve this expected target?" "toolbar redesign mockup"
+
+# Judge an implemented result against an approved target
+nib judge expected.png actual.png --format json
+# exit 0 = READY, exit 2 = BLOCKED, other = judge tool failure
+```
+
+`generate` passes the generator's JSON contract through (`{status, out, requested,
+actual, matched, ...}`); errors surface the tool's own envelope verbatim. `--nib`
+also imports the result to a `.nib`. `--feedback` is one-shot: GUI opens, human
+hits Cmd+Enter, payload returns, done.
+
 ## Headless Mode
 
 When you don't need human feedback, just annotate and render:
@@ -150,6 +175,9 @@ nib render image.png  # → image.rendered.png
 | `feedback` | `-a` | JSON annotations array |
 | `feedback` | `-m` | Message/question as toast |
 | `feedback` | `-t` | Timeout in seconds (default 60) |
+| `generate` | `--width/--height` | Exact output pixels (required) |
+| `generate` | `--feedback -m` | One-shot human approval after generation |
+| `judge` | `--format json` | Structured READY/BLOCKED verdict |
 | `find-text` | `-s` | Search string |
 | `find-text` | `--highlight --color` | Auto-highlight matches (NOT `-c`) |
 | `grid` | `--spacing` | Grid cell size in pixels |
