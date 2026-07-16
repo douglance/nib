@@ -115,6 +115,62 @@ pub struct AnnotationInfo {
     pub color: String,
 }
 
+/// Request to generate an image via the configured generator (default: imago)
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GenerateImageRequest {
+    /// Text prompt describing the desired image
+    #[schemars(description = "Text prompt describing the desired image")]
+    pub prompt: String,
+
+    /// Image width in pixels
+    #[schemars(description = "Image width in pixels")]
+    pub width: u32,
+
+    /// Image height in pixels
+    #[schemars(description = "Image height in pixels")]
+    pub height: u32,
+
+    /// Output PNG path
+    #[schemars(
+        description = "Output PNG path (optional; defaults to a timestamped file in the nib captures directory)"
+    )]
+    pub out: Option<String>,
+
+    /// Reference image paths
+    #[schemars(description = "Reference image paths (optional, repeatable)")]
+    pub refs: Option<Vec<String>>,
+
+    /// Crop output to exact requested dimensions
+    #[schemars(description = "Crop output to exact requested dimensions (default: false)")]
+    pub crop: Option<bool>,
+
+    /// Timeout passed through to the generator
+    #[schemars(
+        description = "Timeout passed through to the generator, e.g. '12m'. Generation can legitimately take 12+ minutes."
+    )]
+    pub timeout: Option<String>,
+}
+
+/// Request to judge a pair of images via the configured judge tool (default: imago compare)
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct JudgePairRequest {
+    /// Path to the expected/reference image
+    #[schemars(description = "Absolute path to the expected/reference image")]
+    pub expected: String,
+
+    /// Path to the actual/generated image
+    #[schemars(description = "Absolute path to the actual/generated image")]
+    pub actual: String,
+
+    /// Timeout passed through to the judge tool
+    #[schemars(description = "Timeout passed through to the judge tool, e.g. '10m'")]
+    pub timeout: Option<String>,
+
+    /// Open the comparison in a viewer
+    #[schemars(description = "Open the comparison in a viewer (default: false)")]
+    pub open: Option<bool>,
+}
+
 // ============================================================================
 // Event Types for wait_for_events
 // ============================================================================

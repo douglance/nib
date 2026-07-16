@@ -2543,6 +2543,102 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
     Ok(())
 }
 
+/// Execute the generate command — shells out to the configured generator
+/// (default: imago) to produce an image, then optionally imports it to
+/// .nib and/or hands it to the human via the feedback flow.
+pub async fn run_generate(args: &super::args::GenerateArgs, format: &OutputFormat) -> Result<()> {
+    tracing::info!(?args, "Running generate");
+
+    let config = crate::config::load();
+    let out_path = args
+        .out
+        .clone()
+        .unwrap_or_else(crate::external::default_output_path);
+
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let request = crate::external::GenerateRequest {
+        prompt: &args.prompt,
+        width: args.width,
+        height: args.height,
+        out: &out_path,
+        references: &args.reference,
+        crop: args.crop,
+        timeout: args.timeout.as_deref(),
+    };
+
+    // No kill timer: generation can legitimately take 12+ minutes.
+    let result = crate::external::generate(&config, &request)?;
+
+    match format {
+        OutputFormat::Json => println!("{}", serde_json::to_string(&result).unwrap_or_default()),
+        OutputFormat::Text => println!("Generated: {}", out_path.display()),
+    }
+
+    if args.nib {
+        let nib_path = import_image_to_nib(&out_path, None)?;
+        if matches!(format, OutputFormat::Text) {
+            println!("Imported: {}", nib_path.display());
+        }
+    }
+
+    if args.feedback {
+        let feedback_args = super::args::FeedbackArgs {
+            file: out_path.clone(),
+            message: args.message.clone(),
+            annotations: None,
+            timeout: 0,
+        };
+        run_feedback(&feedback_args).await?;
+    }
+
+    Ok(())
+}
+
+/// Execute the judge command — shells out to the configured judge tool
+/// (default: imago compare) and passes its verdict through. Exit code
+/// mirrors the verdict: 0 for READY, 2 for BLOCKED, non-zero for any
+/// other tool failure.
+pub fn run_judge(args: &super::args::JudgeArgs, format: &OutputFormat) -> Result<()> {
+    tracing::info!(?args, "Running judge");
+
+    let config = crate::config::load();
+    let request = crate::external::JudgeRequest {
+        expected: &args.expected,
+        actual: &args.actual,
+        timeout: args.timeout.as_deref(),
+        open: args.open,
+    };
+
+    let result = crate::external::judge(&config, &request)?;
+
+    let verdict = result
+        .get("verdict")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            crate::core::NibError::Other(format!(
+                "Judge output missing 'verdict' field: {}",
+                result
+            ))
+        })?
+        .to_string();
+
+    match format {
+        OutputFormat::Json => println!("{}", serde_json::to_string(&result).unwrap_or_default()),
+        OutputFormat::Text => println!("Verdict: {}", verdict),
+    }
+
+    match verdict.as_str() {
+        "READY" => Ok(()),
+        "BLOCKED" => std::process::exit(2),
+        other => Err(crate::core::NibError::Other(format!(
+            "Unexpected verdict: {}",
+            other
+        ))),
+    }
+}
 
 /// Execute the windows command (list capturable windows)
 pub fn run_windows(args: &WindowsArgs) -> Result<()> {

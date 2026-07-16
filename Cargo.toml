@@ -154,6 +154,9 @@ chrono.workspace = true
 # Unique IDs
 uuid.workspace = true
 
+# Config file parsing (nib generate / nib judge command seam)
+toml = "0.8"
+
 # OCR (text detection and recognition) - feature-gated
 ocrs = { workspace = true, optional = true }
 rten = { workspace = true, optional = true }

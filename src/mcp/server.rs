@@ -504,6 +504,90 @@ impl NibMcpServer {
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }
+
+    /// Generate an image via the configured generator (default: imago)
+    #[tool(
+        description = "Generate an image via the configured generator (default: imago). Shells out and can take 12+ minutes to return; never fabricates success — a non-zero exit from the generator surfaces as a tool error. Returns the generator's JSON result envelope."
+    )]
+    async fn generate_image(
+        &self,
+        Parameters(request): Parameters<GenerateImageRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let config = crate::config::load();
+
+        let out_path = request
+            .out
+            .map(PathBuf::from)
+            .unwrap_or_else(crate::external::default_output_path);
+
+        if let Some(parent) = out_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error: Failed to create output directory: {}",
+                    e
+                ))]));
+            }
+        }
+
+        let references: Vec<PathBuf> = request
+            .refs
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+
+        let generate_request = crate::external::GenerateRequest {
+            prompt: &request.prompt,
+            width: request.width,
+            height: request.height,
+            out: &out_path,
+            references: &references,
+            crop: request.crop.unwrap_or(false),
+            timeout: request.timeout.as_deref(),
+        };
+
+        match crate::external::generate(&config, &generate_request) {
+            Ok(result) => {
+                let json = serde_json::to_string(&result)
+                    .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    /// Judge a pair of images via the configured judge tool (default: imago compare)
+    #[tool(
+        description = "Compare an expected and actual image via the configured judge tool (default: imago compare). Returns the judge's JSON verdict envelope (verdict: READY or BLOCKED, plus blockers/polish/review)."
+    )]
+    async fn judge_pair(
+        &self,
+        Parameters(request): Parameters<JudgePairRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let config = crate::config::load();
+
+        let judge_request = crate::external::JudgeRequest {
+            expected: &PathBuf::from(&request.expected),
+            actual: &PathBuf::from(&request.actual),
+            timeout: request.timeout.as_deref(),
+            open: request.open.unwrap_or(false),
+        };
+
+        match crate::external::judge(&config, &judge_request) {
+            Ok(result) => {
+                let json = serde_json::to_string(&result)
+                    .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
 }
 
 impl ServerHandler for NibMcpServer {
@@ -528,7 +612,9 @@ impl ServerHandler for NibMcpServer {
                 - remove_annotation: Remove an annotation by ID (e.g., 'a1')\n\
                 - clear_annotations: Remove all annotations\n\
                 - render: Bake annotations onto image for viewing\n\
-                - wait_for_events: Block until human adds annotations (or timeout)\n\n\
+                - wait_for_events: Block until human adds annotations (or timeout)\n\
+                - generate_image: Generate an image via the configured generator (default: imago)\n\
+                - judge_pair: Compare expected vs actual images via the configured judge tool (default: imago compare)\n\n\
                 Collaboration Workflow:\n\
                 1. Use add_annotation to mark up images, then render\n\
                 2. Call wait_for_events to block until human responds\n\

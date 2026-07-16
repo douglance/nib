@@ -32,8 +32,10 @@
 pub mod capture;
 pub mod cli;
 pub mod collab;
+pub mod config;
 pub mod core;
 pub mod events;
+pub mod external;
 pub mod grid;
 #[cfg(feature = "gui")]
 pub mod gui;

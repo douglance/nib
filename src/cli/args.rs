@@ -54,6 +54,12 @@ pub enum Command {
     /// Export .nib file (rendered, json, or qml format)
     Export(ExportArgs),
 
+    /// Generate an image via the configured generator (default: imago)
+    Generate(GenerateArgs),
+
+    /// Judge a pair of images via the configured judge tool (default: imago compare)
+    Judge(JudgeArgs),
+
     // === Claude Inspection ===
     /// Overlay a coordinate grid on an image
     Grid(GridArgs),
@@ -343,6 +349,65 @@ pub enum ExportFormat {
     Json,
     /// Export PNG with embedded QML tEXt chunk
     Qml,
+}
+
+#[derive(Parser, Debug)]
+pub struct GenerateArgs {
+    /// Text prompt describing the desired image
+    pub prompt: String,
+
+    /// Image width in pixels
+    #[arg(long)]
+    pub width: u32,
+
+    /// Image height in pixels
+    #[arg(long)]
+    pub height: u32,
+
+    /// Output PNG path (default: timestamped file in the nib captures directory)
+    #[arg(short, long)]
+    pub out: Option<PathBuf>,
+
+    /// Reference image path (repeatable)
+    #[arg(long = "ref")]
+    pub reference: Vec<PathBuf>,
+
+    /// Crop output to exact requested dimensions
+    #[arg(long)]
+    pub crop: bool,
+
+    /// Timeout passed through to the generator (e.g. "12m")
+    #[arg(long)]
+    pub timeout: Option<String>,
+
+    /// Also import the generated PNG into a .nib file
+    #[arg(long)]
+    pub nib: bool,
+
+    /// After generation, run the feedback flow on the result
+    #[arg(long)]
+    pub feedback: bool,
+
+    /// Message to show in the feedback GUI (question for the human, used with --feedback)
+    #[arg(short = 'm', long)]
+    pub message: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+pub struct JudgeArgs {
+    /// Expected/reference image path
+    pub expected: PathBuf,
+
+    /// Actual/generated image path
+    pub actual: PathBuf,
+
+    /// Timeout passed through to the judge tool (e.g. "10m")
+    #[arg(long)]
+    pub timeout: Option<String>,
+
+    /// Open the comparison in a viewer
+    #[arg(long)]
+    pub open: bool,
 }
 
 #[derive(Parser, Debug)]
