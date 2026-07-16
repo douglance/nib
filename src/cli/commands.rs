@@ -2570,7 +2570,13 @@ pub async fn run_generate(args: &super::args::GenerateArgs, format: &OutputForma
     };
 
     // No kill timer: generation can legitimately take 12+ minutes.
-    let result = crate::external::generate(&config, &request)?;
+    let mut result = crate::external::generate(&config, &request)?;
+
+    // The generator's `cta` suggests its own follow-up commands (e.g. "imago
+    // compare"); through nib the next step is `nib judge`, so drop it.
+    if let Some(obj) = result.as_object_mut() {
+        obj.remove("cta");
+    }
 
     match format {
         OutputFormat::Json => println!("{}", serde_json::to_string(&result).unwrap_or_default()),
