@@ -1655,6 +1655,91 @@ mod text_tool_tests {
         // Should create annotation
         assert!(matches!(result, ToolResult::Batch(_)));
     }
+
+    #[test]
+    fn test_begin_edit_seeds_existing_content_and_id() {
+        let mut tool = TextTool::new();
+
+        tool.begin_edit(nib_core::AnnotationId(1), Point::new(50.0, 60.0), "hello".to_string());
+
+        assert_eq!(tool.text_state().content, "hello");
+        assert_eq!(tool.text_state().position, Some(Point::new(50.0, 60.0)));
+        assert!(tool.is_active());
+    }
+
+    #[test]
+    fn test_begin_edit_then_typing_appends_to_existing_content() {
+        let mut tool = TextTool::new();
+        let ctx = make_test_context();
+
+        tool.begin_edit(nib_core::AnnotationId(1), Point::new(50.0, 60.0), "hello".to_string());
+
+        let result = tool.handle_event(
+            ToolEvent::KeyDown {
+                key: "!".to_string(),
+                key_char: Some('!'),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        assert!(matches!(result, ToolResult::Handled));
+        assert_eq!(tool.text_state().content, "hello!");
+    }
+
+    #[test]
+    fn test_begin_edit_confirm_updates_same_annotation_id_not_created() {
+        let mut tool = TextTool::new();
+        let ctx = make_test_context();
+        let id = nib_core::AnnotationId(1);
+
+        tool.begin_edit(id, Point::new(50.0, 60.0), "old".to_string());
+        tool.handle_event(
+            ToolEvent::KeyDown {
+                key: "!".to_string(),
+                key_char: Some('!'),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        let result = tool.confirm_text(&ctx);
+        match result {
+            ToolResult::Batch(results) => {
+                assert_eq!(results.len(), 2);
+                match &results[0] {
+                    ToolResult::UpdatedText(updated_id, content) => {
+                        assert_eq!(*updated_id, id);
+                        assert_eq!(content, "old!");
+                    }
+                    other => panic!("expected UpdatedText, got {other:?}"),
+                }
+                assert!(matches!(results[1], ToolResult::ExitMode));
+            }
+            other => panic!("expected Batch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_begin_edit_then_escape_cancels_without_updating() {
+        let mut tool = TextTool::new();
+        let ctx = make_test_context();
+
+        tool.begin_edit(nib_core::AnnotationId(1), Point::new(50.0, 60.0), "old".to_string());
+
+        let result = tool.handle_event(
+            ToolEvent::KeyDown {
+                key: "escape".to_string(),
+                key_char: None,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        assert!(matches!(result, ToolResult::ExitMode));
+        assert!(!tool.text_state().active);
+        assert!(tool.text_state().content.is_empty());
+    }
 }
 
 // ============================================================================

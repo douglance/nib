@@ -2,7 +2,7 @@
 
 use std::any::Any;
 
-use nib_core::{Annotation, AnnotationType, Point, TextAlign};
+use nib_core::{Annotation, AnnotationId, AnnotationType, Point, TextAlign};
 
 use super::{
     MouseButton, StickyStyle, TextInputState, Tool, ToolContext, ToolEvent, ToolId, ToolMode,
@@ -42,6 +42,14 @@ impl TextTool {
     pub fn begin_sticky(&mut self, position: Point, style: StickyStyle) {
         self.state.start_new(position);
         self.pending_sticky = Some(style);
+    }
+
+    /// Start editing an EXISTING text/sticky annotation's content, reusing the
+    /// same typing/backspace/confirm flow as ordinary text entry. Called by
+    /// EditorView after switching the active tool to Text in response to a
+    /// double-click on an existing Text annotation via SelectTool.
+    pub fn begin_edit(&mut self, id: AnnotationId, position: Point, content: String) {
+        self.state.start_edit(id, position, content);
     }
 
     /// Confirm the current text and create/update annotation

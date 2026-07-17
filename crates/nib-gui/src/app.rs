@@ -1299,6 +1299,15 @@ impl EditorView {
                             if let Some(text_tool) = self.tool_manager.get_tool_as_mut::<TextTool>(ToolId::Text) {
                                 text_tool.begin_sticky(position, style);
                             }
+                        } else if let Some(id) = editing_annotation_id {
+                            // Double-click edit of an existing Text/Sticky annotation via
+                            // SelectTool: switch to the Text tool and seed it so keystrokes
+                            // accumulate into the existing annotation instead of being
+                            // silently dropped (board #18).
+                            self.select_tool(ToolId::Text, cx);
+                            if let Some(text_tool) = self.tool_manager.get_tool_as_mut::<TextTool>(ToolId::Text) {
+                                text_tool.begin_edit(id, position, initial_content.clone());
+                            }
                         }
                         // Convert image position to screen position
                         let (screen_x, screen_y) = self.scale_point(position.x, position.y);
