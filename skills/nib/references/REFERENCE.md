@@ -65,6 +65,34 @@ Launch the GUI editor directly.
 nib gui image.png
 ```
 
+#### Keyboard shortcuts
+
+Every toolbar command has a shortcut, shown as a badge on its button.
+
+| Command | Shortcut |
+|---------|----------|
+| Select tool | `V` |
+| Arrow tool | `A` |
+| Rectangle tool | `R` |
+| Ellipse tool | `E` |
+| Line tool | `L` |
+| Pencil tool | `P` |
+| Text tool | `T` |
+| Number tool | `N` |
+| Highlight tool | `H` |
+| Blur tool | `B` |
+| Style picker (open/close) | `S` |
+| Zoom in | `⌘+` / `⌘=` |
+| Zoom out | `⌘-` |
+| Fit to view | `⌘0` |
+| 100% zoom | `⌘1` |
+| Send | `⌘↵` |
+| Send and quit | `⇧⌘↵` |
+| Approve | `⇧⌘A` |
+| Reject | `⇧⌘R` |
+
+Single-letter tool shortcuts are ignored while typing in a text annotation.
+
 ### `nib annotation add`
 
 Add an annotation headlessly (no GUI needed).

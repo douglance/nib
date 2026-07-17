@@ -103,6 +103,60 @@ pub use nib_serde::{
 /// Mouse events are window-relative, so we subtract this to get canvas-relative coords
 const TOOLBAR_HEIGHT: f32 = 0.0; // Toolbar floats inside canvas, doesn't offset coordinates
 
+/// Keyboard shortcut for toggling the style-picker popup. Not owned by any `Tool`, so it's
+/// defined here as the single source both `handle_key_down` and the toolbar badge read from.
+const STYLE_PICKER_SHORTCUT: char = 's';
+
+/// Display labels for the modifier-combo shortcuts, shared between the toolbar button badges
+/// and the `command_shortcuts` list used by `toolbar_shortcut_tests` below.
+const SEND_SHORTCUT_LABEL: &str = "⌘↵";
+const APPROVE_SHORTCUT_LABEL: &str = "⇧⌘A";
+const REJECT_SHORTCUT_LABEL: &str = "⇧⌘R";
+
+/// (label, keystroke) pairs for every toolbar command's shortcut. Tool entries read from
+/// `ToolId::shortcut()` — the same source `handle_key_down` dispatches on and the toolbar
+/// badges render from — and the modifier-combo entries read from the same label constants
+/// the Send/Approve/Reject badges render from. So this list can't silently drift from the
+/// actual key bindings; `toolbar_shortcut_tests` uses it to assert no keystroke collides.
+#[cfg(test)]
+fn command_shortcuts() -> Vec<(&'static str, String)> {
+    let mut shortcuts: Vec<(&'static str, String)> = Tool::all()
+        .iter()
+        .map(|tool| (tool.name(), tool.shortcut().to_ascii_uppercase().to_string()))
+        .collect();
+    shortcuts.push(("Style", STYLE_PICKER_SHORTCUT.to_ascii_uppercase().to_string()));
+    shortcuts.push(("Send", SEND_SHORTCUT_LABEL.to_string()));
+    shortcuts.push(("Approve", APPROVE_SHORTCUT_LABEL.to_string()));
+    shortcuts.push(("Reject", REJECT_SHORTCUT_LABEL.to_string()));
+    shortcuts
+}
+
+/// Renders the small keyboard-shortcut badge shown in a toolbar button's top-right corner.
+/// Shared by tool buttons, the style-picker trigger, and Send/Approve/Reject so every
+/// toolbar command displays its shortcut the same way.
+fn render_shortcut_badge(label: impl Into<SharedString>, text_color: impl Into<gpui::Hsla>) -> impl IntoElement {
+    div()
+        .absolute()
+        .top(px(2.))
+        .right(px(2.))
+        .min_w(px(16.))
+        .h(px(16.))
+        .px(px(3.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(3.))
+        .bg(rgba(0x00000066))
+        .border_1()
+        .border_color(rgba(0xffffff33))
+        .child(
+            div()
+                .text_color(text_color)
+                .text_size(px(10.))
+                .child(label.into())
+        )
+}
+
 /// Text input state for creating/editing text annotations
 #[derive(Debug, Clone)]
 pub struct TextInputState {
@@ -1922,27 +1976,10 @@ impl EditorView {
                             .text_color(icon_color)
                     )
                     // Keyboard shortcut badge on top-right
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(2.))
-                            .right(px(2.))
-                            .w(px(16.))
-                            .h(px(16.))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(3.))
-                            .bg(rgba(0x00000066))
-                            .border_1()
-                            .border_color(rgba(0xffffff33))
-                            .child(
-                                div()
-                                    .text_color(text_color)
-                                    .text_size(px(10.))
-                                    .child(tool.shortcut().to_ascii_uppercase().to_string())
-                            )
-                    )
+                    .child(render_shortcut_badge(
+                        tool.shortcut().to_ascii_uppercase().to_string(),
+                        text_color,
+                    ))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.select_tool(tool_copy, cx);
                     }))
@@ -1985,6 +2022,11 @@ impl EditorView {
                             .cursor_pointer()
                             .bg(if picker_open { button_active_bg } else { rgba(0x3d3d3d00) })
                             .hover(|s| s.bg(button_bg))
+                            // Keyboard shortcut badge on top-right
+                            .child(render_shortcut_badge(
+                                STYLE_PICKER_SHORTCUT.to_ascii_uppercase().to_string(),
+                                text_color,
+                            ))
                             // Selected color indicator circle
                             .child(
                                 div()
@@ -2089,6 +2131,7 @@ impl EditorView {
                     .child(
                         div()
                             .id("send-button")
+                            .relative()
                             .flex()
                             .items_center()
                             .justify_center()
@@ -2098,12 +2141,13 @@ impl EditorView {
                             .cursor_pointer()
                             .bg(rgb(0x0078d4))  // Blue
                             .hover(|s| s.bg(rgb(0x1084d8)))
+                            .child(render_shortcut_badge(SEND_SHORTCUT_LABEL, text_color))
                             .child(
                                 div()
                                     .text_color(rgb(0xffffff))
                                     .text_size(px(14.))
                                     .font_weight(gpui::FontWeight::MEDIUM)
-                                    .child("Send ⌘↵")
+                                    .child("Send")
                             )
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.send_to_claude(cx);
@@ -2113,6 +2157,7 @@ impl EditorView {
                     .child(
                         div()
                             .id("approve-button")
+                            .relative()
                             .flex()
                             .items_center()
                             .justify_center()
@@ -2123,6 +2168,7 @@ impl EditorView {
                             .cursor_pointer()
                             .bg(rgb(0x2e7d32))  // Green
                             .hover(|s| s.bg(rgb(0x388e3c)))
+                            .child(render_shortcut_badge(APPROVE_SHORTCUT_LABEL, text_color))
                             .child(
                                 div()
                                     .text_color(rgb(0xffffff))
@@ -2138,6 +2184,7 @@ impl EditorView {
                     .child(
                         div()
                             .id("reject-button")
+                            .relative()
                             .flex()
                             .items_center()
                             .justify_center()
@@ -2148,6 +2195,7 @@ impl EditorView {
                             .cursor_pointer()
                             .bg(rgb(0xc62828))  // Red
                             .hover(|s| s.bg(rgb(0xd32f2f)))
+                            .child(render_shortcut_badge(REJECT_SHORTCUT_LABEL, text_color))
                             .child(
                                 div()
                                     .text_color(rgb(0xffffff))
@@ -2692,6 +2740,13 @@ impl EditorView {
                         return;
                     }
                 }
+
+                // Style-picker popup toggle (not a Tool, so not covered by the loop above)
+                if key_char == STYLE_PICKER_SHORTCUT {
+                    self.style_picker_open = !self.style_picker_open;
+                    cx.notify();
+                    return;
+                }
             }
         }
 
@@ -2960,6 +3015,33 @@ mod toolbar_layout_tests {
         // past the default window's right edge.
         let inline_swatches_width = 6.0 * STYLE_PICKER_BUTTON_W;
         assert!(STYLE_PICKER_BUTTON_W < inline_swatches_width);
+    }
+}
+
+#[cfg(test)]
+mod toolbar_shortcut_tests {
+    use super::command_shortcuts;
+
+    /// Real invariant: every toolbar command must have its own keystroke. This fails the
+    /// moment someone adds a new command (or edits a `shortcut()`/label constant) whose
+    /// keystroke collides with an existing one.
+    #[test]
+    fn every_toolbar_command_has_a_unique_keystroke() {
+        let shortcuts = command_shortcuts();
+        let mut seen = std::collections::HashSet::new();
+        for (label, keystroke) in &shortcuts {
+            assert!(
+                seen.insert(keystroke.clone()),
+                "keystroke {keystroke:?} is bound to more than one command (duplicate at {label:?}); full list: {shortcuts:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_toolbar_command_has_a_non_empty_keystroke() {
+        for (label, keystroke) in command_shortcuts() {
+            assert!(!keystroke.is_empty(), "{label} has no keystroke");
+        }
     }
 }
 
