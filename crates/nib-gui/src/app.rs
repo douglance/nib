@@ -4,10 +4,11 @@
 
 use gpui::{
     canvas, div, img, point, px, rgb, rgba, size, svg, App, AppContext, Application, AssetSource,
-    Bounds, Context, Div, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Point,
-    Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement,
-    Styled, StyledImage, Task, Window, WindowBounds, WindowKind, WindowOptions,
+    Bounds, Context, Div, ExternalPaths, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
+    PathBuilder, Point, Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size,
+    StatefulInteractiveElement, Styled, StyledImage, Task, Window, WindowBounds, WindowKind,
+    WindowOptions,
 };
 use gpui::prelude::FluentBuilder;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -96,8 +97,8 @@ use nib_core::Point as NibPoint;
 use crate::canvas::{Canvas, ZOOM_FACTOR};
 use crate::toolbar::Tool;
 use crate::tools::{
-    Modifiers, MouseButton as ToolMouseButton, StyleState, TextTool, ToolContext, ToolEvent,
-    ToolId, ToolManager, ToolMode, ToolPreview, ToolResult,
+    images_from_dropped_paths, Modifiers, MouseButton as ToolMouseButton, StyleState, TextTool,
+    ToolContext, ToolEvent, ToolId, ToolManager, ToolMode, ToolPreview, ToolResult,
 };
 use nib_storage::nib_file::NibFile;
 use crate::history::{Edit, History};
@@ -1943,6 +1944,36 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Handle files dropped onto the canvas from Finder: insert each as an
+    /// Image annotation via the same pipeline as clipboard-paste.
+    fn handle_file_drop(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+        let mouse_pos = window.mouse_position();
+        let screen_x: f32 = mouse_pos.x.into();
+        let screen_y: f32 = mouse_pos.y.into();
+        let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
+
+        let (pairs, skipped) =
+            images_from_dropped_paths(paths.paths(), NibPoint::new(img_x, img_y));
+
+        if !pairs.is_empty() {
+            let results = pairs
+                .into_iter()
+                .map(|(annotation, asset)| {
+                    let asset_hash = match &annotation.annotation_type {
+                        AnnotationType::Image { asset, .. } => asset.0.clone(),
+                        _ => String::new(),
+                    };
+                    ToolResult::CreatedWithAsset { annotation, asset_hash, asset }
+                })
+                .collect();
+            self.process_tool_result(ToolResult::Batch(results), cx);
+        }
+
+        if skipped > 0 {
+            self.add_toast(format!("Skipped {skipped} non-image file(s)"), cx);
+        }
+    }
+
     /// Handle mouse down event on canvas
     fn handle_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         // If in text input mode, clicking away confirms the text (Figma behavior)
@@ -2876,6 +2907,9 @@ impl EditorView {
             }))
             .on_scroll_wheel(cx.listener(|this, event, _window, cx| {
                 this.handle_scroll_wheel(event, cx);
+            }))
+            .on_drop::<ExternalPaths>(cx.listener(|this, paths, window, cx| {
+                this.handle_file_drop(paths, window, cx);
             }));
 
         // Add image if we have one - use explicit positioning to match annotation coordinates

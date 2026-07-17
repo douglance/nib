@@ -38,3 +38,6 @@ tokio.workspace = true
 
 # Other
 anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
