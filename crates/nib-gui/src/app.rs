@@ -520,8 +520,13 @@ impl EditorView {
             }))
     }
 
-    /// Send annotations to Claude (writes signal file)
-    fn send_to_claude(&mut self, cx: &mut Context<Self>) {
+    /// Send annotations to Claude with an explicit decision (writes signal file).
+    /// "approve"/"reject" are terminal — a decision always sends (even with an empty
+    /// delta) and the process exits once the send succeeds. "comment" preserves the
+    /// original Send behavior: skip sending (and only exit) if there's nothing new.
+    fn send_decision(&mut self, decision: &str, cx: &mut Context<Self>) {
+        let is_terminal_decision = decision != "comment";
+
         // Compute delta: only human annotations not yet sent
         // Filter out Claude's own annotations (owner == "claude")
         let delta_annotations: Vec<_> = self
@@ -530,7 +535,7 @@ impl EditorView {
             .filter(|a| !self.sent_annotation_ids.contains(&a.id.0) && a.owner != "claude")
             .collect();
 
-        if delta_annotations.is_empty() {
+        if delta_annotations.is_empty() && !is_terminal_decision {
             self.add_toast("No new annotations to send".to_string(), cx);
             // Still clear question and check quit even if no new annotations
             self.claude_question = None;
@@ -541,7 +546,8 @@ impl EditorView {
         }
 
         // Build JSON payload for delta annotations
-        let payload = self.annotations_to_json(&delta_annotations);
+        let items = Self::annotation_items_to_json(&delta_annotations);
+        let payload = Self::build_send_payload(decision, items);
 
         // Send via collab session (required)
         match &self.collab_session {
@@ -556,8 +562,8 @@ impl EditorView {
                         // Clear question after sending
                         self.claude_question = None;
 
-                        // Exit if quit was requested
-                        if self.quit_requested {
+                        // A decision is terminal: exit once sent, regardless of quit_requested.
+                        if is_terminal_decision || self.quit_requested {
                             std::process::exit(0);
                         }
                     }
@@ -574,10 +580,25 @@ impl EditorView {
         }
     }
 
+    /// Send annotations to Claude as a comment (writes signal file)
+    fn send_to_claude(&mut self, cx: &mut Context<Self>) {
+        self.send_decision("comment", cx);
+    }
+
     /// Send to Claude and request GUI exit
     fn send_to_claude_and_quit(&mut self, cx: &mut Context<Self>) {
         self.quit_requested = true;
         self.send_to_claude(cx);
+    }
+
+    /// Approve: send the annotation delta (even if empty) with an "approve" decision and exit.
+    fn approve_to_claude(&mut self, cx: &mut Context<Self>) {
+        self.send_decision("approve", cx);
+    }
+
+    /// Reject: send the annotation delta (even if empty) with a "reject" decision and exit.
+    fn reject_to_claude(&mut self, cx: &mut Context<Self>) {
+        self.send_decision("reject", cx);
     }
 
     /// Process incoming collab messages (non-blocking)
@@ -692,11 +713,11 @@ impl EditorView {
         }
     }
 
-    /// Convert annotations to minimal JSON for agent consumption
-    fn annotations_to_json(&self, annotations: &[&Annotation]) -> String {
+    /// Convert annotations to minimal JSON items for agent consumption
+    fn annotation_items_to_json(annotations: &[&Annotation]) -> Vec<serde_json::Value> {
         use serde_json::json;
 
-        let items: Vec<_> = annotations
+        annotations
             .iter()
             .map(|a| {
                 let (type_name, coords, content) = match &a.annotation_type {
@@ -745,13 +766,12 @@ impl EditorView {
 
                 obj
             })
-            .collect();
+            .collect()
+    }
 
-        if items.len() == 1 {
-            items[0].to_string()
-        } else {
-            json!({ "annotations": items }).to_string()
-        }
+    /// Build the one-shot feedback payload: an explicit human decision plus the annotation delta.
+    fn build_send_payload(decision: &str, items: Vec<serde_json::Value>) -> String {
+        serde_json::json!({ "decision": decision, "annotations": items }).to_string()
     }
 
     /// Calculate the scale factor and offset for rendering annotations
@@ -2012,6 +2032,56 @@ impl EditorView {
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.send_to_claude(cx);
                             }))
+                    )
+                    // Approve button
+                    .child(
+                        div()
+                            .id("approve-button")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(110.))  // Explicit width for click target
+                            .h(px(44.))
+                            .ml_2()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(rgb(0x2e7d32))  // Green
+                            .hover(|s| s.bg(rgb(0x388e3c)))
+                            .child(
+                                div()
+                                    .text_color(rgb(0xffffff))
+                                    .text_size(px(14.))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child("✓ Approve")
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.approve_to_claude(cx);
+                            }))
+                    )
+                    // Reject button
+                    .child(
+                        div()
+                            .id("reject-button")
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .w(px(100.))  // Explicit width for click target
+                            .h(px(44.))
+                            .ml_2()
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(rgb(0xc62828))  // Red
+                            .hover(|s| s.bg(rgb(0xd32f2f)))
+                            .child(
+                                div()
+                                    .text_color(rgb(0xffffff))
+                                    .text_size(px(14.))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child("✗ Reject")
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.reject_to_claude(cx);
+                            }))
                     ),
             ) // Close inner toolbar container
     }
@@ -2487,6 +2557,18 @@ impl EditorView {
             return;
         }
 
+        // Handle Cmd+Shift+A to approve
+        if keystroke.modifiers.platform && keystroke.modifiers.shift && keystroke.key.as_str() == "a" {
+            self.approve_to_claude(cx);
+            return;
+        }
+
+        // Handle Cmd+Shift+R to reject
+        if keystroke.modifiers.platform && keystroke.modifiers.shift && keystroke.key.as_str() == "r" {
+            self.reject_to_claude(cx);
+            return;
+        }
+
         // Handle zoom keyboard shortcuts (Cmd/Ctrl + key)
         // Skip if in text input mode
         if keystroke.modifiers.platform && self.text_input_state.is_none() {
@@ -2697,6 +2779,55 @@ impl EditorView {
                     .h(px(scaled_font_size))
                     .bg(cursor_color)
             )
+    }
+}
+
+#[cfg(test)]
+mod feedback_payload_tests {
+    use super::{Annotation, AnnotationType, EditorView, NibPoint};
+
+    fn number_annotation() -> Annotation {
+        Annotation::new(AnnotationType::Number {
+            position: NibPoint { x: 1.0, y: 2.0 },
+            value: 5,
+            radius: 10.0,
+        })
+    }
+
+    #[test]
+    fn decision_field_is_exact_for_each_path() {
+        for decision in ["approve", "reject", "comment"] {
+            let payload = EditorView::build_send_payload(decision, vec![]);
+            let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
+            assert_eq!(parsed["decision"], decision);
+        }
+    }
+
+    #[test]
+    fn approve_with_zero_annotations_yields_empty_annotations_array() {
+        let payload = EditorView::build_send_payload("approve", vec![]);
+        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(
+            parsed,
+            serde_json::json!({ "decision": "approve", "annotations": [] })
+        );
+    }
+
+    #[test]
+    fn annotation_items_preserve_existing_shape() {
+        let annotation = number_annotation();
+        let refs = vec![&annotation];
+        let items = EditorView::annotation_items_to_json(&refs);
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["type"], "number");
+        assert_eq!(items[0]["at"], serde_json::json!([1.0, 2.0]));
+        assert_eq!(items[0]["content"], "5");
+
+        let payload = EditorView::build_send_payload("comment", items);
+        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(parsed["decision"], "comment");
+        assert_eq!(parsed["annotations"].as_array().unwrap().len(), 1);
     }
 }
 
