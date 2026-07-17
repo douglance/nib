@@ -1870,6 +1870,164 @@ mod select_tool_tests {
         // Should NOT enter edit mode for non-text annotation
         assert!(matches!(result2, ToolResult::Handled));
     }
+
+    /// `stroke_width: 0.0` so `bounds()` (which expands a Box's region by
+    /// `stroke_width / 2.0`) equals the region exactly -- keeps the snap
+    /// tests' expected numbers simple and exact.
+    fn box_at(x: f64, y: f64, w: f64, h: f64) -> Annotation {
+        Annotation::new(AnnotationType::Box {
+            region: Region::new(x, y, w, h),
+            stroke_width: 0.0,
+            stroke_style: nib_core::StrokeStyle::Solid,
+            filled: false,
+            corner_radius: 0.0,
+        })
+    }
+
+    #[test]
+    fn test_click_on_grouped_member_selects_whole_group() {
+        let mut tool = SelectTool::new();
+        let a = box_at(0.0, 0.0, 10.0, 10.0).with_group_id(Some(1));
+        let b = box_at(50.0, 50.0, 10.0, 10.0).with_group_id(Some(1));
+        let c = box_at(100.0, 100.0, 10.0, 10.0); // ungrouped distractor
+        let annotations = vec![a.clone(), b.clone(), c.clone()];
+        let ctx = make_test_context_with_annotations(&annotations);
+
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(5.0, 5.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        let selected = tool.selected();
+        assert_eq!(selected.len(), 2, "clicking one grouped member must select the whole group");
+        assert!(selected.contains(&a.id));
+        assert!(selected.contains(&b.id));
+        assert!(!selected.contains(&c.id), "ungrouped annotation must not be pulled in");
+    }
+
+    #[test]
+    fn test_click_on_ungrouped_annotation_selects_only_itself() {
+        let mut tool = SelectTool::new();
+        let a = box_at(0.0, 0.0, 10.0, 10.0);
+        let annotations = vec![a.clone()];
+        let ctx = make_test_context_with_annotations(&annotations);
+
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(5.0, 5.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        assert_eq!(tool.selected(), &[a.id]);
+    }
+
+    #[test]
+    fn test_shift_click_toggles_whole_group_off_as_one_unit() {
+        let mut tool = SelectTool::new();
+        let a = box_at(0.0, 0.0, 10.0, 10.0).with_group_id(Some(1));
+        let b = box_at(50.0, 50.0, 10.0, 10.0).with_group_id(Some(1));
+        let annotations = vec![a.clone(), b.clone()];
+        let ctx = make_test_context_with_annotations(&annotations);
+
+        // Plain click selects the whole group.
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(5.0, 5.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        assert_eq!(tool.selected().len(), 2);
+
+        // Shift-clicking any member toggles the whole group off, not just that member.
+        let shift = Modifiers { shift: true, ..Modifiers::default() };
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(55.0, 55.0),
+                button: MouseButton::Left,
+                modifiers: shift,
+            },
+            &ctx,
+        );
+        assert!(tool.selected().is_empty(), "shift-click on an already-selected group member must deselect the whole group");
+    }
+
+    #[test]
+    fn test_move_drag_snaps_to_nearby_annotation() {
+        let mut tool = SelectTool::new();
+        let a = box_at(0.0, 0.0, 10.0, 10.0); // right edge at 10
+        let b = box_at(13.0, 50.0, 10.0, 10.0); // left edge at 13 -- 3px gap once moved
+        let annotations = vec![a.clone(), b.clone()];
+        let ctx = make_test_context_with_annotations(&annotations);
+
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(5.0, 5.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        tool.handle_event(
+            ToolEvent::MouseMove { position: Point::new(7.0, 5.0), modifiers: no_modifiers() },
+            &ctx,
+        );
+        let result = tool.handle_event(
+            ToolEvent::MouseUp { position: Point::new(7.0, 5.0), button: MouseButton::Left },
+            &ctx,
+        );
+
+        match result {
+            ToolResult::Moved { delta_x, delta_y, .. } => {
+                assert_eq!(delta_x, 3.0, "must snap so a's right edge (12) lands exactly on b's left edge (13)");
+                assert_eq!(delta_y, 0.0);
+            }
+            other => panic!("expected Moved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_move_drag_cmd_bypasses_snap() {
+        let mut tool = SelectTool::new();
+        let a = box_at(0.0, 0.0, 10.0, 10.0);
+        let b = box_at(13.0, 50.0, 10.0, 10.0);
+        let annotations = vec![a.clone(), b.clone()];
+        let ctx = make_test_context_with_annotations(&annotations);
+
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(5.0, 5.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        let cmd_held = Modifiers { cmd: true, ..Modifiers::default() };
+        tool.handle_event(
+            ToolEvent::MouseMove { position: Point::new(7.0, 5.0), modifiers: cmd_held },
+            &ctx,
+        );
+        let result = tool.handle_event(
+            ToolEvent::MouseUp { position: Point::new(7.0, 5.0), button: MouseButton::Left },
+            &ctx,
+        );
+
+        match result {
+            ToolResult::Moved { delta_x, delta_y, .. } => {
+                assert_eq!(delta_x, 2.0, "holding cmd through the drag must bypass snapping");
+                assert_eq!(delta_y, 0.0);
+            }
+            other => panic!("expected Moved, got {other:?}"),
+        }
+    }
 }
 
 // ============================================================================

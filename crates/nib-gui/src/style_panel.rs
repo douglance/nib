@@ -9,6 +9,7 @@ use gpui::{div, px, rgb, rgba, Context, InteractiveElement, IntoElement, ParentE
 use nib_core::{AnnotationId, AnnotationStyle, AnnotationType, ArrowHead, BlurIntensity, StrokeStyle};
 
 use crate::app::EditorView;
+use crate::layout::AlignMode;
 use crate::tools::{SelectTool, ToolId};
 
 /// Which contextual rows should be shown, given the active tool and the kinds of
@@ -211,7 +212,56 @@ impl EditorView {
             .when(rows.blur_intensity, |el| {
                 el.child(self.render_blur_intensity_row(button_bg, button_active_bg, text_color, cx))
             })
+            .when(self.selected_annotation_ids().len() >= 2, |el| {
+                el.child(self.render_align_row(button_bg, text_color, cx))
+            })
             .child(self.render_opacity_row(button_bg, button_active_bg, text_color, cx))
+    }
+
+    /// Align row (⇔ tldraw's align/distribute panel, minus distribute -- out
+    /// of scope for Phase 5): six one-shot action buttons, shown only when
+    /// ≥2 annotations are selected. Unlike the preset rows above there's no
+    /// "current" value to highlight -- alignment is an action, not a toggle.
+    fn render_align_row(
+        &self,
+        button_bg: Rgba,
+        text_color: Rgba,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let options: [(&'static str, AlignMode); 6] = [
+            ("⊢", AlignMode::Left),
+            ("⊣⊢", AlignMode::CenterHorizontal),
+            ("⊣", AlignMode::Right),
+            ("⊤", AlignMode::Top),
+            ("⊤⊥", AlignMode::CenterVertical),
+            ("⊥", AlignMode::Bottom),
+        ];
+
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_1()
+            .child(div().w(px(52.)).text_color(text_color).text_size(px(10.)).child("Align"))
+            .children(options.into_iter().map(|(label, mode)| {
+                div()
+                    .id(label)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .h(px(24.))
+                    .px(px(6.))
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(rgba(0x3d3d3d00))
+                    .hover(|s| s.bg(button_bg))
+                    .text_color(text_color)
+                    .text_size(px(10.))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.align_selected(mode, cx);
+                    }))
+            }))
     }
 
     fn render_style_swatches(

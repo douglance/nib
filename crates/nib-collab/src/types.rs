@@ -365,6 +365,10 @@ pub struct AnnotationData {
     /// Owner of the annotation: "claude", "human", or "system"
     #[serde(default = "default_owner")]
     pub owner: String,
+    /// Flat group membership (⌘G). Absent from old wire messages, which
+    /// default to `None` (ungrouped).
+    #[serde(default)]
+    pub group_id: Option<u64>,
 }
 
 fn default_owner() -> String {

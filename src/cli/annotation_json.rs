@@ -190,6 +190,7 @@ impl AnnotationInput {
             label: None,
             z_index: 0,
             owner: "claude".to_string(), // CLI annotations are from Claude
+            group_id: None,
         }
     }
 }

@@ -358,6 +358,7 @@ mod tests {
                         label: None,
                         z_index: 0,
                         owner: "human".to_string(),
+                        group_id: None,
                     },
                 },
             );
@@ -430,6 +431,7 @@ mod tests {
                     label: None,
                     z_index: 0,
                     owner: "human".to_string(),
+                    group_id: None,
                 },
             },
         );

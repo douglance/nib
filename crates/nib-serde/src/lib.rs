@@ -71,6 +71,10 @@ pub struct SerializedStyle {
     /// the sidecar alone keeps its hash/region/opacity but has no pixels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset_base64: Option<String>,
+    /// Flat group membership (⌘G). `None` means ungrouped; absent from old
+    /// sidecar files, which parse the same as an explicit `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<u64>,
 }
 
 impl SerializedStyle {
@@ -159,6 +163,8 @@ fn serialize_style(annotation: &Annotation) -> SerializedStyle {
     if annotation.color.a != 255 {
         style.opacity = Some(annotation.color.a as f64 / 255.0);
     }
+
+    style.group_id = annotation.group_id;
 
     match &annotation.annotation_type {
         AnnotationType::Box { stroke_width, stroke_style, filled, corner_radius, .. } => {
@@ -486,7 +492,11 @@ pub fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annot
         color.a = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     }
 
-    Some(Annotation::new(annotation_type).with_color(color))
+    Some(
+        Annotation::new(annotation_type)
+            .with_color(color)
+            .with_group_id(style.group_id),
+    )
 }
 
 /// Get the sidecar annotations file path for an image
@@ -513,6 +523,31 @@ mod tests {
         let json = serde_json::to_string(&serialized).expect("serialize to json");
         let parsed: SerializedAnnotation = serde_json::from_str(&json).expect("parse json");
         deserialize_annotation(&parsed).expect("deserialize annotation")
+    }
+
+    #[test]
+    fn round_trip_preserves_group_id() {
+        let original = Annotation::new(AnnotationType::Box {
+            region: Region::new(1.0, 2.0, 3.0, 4.0),
+            stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
+            filled: false,
+            corner_radius: 0.0,
+        })
+        .with_group_id(Some(7));
+
+        let restored = round_trip(original);
+        assert_eq!(restored.group_id, Some(7));
+    }
+
+    #[test]
+    fn old_sidecar_json_without_group_id_field_parses_as_ungrouped() {
+        // Simulates a sidecar file written before grouping existed: no
+        // `group_id` key at all in the style block.
+        let json = r##"{"id":"a1","type":"rectangle","x":1.0,"y":2.0,"width":3.0,"height":4.0,"color":"#0a141e"}"##;
+        let parsed: SerializedAnnotation = serde_json::from_str(json).expect("parse json");
+        let restored = deserialize_annotation(&parsed).expect("deserialize annotation");
+        assert_eq!(restored.group_id, None);
     }
 
     #[test]

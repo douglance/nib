@@ -510,6 +510,9 @@ pub struct Annotation {
     pub visible: bool,
     pub locked: bool,
     pub z_index: i32,
+    /// Flat (non-nested) group membership: annotations sharing the same id
+    /// were grouped together via ⌘G. `None` means ungrouped.
+    pub group_id: Option<u64>,
     pub created_at: SystemTime,
     pub modified_at: SystemTime,
 }
@@ -527,6 +530,7 @@ impl Annotation {
             visible: true,
             locked: false,
             z_index: 0,
+            group_id: None,
             created_at: now,
             modified_at: now,
         }
@@ -534,6 +538,11 @@ impl Annotation {
 
     pub fn with_owner(mut self, owner: impl Into<String>) -> Self {
         self.owner = owner.into();
+        self
+    }
+
+    pub fn with_group_id(mut self, group_id: Option<u64>) -> Self {
+        self.group_id = group_id;
         self
     }
 

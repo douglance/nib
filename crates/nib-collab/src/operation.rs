@@ -197,6 +197,7 @@ pub fn annotation_to_data(annotation: &Annotation) -> AnnotationData {
         label: annotation.label.clone(),
         z_index: annotation.z_index,
         owner: annotation.owner.clone(),
+        group_id: annotation.group_id,
     }
 }
 
@@ -386,6 +387,7 @@ pub fn data_to_annotation(id: u64, data: &AnnotationData) -> Annotation {
     annotation.label = data.label.clone();
     annotation.z_index = data.z_index;
     annotation.owner = data.owner.clone();
+    annotation.group_id = data.group_id;
 
     annotation
 }
@@ -642,6 +644,30 @@ mod tests {
     }
 
     #[test]
+    fn test_group_id_roundtrip_over_wire() {
+        let grouped = Annotation::new(AnnotationType::Number {
+            position: Point::new(1.0, 2.0),
+            value: 1,
+            radius: 15.0,
+        })
+        .with_group_id(Some(9));
+
+        let data = annotation_to_data(&grouped);
+        let json = serde_json::to_string(&data).expect("serialize to json");
+        let parsed: AnnotationData = serde_json::from_str(&json).expect("parse json");
+        let restored = data_to_annotation(grouped.id.0, &parsed);
+        assert_eq!(restored.group_id, Some(9));
+    }
+
+    #[test]
+    fn test_old_wire_json_without_group_id_field_parses_as_ungrouped() {
+        let json = r#"{"annotation_type":{"Number":{"x":1.0,"y":2.0,"value":1,"radius":15.0}},"color":[255,0,0,255],"severity":"none","label":null,"z_index":0,"owner":"human"}"#;
+        let parsed: AnnotationData = serde_json::from_str(json).expect("parse json");
+        let restored = data_to_annotation(1, &parsed);
+        assert_eq!(restored.group_id, None);
+    }
+
+    #[test]
     fn test_image_annotation_roundtrip_with_base64_byte_identical() {
         let image = Annotation::new(AnnotationType::Image {
             region: Region::new(5.0, 10.0, 300.0, 200.0),
@@ -700,6 +726,7 @@ mod tests {
             label: None,
             z_index: 0,
             owner: "human".to_string(),
+            group_id: None,
         };
 
         // Add

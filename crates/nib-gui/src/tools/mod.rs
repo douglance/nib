@@ -195,6 +195,8 @@ pub enum ToolPreview {
         bounds: Vec<Region>,
         /// Handle positions (point in image coords and handle type)
         handles: Option<Vec<(Point, HandlePosition)>>,
+        /// Snap guide lines to render while dragging (empty outside a move drag)
+        guides: Vec<crate::layout::Guide>,
     },
     /// Marquee selection rectangle (for drag-to-select)
     Marquee { region: Region },

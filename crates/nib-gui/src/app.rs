@@ -139,6 +139,10 @@ const DUPLICATE_SHORTCUT_LABEL: &str = "⌘D";
 const FORWARD_SHORTCUT_LABEL: &str = "⌘]";
 #[cfg(test)]
 const BACKWARD_SHORTCUT_LABEL: &str = "⌘[";
+#[cfg(test)]
+const GROUP_SHORTCUT_LABEL: &str = "⌘G";
+#[cfg(test)]
+const UNGROUP_SHORTCUT_LABEL: &str = "⇧⌘G";
 
 /// (label, keystroke) pairs for every toolbar command's shortcut. Tool entries read from
 /// `ToolId::shortcut()` — the same source `handle_key_down` dispatches on and the toolbar
@@ -160,6 +164,8 @@ fn command_shortcuts() -> Vec<(&'static str, String)> {
     shortcuts.push(("Duplicate", DUPLICATE_SHORTCUT_LABEL.to_string()));
     shortcuts.push(("Forward", FORWARD_SHORTCUT_LABEL.to_string()));
     shortcuts.push(("Backward", BACKWARD_SHORTCUT_LABEL.to_string()));
+    shortcuts.push(("Group", GROUP_SHORTCUT_LABEL.to_string()));
+    shortcuts.push(("Ungroup", UNGROUP_SHORTCUT_LABEL.to_string()));
     shortcuts
 }
 
@@ -2688,7 +2694,7 @@ impl EditorView {
                         .into_any_element(),
                 )
             }
-            ToolPreview::Selection { bounds, handles } => {
+            ToolPreview::Selection { bounds, handles, guides } => {
                 // Render selection bounds with optional resize handles
                 if bounds.is_empty() {
                     return None;
@@ -2735,7 +2741,47 @@ impl EditorView {
                     container = container.child(handles_container);
                 }
 
-                Some(container.into_any_element())
+                if guides.is_empty() {
+                    return Some(container.into_any_element());
+                }
+
+                // Guides span the whole canvas, not just the selection's local
+                // bounds, so they're siblings of `container` rather than its
+                // children (reusing the same absolute-positioning context).
+                let guide_color = rgb(0xff00ff); // Magenta, distinct from the blue selection outline
+                let (canvas_sx, canvas_sy, canvas_sw, canvas_sh) =
+                    self.scale_coords(0.0, 0.0, self.canvas.image_width, self.canvas.image_height);
+                let mut guides_container = div().absolute().left(px(0.0)).top(px(0.0));
+                for guide in guides {
+                    guides_container = match guide {
+                        crate::layout::Guide::Vertical(x) => {
+                            let (gx, _) = self.scale_point(x, 0.0);
+                            guides_container.child(
+                                div()
+                                    .absolute()
+                                    .left(px(gx))
+                                    .top(px(canvas_sy))
+                                    .w(px(1.0))
+                                    .h(px(canvas_sh))
+                                    .bg(guide_color),
+                            )
+                        }
+                        crate::layout::Guide::Horizontal(y) => {
+                            let (_, gy) = self.scale_point(0.0, y);
+                            guides_container.child(
+                                div()
+                                    .absolute()
+                                    .left(px(canvas_sx))
+                                    .top(px(gy))
+                                    .w(px(canvas_sw))
+                                    .h(px(1.0))
+                                    .bg(guide_color),
+                            )
+                        }
+                    };
+                }
+
+                Some(div().child(container).child(guides_container).into_any_element())
             }
             ToolPreview::Marquee { region } => {
                 // Render marquee selection rectangle (dashed border effect)
@@ -2963,6 +3009,15 @@ impl EditorView {
                 // Cmd/Ctrl + D : Duplicate selection
                 "d" => {
                     self.duplicate_selection(cx);
+                    return;
+                }
+                // Cmd/Ctrl + Shift + G : Ungroup. Cmd/Ctrl + G : Group selection.
+                "g" => {
+                    if keystroke.modifiers.shift {
+                        self.ungroup_selected(cx);
+                    } else {
+                        self.group_selected(cx);
+                    }
                     return;
                 }
                 // Cmd/Ctrl + ] : Bring selected annotation forward one z-order step
