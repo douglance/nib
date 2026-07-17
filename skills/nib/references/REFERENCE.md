@@ -45,9 +45,11 @@ nib feedback image.png \
 
 **Owner-based filtering:** Annotations passed via `-a` are tagged `owner: "claude"` and excluded from the response. Only the human's new annotations are returned.
 
-**Response format:**
+**Response format:** the human's decision plus their new annotations. `decision` is
+`"approve"` (⇧⌘A), `"reject"` (⇧⌘R), or `"comment"` (plain send, ⌘↵). Approve/reject
+send even with zero annotations and close the GUI.
 ```json
-{"annotations": [{"id": "a1", "type": "rectangle", "at": [150, 200, 300, 100], "owner": "human"}]}
+{"decision": "comment", "annotations": [{"id": "a1", "type": "rectangle", "at": [150, 200, 300, 100], "owner": "human"}]}
 ```
 
 **Timeout response:**
