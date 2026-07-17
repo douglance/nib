@@ -83,7 +83,18 @@ Every toolbar command has a shortcut, shown as a badge on its button.
 | Number tool | `N` |
 | Highlight tool | `H` |
 | Blur tool | `B` |
+| Crop tool | `C` |
+| Eraser tool | `X` |
+| Sticky note tool | `K` |
+| Image tool (paste from clipboard) | `I` |
 | Style picker (open/close) | `S` |
+| Undo | `⌘Z` |
+| Redo | `⇧⌘Z` |
+| Duplicate selection | `⌘D` |
+| Bring forward | `⌘]` |
+| Send backward | `⌘[` |
+| Group selection | `⌘G` |
+| Ungroup selection | `⇧⌘G` |
 | Zoom in | `⌘+` / `⌘=` |
 | Zoom out | `⌘-` |
 | Fit to view | `⌘0` |
@@ -94,6 +105,29 @@ Every toolbar command has a shortcut, shown as a badge on its button.
 | Reject | `⇧⌘R` |
 
 Single-letter tool shortcuts are ignored while typing in a text annotation.
+Shape tools (Rectangle, Ellipse, Line, Pencil, Highlight) live behind the
+toolbar's shape flyout; their letter shortcuts still select them directly.
+
+#### Style panel
+
+`S` opens the style panel: color presets + custom color, stroke width
+(S/M/L), fill toggle, stroke style (solid/dashed/dotted), arrowhead
+(end/start/both/none), font size, blur intensity
+(light/medium/heavy/pixelate), and opacity. With a non-empty selection a
+control edits the selected annotations AND sets the default; with nothing
+selected it sets the default only. With 2+ annotations selected an Align
+row appears (left/center/right/top/middle/bottom), applied as one undo step.
+
+#### Editing behaviors
+
+- **Sticky notes** (`K`): click places a colored note; typing wraps at the
+  note's max width; click-away confirms.
+- **Images** (`I`): pastes the clipboard image at the click point (scaled to
+  ≤400px on the long side); resize with the selection handles.
+- **Snapping**: dragging snaps to edges/centers of the canvas and other
+  annotations, with guide lines shown; hold `⌘` while dragging to bypass.
+- **Grouping**: `⌘G` groups the selection (flat, no nesting); clicking any
+  member selects the whole group; `⇧⌘G` ungroups.
 
 ### `nib annotation add`
 

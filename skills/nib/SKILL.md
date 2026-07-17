@@ -133,6 +133,12 @@ Use the human's visual feedback to take action. Then capture again to verify.
 
 All types accept optional `"color"` (hex). Use blue `#3b82f6` for your annotations.
 
+The GUI editor the human sees is a full annotation workspace: style panel
+(stroke width/style, fill, arrowheads, font size, blur intensity, opacity),
+undo/redo, duplicate, eraser, z-order, sticky notes, clipboard image paste,
+snapping with guides, alignment, and grouping — every command has a keyboard
+shortcut (see [full command reference](references/REFERENCE.md)).
+
 ## Image Generation & Judging
 
 nib is also the front door for image generation — it shells out to the configured
