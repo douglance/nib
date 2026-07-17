@@ -183,6 +183,15 @@ pub fn annotation_to_sidecar(annotation: &Annotation) -> SerializedAnnotation {
                 points: points.iter().map(|p| (p.x, p.y)).collect(),
             },
         ),
+        AnnotationType::Image { region, .. } => (
+            "image".to_string(),
+            AnnotationGeometry::Rectangle {
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+            },
+        ),
     };
 
     SerializedAnnotation {

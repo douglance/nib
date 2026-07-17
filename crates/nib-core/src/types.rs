@@ -298,6 +298,26 @@ pub enum StrokeStyle {
     Dotted,
 }
 
+/// Content-hash reference to an out-of-band asset (e.g. inserted image bytes).
+/// Storage layers keep the reference inline and the bytes elsewhere: the
+/// `.nib` SQLite file in an `assets` table keyed by this hash, the sidecar in
+/// the style block as base64, the wire protocol inlined as base64 (screenshot
+/// scale, so simplest wins over a fetch protocol).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AssetRef(pub String);
+
+impl AssetRef {
+    /// Compute the content-hash reference for `bytes` (hex-encoded SHA-256).
+    /// Identical bytes always produce the same `AssetRef`, so storing by hash
+    /// naturally de-duplicates identical images.
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        Self(format!("{:x}", hasher.finalize()))
+    }
+}
+
 /// The type-specific data for each annotation variant
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnnotationType {
@@ -372,6 +392,13 @@ pub enum AnnotationType {
         points: Vec<Point>,
         stroke_width: f64,
         stroke_style: StrokeStyle,
+    },
+
+    /// Inserted image, referenced by content hash (bytes live out-of-band)
+    Image {
+        region: Region,
+        asset: AssetRef,
+        opacity: f64,
     },
 }
 
@@ -448,6 +475,7 @@ impl AnnotationType {
                 let max_y = points.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
                 Region::new(min_x, min_y, max_x - min_x, max_y - min_y).expand(*stroke_width / 2.0)
             }
+            AnnotationType::Image { region, .. } => *region,
         }
     }
 
@@ -464,6 +492,7 @@ impl AnnotationType {
             AnnotationType::Ellipse { .. } => "ellipse",
             AnnotationType::Crop { .. } => "crop",
             AnnotationType::Path { .. } => "path",
+            AnnotationType::Image { .. } => "image",
         }
     }
 }
@@ -558,6 +587,16 @@ pub enum ImageSource {
     Url(String),
 }
 
+/// Bytes for an out-of-band asset (e.g. an Image annotation's pixels), keyed
+/// by content hash (see `AssetRef`) wherever it's stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetData {
+    pub bytes: Vec<u8>,
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// A complete annotated image document
 #[derive(Debug, Clone)]
 pub struct NibImage {
@@ -570,6 +609,9 @@ pub struct NibImage {
     pub source: ImageSource,
     /// All annotations on this image
     pub annotations: Vec<Annotation>,
+    /// Out-of-band asset bytes referenced by Image annotations, keyed by
+    /// content hash. Empty for documents with no inserted images.
+    pub assets: std::collections::HashMap<String, AssetData>,
     /// Document-level metadata
     pub title: Option<String>,
     pub description: Option<String>,
@@ -590,6 +632,7 @@ impl NibImage {
             height,
             source,
             annotations: Vec::new(),
+            assets: std::collections::HashMap::new(),
             title: None,
             description: None,
             tags: Vec::new(),
@@ -656,5 +699,41 @@ impl NibImage {
                 _ => None,
             })
             .unwrap_or(Region::new(0.0, 0.0, self.width as f64, self.height as f64))
+    }
+}
+
+#[cfg(test)]
+mod image_annotation_tests {
+    use super::*;
+
+    #[test]
+    fn asset_ref_from_bytes_is_deterministic() {
+        assert_eq!(AssetRef::from_bytes(b"hello"), AssetRef::from_bytes(b"hello"));
+    }
+
+    #[test]
+    fn asset_ref_from_bytes_differs_for_different_content() {
+        assert_ne!(AssetRef::from_bytes(b"hello"), AssetRef::from_bytes(b"world"));
+    }
+
+    #[test]
+    fn image_bounds_is_its_region() {
+        let region = Region::new(10.0, 20.0, 100.0, 50.0);
+        let image = AnnotationType::Image {
+            region,
+            asset: AssetRef::from_bytes(b"x"),
+            opacity: 1.0,
+        };
+        assert_eq!(image.bounds(), region);
+    }
+
+    #[test]
+    fn image_type_name_is_image() {
+        let image = AnnotationType::Image {
+            region: Region::new(0.0, 0.0, 1.0, 1.0),
+            asset: AssetRef::from_bytes(b"x"),
+            opacity: 1.0,
+        };
+        assert_eq!(image.type_name(), "image");
     }
 }

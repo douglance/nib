@@ -165,6 +165,24 @@ pub fn annotation_to_data(annotation: &Annotation) -> AnnotationData {
             }
             .to_string(),
         },
+
+        AnnotationType::Image {
+            region,
+            asset,
+            opacity,
+        } => AnnotationTypeData::Image {
+            x: region.x,
+            y: region.y,
+            width: region.width,
+            height: region.height,
+            asset_hash: asset.0.clone(),
+            // Bytes aren't reachable from an Annotation alone (they live in the
+            // caller's asset cache, out-of-band) -- callers that have them
+            // patch this field on the returned AnnotationTypeData before
+            // sending it over the wire.
+            asset_base64: String::new(),
+            opacity: *opacity,
+        },
     };
 
     AnnotationData {
@@ -334,6 +352,23 @@ pub fn data_to_annotation(id: u64, data: &AnnotationData) -> Annotation {
                 _ => StrokeStyle::Solid,
             },
         },
+
+        AnnotationTypeData::Image {
+            x,
+            y,
+            width,
+            height,
+            asset_hash,
+            opacity,
+            // `asset_base64` isn't decoded here -- see `annotation_to_data`'s
+            // doc comment; a caller that needs the bytes reads
+            // `data.annotation_type`'s field directly and decodes it.
+            asset_base64: _,
+        } => AnnotationType::Image {
+            region: Region::new(*x, *y, *width, *height),
+            asset: nib_core::AssetRef(asset_hash.clone()),
+            opacity: *opacity,
+        },
     };
 
     let severity = match data.severity.as_str() {
@@ -461,6 +496,7 @@ fn move_annotation(annotation_type: &mut AnnotationType, delta_x: f64, delta_y: 
         AnnotationType::Box { region, .. }
         | AnnotationType::Blur { region, .. }
         | AnnotationType::Highlight { region, .. }
+        | AnnotationType::Image { region, .. }
         | AnnotationType::Crop { region } => {
             region.x += delta_x;
             region.y += delta_y;
@@ -584,6 +620,7 @@ pub fn inverse_operation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose, Engine as _};
 
     #[test]
     fn test_annotation_roundtrip() {
@@ -602,6 +639,49 @@ mod tests {
         assert_eq!(arrow.label, restored.label);
         assert_eq!(arrow.severity, restored.severity);
         assert_eq!(arrow.color.r, restored.color.r);
+    }
+
+    #[test]
+    fn test_image_annotation_roundtrip_with_base64_byte_identical() {
+        let image = Annotation::new(AnnotationType::Image {
+            region: Region::new(5.0, 10.0, 300.0, 200.0),
+            asset: nib_core::AssetRef("deadbeef1234".to_string()),
+            opacity: 0.6,
+        });
+
+        let mut data = annotation_to_data(&image);
+        // annotation_to_data can't fill this in itself -- an Annotation only
+        // carries the asset's hash, not its bytes. A sender that has the
+        // bytes (e.g. the GUI's asset cache) patches this in before putting
+        // the AnnotationData on the wire; simulate that, then round-trip
+        // through JSON the way the wire protocol actually would.
+        let original_bytes = vec![10u8, 20, 30, 40, 250, 251, 252, 253];
+        let expected_base64 = general_purpose::STANDARD.encode(&original_bytes);
+        if let AnnotationTypeData::Image { asset_base64, .. } = &mut data.annotation_type {
+            *asset_base64 = expected_base64.clone();
+        } else {
+            panic!("expected AnnotationTypeData::Image");
+        }
+
+        let json = serde_json::to_string(&data).expect("serialize to json");
+        let parsed: AnnotationData = serde_json::from_str(&json).expect("parse json");
+
+        let restored = data_to_annotation(image.id.0, &parsed);
+        match restored.annotation_type {
+            AnnotationType::Image { region, asset, opacity } => {
+                assert_eq!(region, Region::new(5.0, 10.0, 300.0, 200.0));
+                assert_eq!(asset.0, "deadbeef1234");
+                assert_eq!(opacity, 0.6);
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+
+        let AnnotationTypeData::Image { asset_base64, .. } = &parsed.annotation_type else {
+            panic!("expected AnnotationTypeData::Image");
+        };
+        assert_eq!(*asset_base64, expected_base64);
+        let decoded = general_purpose::STANDARD.decode(asset_base64).expect("valid base64");
+        assert_eq!(decoded, original_bytes, "asset bytes must survive the wire round trip byte-identical");
     }
 
     #[test]

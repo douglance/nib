@@ -87,7 +87,8 @@ use nib_collab::session::Session;
 use nib_collab::types::ClientType;
 use nib_core::blur::apply_blur_region;
 use nib_core::{
-    dash_segments, Annotation, AnnotationId, AnnotationType, ArrowHead, Color, Region, StrokeStyle,
+    dash_segments, Annotation, AnnotationId, AnnotationType, ArrowHead, AssetData, Color, Region,
+    StrokeStyle,
 };
 use nib_core::Point as NibPoint;
 use crate::canvas::{Canvas, ZOOM_FACTOR};
@@ -98,6 +99,7 @@ use crate::tools::{
 };
 use nib_storage::nib_file::NibFile;
 use crate::history::{Edit, History};
+use crate::tool_flyout;
 use crate::zorder;
 
 // Re-export serialization types from nib-serde
@@ -164,7 +166,7 @@ fn command_shortcuts() -> Vec<(&'static str, String)> {
 /// Renders the small keyboard-shortcut badge shown in a toolbar button's top-right corner.
 /// Shared by tool buttons, the style-picker trigger, and Send/Approve/Reject so every
 /// toolbar command displays its shortcut the same way.
-fn render_shortcut_badge(label: impl Into<SharedString>, text_color: impl Into<gpui::Hsla>) -> impl IntoElement {
+pub(crate) fn render_shortcut_badge(label: impl Into<SharedString>, text_color: impl Into<gpui::Hsla>) -> impl IntoElement {
     div()
         .absolute()
         .top(px(2.))
@@ -185,6 +187,21 @@ fn render_shortcut_badge(label: impl Into<SharedString>, text_color: impl Into<g
                 .text_size(px(10.))
                 .child(label.into())
         )
+}
+
+/// Map our stored asset format string (see `AssetData::format`) to GPUI's
+/// `ImageFormat`, for constructing a renderable `gpui::Image`. Falls back to
+/// Png (what the Image tool and export path always write) for anything
+/// unrecognized rather than failing to render.
+fn image_format_to_gpui(format: &str) -> gpui::ImageFormat {
+    match format {
+        "jpeg" | "jpg" => gpui::ImageFormat::Jpeg,
+        "webp" => gpui::ImageFormat::Webp,
+        "gif" => gpui::ImageFormat::Gif,
+        "bmp" => gpui::ImageFormat::Bmp,
+        "tiff" | "tif" => gpui::ImageFormat::Tiff,
+        _ => gpui::ImageFormat::Png,
+    }
 }
 
 /// Text input state for creating/editing text annotations
@@ -298,15 +315,21 @@ pub struct EditorView {
     /// List of completed annotations
     pub(crate) annotations: Vec<Annotation>,
     /// Currently selected tool
-    active_tool: Tool,
+    pub(crate) active_tool: Tool,
     /// Style option defaults for newly-created annotations (stroke width, fill, stroke
     /// style, arrowhead, font size, blur intensity, opacity) plus the semantic style
     /// preset/custom color. Also fed into every `ToolContext` construction site.
     pub(crate) style_state: StyleState,
     /// GUI-side undo/redo command stack (see `history.rs`)
     pub(crate) history: History,
+    /// Out-of-band asset bytes for Image annotations, keyed by content hash
+    /// (see `AssetRef`). Populated on paste/load, read by rendering and export.
+    pub(crate) asset_cache: std::collections::HashMap<String, AssetData>,
     /// Whether the collapsed style/color picker popup is open
     pub(crate) style_picker_open: bool,
+    /// Whether the grouped shape-tools popup (Rectangle/Ellipse/Line/Pencil/
+    /// Highlight) is open (see `tool_flyout.rs`)
+    pub(crate) shape_flyout_open: bool,
     /// Last modification time of the sidecar annotations file (for file watching)
     last_sidecar_modified: Option<SystemTime>,
     /// Original image width in pixels
@@ -443,7 +466,9 @@ impl EditorView {
             active_tool: Tool::Rectangle,
             style_state: StyleState::default(),
             history: History::new(HISTORY_CAP),
+            asset_cache: std::collections::HashMap::new(),
             style_picker_open: false,
+            shape_flyout_open: false,
             last_sidecar_modified: None,
             image_width,
             image_height,
@@ -842,6 +867,9 @@ impl EditorView {
                         let coords: Vec<_> = points.iter().map(|p| [p.x, p.y]).collect();
                         ("path", json!(coords), None)
                     }
+                    AnnotationType::Image { region, .. } => {
+                        ("image", json!([region.x, region.y, region.width, region.height]), None)
+                    }
                 };
 
                 let mut obj = json!({
@@ -1214,6 +1242,14 @@ impl EditorView {
                 self.save_annotations(cx);
                 cx.notify();
             }
+            ToolResult::CreatedWithAsset { annotation, asset_hash, asset } => {
+                tracing::info!("human created a{} image ({}x{})", annotation.id.0, asset.width, asset.height);
+                self.asset_cache.insert(asset_hash, asset);
+                self.record_edit(Edit::Added(annotation.clone()));
+                self.annotations.push(annotation);
+                self.save_annotations(cx);
+                cx.notify();
+            }
             ToolResult::Updated(id) => {
                 // Simple update without content - tool should handle internally
                 tracing::debug!("Annotation {:?} updated", id);
@@ -1341,6 +1377,7 @@ impl EditorView {
             AnnotationType::Box { region, .. }
             | AnnotationType::Blur { region, .. }
             | AnnotationType::Highlight { region, .. }
+            | AnnotationType::Image { region, .. }
             | AnnotationType::Crop { region } => {
                 *region = new_bounds;
             }
@@ -1450,6 +1487,10 @@ impl EditorView {
                     point.x += delta_x;
                     point.y += delta_y;
                 }
+            }
+            AnnotationType::Image { ref mut region, .. } => {
+                region.x += delta_x;
+                region.y += delta_y;
             }
         }
     }
@@ -1857,7 +1898,7 @@ impl EditorView {
     }
 
     /// Handle tool selection from toolbar
-    fn select_tool(&mut self, tool: ToolId, cx: &mut Context<Self>) {
+    pub(crate) fn select_tool(&mut self, tool: ToolId, cx: &mut Context<Self>) {
         // Set the active tool in the tool manager, which handles:
         // - Deactivating the old tool (may produce pending results)
         // - Activating the new tool
@@ -2036,19 +2077,10 @@ impl EditorView {
 
     /// Render the toolbar
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let tools_to_show = [
-            Tool::Select,
-            Tool::Arrow,
-            Tool::Rectangle,
-            Tool::Ellipse,
-            Tool::Line,
-            Tool::Pencil,
-            Tool::Text,
-            Tool::Number,
-            Tool::Highlight,
-            Tool::Blur,
-            Tool::Eraser,
-        ];
+        // Rectangle/Ellipse/Line/Pencil/Highlight live behind the shape
+        // flyout (see tool_flyout.rs) instead of individual toolbar slots.
+        let tools_before_shapes = [Tool::Select, Tool::Arrow];
+        let tools_after_shapes = [Tool::Text, Tool::Number, Tool::Blur, Tool::Eraser, Tool::Image];
 
         let button_bg = rgb(0x3d3d3d);
         let button_active_bg = rgb(0x0078d4);
@@ -2076,7 +2108,74 @@ impl EditorView {
                     .px_3()
                     .gap_1()
                     .items_center()
-                    .children(tools_to_show.iter().map(|tool| {
+                    .children(tools_before_shapes.iter().map(|tool| {
+                let is_active = *tool == self.active_tool;
+                let tool_copy = *tool;
+
+                div()
+                    .id(tool.name())
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .justify_center()
+                    .w(px(56.))
+                    .h(px(56.))
+                    .rounded_md()
+                    .cursor_pointer()
+                    .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
+                    .hover(|style| style.bg(button_bg))
+                    .child(
+                        svg()
+                            .path(tool.icon_path())
+                            .size(px(28.))
+                            .text_color(icon_color)
+                    )
+                    // Keyboard shortcut badge on top-right
+                    .child(render_shortcut_badge(
+                        tool.shortcut().to_ascii_uppercase().to_string(),
+                        text_color,
+                    ))
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.select_tool(tool_copy, cx);
+                    }))
+            }))
+                    // Shape tools (Rectangle/Ellipse/Line/Pencil/Highlight) collapsed into
+                    // one flyout button (see tool_flyout.rs and toolbar_layout_tests for
+                    // the width accounting this collapse relies on).
+                    .child({
+                        let current_icon = self.shape_flyout_icon();
+                        let is_group_active = tool_flyout::SHAPE_TOOLS.contains(&self.active_tool);
+                        let flyout_open = self.shape_flyout_open;
+
+                        div()
+                            .id("shape-flyout-button")
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .w(px(56.))
+                            .h(px(56.))
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(if is_group_active || flyout_open { button_active_bg } else { rgba(0x3d3d3d00) })
+                            .hover(|style| style.bg(button_bg))
+                            .child(
+                                svg()
+                                    .path(current_icon.icon_path())
+                                    .size(px(28.))
+                                    .text_color(icon_color)
+                            )
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.shape_flyout_open = !this.shape_flyout_open;
+                                cx.notify();
+                            }))
+                            .when(flyout_open, |el| {
+                                el.child(self.render_shape_flyout(button_bg, button_active_bg, text_color, icon_color, cx))
+                            })
+                    })
+                    .children(tools_after_shapes.iter().map(|tool| {
                 let is_active = *tool == self.active_tool;
                 let tool_copy = *tool;
 
@@ -2462,6 +2561,39 @@ impl EditorView {
 
                 Self::render_path_element(scaled_points, stroke, *stroke_style, border_color.into())
                     .into_any_element()
+            }
+            AnnotationType::Image { region, asset, opacity } => {
+                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
+
+                match self.asset_cache.get(&asset.0) {
+                    Some(asset_data) => {
+                        let gpui_image = std::sync::Arc::new(gpui::Image::from_bytes(
+                            image_format_to_gpui(&asset_data.format),
+                            asset_data.bytes.clone(),
+                        ));
+                        div()
+                            .absolute()
+                            .left(px(sx))
+                            .top(px(sy))
+                            .w(px(sw))
+                            .h(px(sh))
+                            .opacity(*opacity as f32)
+                            .child(img(gpui_image).w(px(sw)).h(px(sh)))
+                            .into_any_element()
+                    }
+                    // No bytes cached for this hash (e.g. a sidecar-only load with
+                    // no asset_base64) -- show a placeholder instead of nothing.
+                    None => div()
+                        .absolute()
+                        .left(px(sx))
+                        .top(px(sy))
+                        .w(px(sw))
+                        .h(px(sh))
+                        .bg(rgba(0x88888866))
+                        .border_1()
+                        .border_color(rgb(0x888888))
+                        .into_any_element(),
+                }
             }
         }
     }
@@ -3083,7 +3215,10 @@ mod toolbar_layout_tests {
     // if those literals are edited, update these to match.
     const TOOLBAR_PADDING_X: f32 = 24.0; // px_3, both sides
     const GAP: f32 = 4.0; // gap_1, applied between each of the direct children below
-    const NUM_TOOL_BUTTONS: f32 = 11.0; // Phase 2 added the Eraser button (margin ~108px, still passes)
+    // Phase 4: Rectangle/Ellipse/Line/Pencil/Highlight collapsed into one shape-flyout
+    // button (tool_flyout.rs), and Image added -- 2 (before) + 1 (flyout) + 5 (after,
+    // includes Image) = 8 buttons, all the same 56px width. Margin ~288px, still passes.
+    const NUM_TOOL_BUTTONS: f32 = 8.0;
     const TOOL_BUTTON_W: f32 = 56.0;
     const SEPARATOR_W: f32 = 1.0 + 8.0 * 2.0; // 1px rule + mx_2 margin both sides
     const STYLE_PICKER_BUTTON_W: f32 = 48.0; // collapsed swatch button (was 6 * 48px inline)
@@ -3094,7 +3229,7 @@ mod toolbar_layout_tests {
 
     fn toolbar_min_width() -> f32 {
         // Direct children of the toolbar container, in render order:
-        // [11 tool buttons] [separator] [style picker button] [separator] [send] [approve] [reject]
+        // [8 tool buttons/flyout] [separator] [style picker button] [separator] [send] [approve] [reject]
         let num_direct_children = NUM_TOOL_BUTTONS + 6.0;
 
         TOOLBAR_PADDING_X
@@ -3154,6 +3289,42 @@ mod toolbar_shortcut_tests {
     fn every_toolbar_command_has_a_non_empty_keystroke() {
         for (label, keystroke) in command_shortcuts() {
             assert!(!keystroke.is_empty(), "{label} has no keystroke");
+        }
+    }
+}
+
+#[cfg(test)]
+mod image_annotation_transform_tests {
+    use super::*;
+
+    fn image_at(x: f64, y: f64, w: f64, h: f64) -> AnnotationType {
+        AnnotationType::Image {
+            region: Region::new(x, y, w, h),
+            asset: nib_core::AssetRef("hash".to_string()),
+            opacity: 1.0,
+        }
+    }
+
+    #[test]
+    fn move_annotation_type_moves_an_image_region() {
+        let mut image = image_at(10.0, 20.0, 30.0, 40.0);
+        EditorView::move_annotation_type(&mut image, 5.0, -3.0);
+        match image {
+            AnnotationType::Image { region, .. } => {
+                assert_eq!(region, Region::new(15.0, 17.0, 30.0, 40.0));
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resize_annotation_type_resizes_an_image_region() {
+        let mut image = image_at(10.0, 20.0, 30.0, 40.0);
+        let new_bounds = Region::new(0.0, 0.0, 100.0, 200.0);
+        EditorView::resize_annotation_type(&mut image, new_bounds);
+        match image {
+            AnnotationType::Image { region, .. } => assert_eq!(region, new_bounds),
+            other => panic!("expected Image, got {other:?}"),
         }
     }
 }

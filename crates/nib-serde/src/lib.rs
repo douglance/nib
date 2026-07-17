@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 
 use nib_core::{
-    Annotation, AnnotationType, ArrowHead, BlurIntensity, Color,
+    Annotation, AnnotationType, ArrowHead, AssetRef, BlurIntensity, Color,
     Point as NibPoint, Region, StrokeStyle, TextAlign,
 };
 use serde::{Deserialize, Serialize};
@@ -59,6 +59,18 @@ pub struct SerializedStyle {
     pub max_width: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opacity: Option<f64>,
+    /// Content-hash reference for an Image annotation's asset (see `AssetRef`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_hash: Option<String>,
+    /// Base64-encoded image bytes for an Image annotation. Unlike every other
+    /// style field, `serialize_annotation` cannot populate this itself -- an
+    /// `Annotation` only carries the asset's hash, not its bytes, since bytes
+    /// live out-of-band. Callers that have the bytes on hand (e.g. the GUI's
+    /// asset cache) set this field directly on the returned `SerializedStyle`
+    /// before writing the sidecar; without it, an image annotation loaded from
+    /// the sidecar alone keeps its hash/region/opacity but has no pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_base64: Option<String>,
 }
 
 impl SerializedStyle {
@@ -182,6 +194,11 @@ fn serialize_style(annotation: &Annotation) -> SerializedStyle {
         }
         AnnotationType::Highlight { corner_radius, .. } => {
             style.corner_radius = Some(*corner_radius);
+        }
+        AnnotationType::Image { asset, opacity, .. } => {
+            style.asset_hash = Some(asset.0.clone());
+            style.opacity = Some(*opacity);
+            // asset_base64 is deliberately left unset here -- see its doc comment.
         }
         AnnotationType::Number { .. } | AnnotationType::Crop { .. } => {}
     }
@@ -351,6 +368,15 @@ pub fn serialize_annotation(annotation: &Annotation) -> SerializedAnnotation {
                 points: points.iter().map(|p| (p.x, p.y)).collect(),
             },
         ),
+        AnnotationType::Image { region, .. } => (
+            "image".to_string(),
+            AnnotationGeometry::Rectangle {
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+            },
+        ),
     };
 
     SerializedAnnotation {
@@ -441,6 +467,16 @@ pub fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annot
                 points: points.iter().map(|(x, y)| NibPoint::new(*x, *y)).collect(),
                 stroke_width: style.stroke_width.unwrap_or(2.0),
                 stroke_style: style.stroke_style.as_deref().map(stroke_style_from_str).unwrap_or(StrokeStyle::Solid),
+            }
+        }
+        ("image", AnnotationGeometry::Rectangle { x, y, width, height }) => {
+            // asset_base64 (if present) is deliberately not decoded here -- see
+            // its doc comment. Callers that need the bytes read it separately
+            // via `serialized.style.asset_base64`.
+            AnnotationType::Image {
+                region: Region::new(*x, *y, *width, *height),
+                asset: AssetRef(style.asset_hash.clone().unwrap_or_default()),
+                opacity: style.opacity.unwrap_or(1.0),
             }
         }
         _ => return None,
@@ -691,6 +727,42 @@ mod tests {
                 assert_eq!(max_width, None);
             }
             other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn round_trip_image_preserves_asset_hash_and_caller_supplied_base64() {
+        let original = Annotation::new(AnnotationType::Image {
+            region: Region::new(1.0, 2.0, 300.0, 200.0),
+            asset: AssetRef("deadbeef1234".to_string()),
+            opacity: 0.6,
+        });
+
+        let mut serialized = serialize_annotation(&original);
+        // serialize_annotation can't fill this in itself -- an Annotation only
+        // carries the asset's hash, not its bytes. A caller that has the bytes
+        // (e.g. the GUI's asset cache) sets this directly before writing the
+        // sidecar; this simulates that.
+        serialized.style.asset_base64 = Some("ZmFrZS1pbWFnZS1ieXRlcw==".to_string());
+
+        let json = serde_json::to_string(&serialized).expect("serialize to json");
+        let parsed: SerializedAnnotation = serde_json::from_str(&json).expect("parse json");
+
+        assert_eq!(parsed.style.asset_hash, Some("deadbeef1234".to_string()));
+        assert_eq!(
+            parsed.style.asset_base64,
+            Some("ZmFrZS1pbWFnZS1ieXRlcw==".to_string()),
+            "base64 payload must survive the JSON round trip byte-identical"
+        );
+
+        let restored = deserialize_annotation(&parsed).expect("deserialize annotation");
+        match restored.annotation_type {
+            AnnotationType::Image { region, asset, opacity } => {
+                assert_eq!(region, Region::new(1.0, 2.0, 300.0, 200.0));
+                assert_eq!(asset.0, "deadbeef1234");
+                assert_eq!(opacity, 0.6);
+            }
+            other => panic!("expected Image, got {other:?}"),
         }
     }
 

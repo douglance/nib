@@ -448,6 +448,18 @@ pub enum AnnotationTypeData {
         stroke_width: f64,
         stroke_style: String,
     },
+    /// Inserted image. Bytes are inlined as base64 (screenshot scale, so
+    /// simplest wins over a separate asset-fetch protocol); `asset_hash` is
+    /// carried too so a receiver can de-duplicate by content hash.
+    Image {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        asset_hash: String,
+        asset_base64: String,
+        opacity: f64,
+    },
 }
 
 /// A single property change for partial updates

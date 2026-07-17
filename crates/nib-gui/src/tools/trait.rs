@@ -20,6 +20,7 @@ pub enum ToolId {
     Pencil,
     Eraser,
     Sticky,
+    Image,
 }
 
 impl ToolId {
@@ -39,6 +40,7 @@ impl ToolId {
             ToolId::Pencil,
             ToolId::Eraser,
             ToolId::Sticky,
+            ToolId::Image,
         ]
     }
 
@@ -58,6 +60,7 @@ impl ToolId {
             ToolId::Pencil => "Pencil",
             ToolId::Eraser => "Eraser",
             ToolId::Sticky => "Sticky",
+            ToolId::Image => "Image",
         }
     }
 
@@ -77,6 +80,7 @@ impl ToolId {
             ToolId::Pencil => 'p',
             ToolId::Eraser => 'x',
             ToolId::Sticky => 'k',
+            ToolId::Image => 'i',
         }
     }
 
@@ -96,6 +100,7 @@ impl ToolId {
             ToolId::Pencil => "assets/icons/pencil.svg",
             ToolId::Eraser => "assets/icons/eraser.svg",
             ToolId::Sticky => "assets/icons/sticky.svg",
+            ToolId::Image => "assets/icons/image.svg",
         }
     }
 }

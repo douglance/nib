@@ -607,6 +607,7 @@ impl<W: Write> QmlSerializer<W> {
             AnnotationType::Box { region, .. }
             | AnnotationType::Blur { region, .. }
             | AnnotationType::Highlight { region, .. }
+            | AnnotationType::Image { region, .. }
             | AnnotationType::Crop { region } => {
                 format!(
                     "{:.0},{:.0},{:.0},{:.0}",

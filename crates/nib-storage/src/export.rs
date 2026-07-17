@@ -5,12 +5,13 @@
 use crate::StorageResult;
 use nib_core::blur::apply_blur_region;
 use nib_core::{
-    dash_segments, Annotation, AnnotationType, ArrowHead, Color, NibImage, Point, Region,
-    StorageError, StrokeStyle,
+    dash_segments, Annotation, AnnotationType, ArrowHead, AssetData, Color, NibImage, Point,
+    Region, StorageError, StrokeStyle,
 };
 use image::{DynamicImage, Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_filled_rect_mut, draw_line_segment_mut};
 use imageproc::rect::Rect;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Export format options
@@ -68,7 +69,7 @@ pub fn export_image(
 
     // Render annotations if requested
     if options.bake_annotations {
-        render_annotations(&mut img, &image.annotations);
+        render_annotations(&mut img, &image.annotations, &image.assets);
     }
 
     // Apply crop if specified
@@ -120,18 +121,22 @@ pub fn export_image(
 }
 
 /// Render all annotations onto an image
-fn render_annotations(img: &mut RgbaImage, annotations: &[Annotation]) {
+fn render_annotations(
+    img: &mut RgbaImage,
+    annotations: &[Annotation],
+    assets: &HashMap<String, AssetData>,
+) {
     // Sort by z-index for proper layering
     let mut sorted: Vec<_> = annotations.iter().filter(|a| a.visible).collect();
     sorted.sort_by_key(|a| a.z_index);
 
     for annotation in sorted {
-        render_annotation(img, annotation);
+        render_annotation(img, annotation, assets);
     }
 }
 
 /// Render a single annotation
-fn render_annotation(img: &mut RgbaImage, annotation: &Annotation) {
+fn render_annotation(img: &mut RgbaImage, annotation: &Annotation, assets: &HashMap<String, AssetData>) {
     let color = color_to_rgba(&annotation.color);
 
     match &annotation.annotation_type {
@@ -241,6 +246,47 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation) {
                 draw_styled_line(img, pair[0], pair[1], *stroke_style, *stroke_width, color);
             }
         }
+        AnnotationType::Image { region, asset, opacity } => {
+            if let Some(asset_data) = assets.get(&asset.0) {
+                composite_image(img, &asset_data.bytes, region, *opacity);
+            }
+            // No asset bytes available (e.g. a sidecar-only load with no
+            // asset_base64) -- silently skip rather than drawing a placeholder.
+        }
+    }
+}
+
+/// Decode `bytes`, resize to `region`'s size, and alpha-blend (source-over,
+/// scaled by `opacity`) onto `img` at `region`'s position.
+fn composite_image(img: &mut RgbaImage, bytes: &[u8], region: &Region, opacity: f64) {
+    let Ok(decoded) = image::load_from_memory(bytes) else {
+        return;
+    };
+    let width = region.width.max(1.0) as u32;
+    let height = region.height.max(1.0) as u32;
+    let resized = decoded
+        .resize_exact(width, height, image::imageops::FilterType::Lanczos3)
+        .to_rgba8();
+
+    let opacity = opacity.clamp(0.0, 1.0);
+    let origin_x = region.x as i64;
+    let origin_y = region.y as i64;
+
+    for (x, y, pixel) in resized.enumerate_pixels() {
+        let px = origin_x + x as i64;
+        let py = origin_y + y as i64;
+        if px < 0 || py < 0 || px as u32 >= img.width() || py as u32 >= img.height() {
+            continue;
+        }
+        let src_alpha = (pixel[3] as f64 / 255.0) * opacity;
+        if src_alpha <= 0.0 {
+            continue;
+        }
+        let dst = img.get_pixel_mut(px as u32, py as u32);
+        for c in 0..3 {
+            dst[c] = (pixel[c] as f64 * src_alpha + dst[c] as f64 * (1.0 - src_alpha)).round() as u8;
+        }
+        dst[3] = ((src_alpha + (dst[3] as f64 / 255.0) * (1.0 - src_alpha)) * 255.0).round() as u8;
     }
 }
 
@@ -398,7 +444,7 @@ pub fn export_to_clipboard(image: &NibImage, options: &ExportOptions) -> Storage
         .to_rgba8();
 
     if options.bake_annotations {
-        render_annotations(&mut img, &image.annotations);
+        render_annotations(&mut img, &image.annotations, &image.assets);
     }
 
     let (width, height) = img.dimensions();
@@ -417,4 +463,90 @@ pub fn export_to_clipboard(image: &NibImage, options: &ExportOptions) -> Storage
         .map_err(|e| StorageError::InvalidFormat(format!("Clipboard error: {}", e)))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod image_annotation_export_tests {
+    use super::*;
+    use nib_core::AssetRef;
+    use std::collections::HashMap;
+
+    fn solid_png(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+        let img = RgbaImage::from_pixel(width, height, Rgba(color));
+        let mut bytes = Vec::new();
+        DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    /// Golden-pixel test: a 2x2 fully-opaque red asset composited at (1,1)
+    /// onto a 4x4 black base must turn exactly those 4 pixels red and leave
+    /// everything else untouched.
+    #[test]
+    fn image_annotation_composites_expected_pixels() {
+        let mut base = RgbaImage::from_pixel(4, 4, Rgba([0, 0, 0, 255]));
+
+        let asset_bytes = solid_png(2, 2, [255, 0, 0, 255]);
+        let asset = AssetRef::from_bytes(&asset_bytes);
+        let mut assets = HashMap::new();
+        assets.insert(
+            asset.0.clone(),
+            AssetData { bytes: asset_bytes, format: "png".to_string(), width: 2, height: 2 },
+        );
+
+        let annotation = Annotation::new(AnnotationType::Image {
+            region: Region::new(1.0, 1.0, 2.0, 2.0),
+            asset,
+            opacity: 1.0,
+        });
+
+        render_annotation(&mut base, &annotation, &assets);
+
+        for (x, y) in [(1, 1), (2, 1), (1, 2), (2, 2)] {
+            assert_eq!(*base.get_pixel(x, y), Rgba([255, 0, 0, 255]), "pixel ({x},{y}) should be red");
+        }
+        for (x, y) in [(0, 0), (3, 3), (0, 3), (3, 0)] {
+            assert_eq!(*base.get_pixel(x, y), Rgba([0, 0, 0, 255]), "pixel ({x},{y}) outside the region must stay black");
+        }
+    }
+
+    #[test]
+    fn image_annotation_respects_opacity_blend() {
+        let mut base = RgbaImage::from_pixel(1, 1, Rgba([0, 0, 0, 255]));
+        let asset_bytes = solid_png(1, 1, [255, 255, 255, 255]);
+        let asset = AssetRef::from_bytes(&asset_bytes);
+        let mut assets = HashMap::new();
+        assets.insert(
+            asset.0.clone(),
+            AssetData { bytes: asset_bytes, format: "png".to_string(), width: 1, height: 1 },
+        );
+
+        let annotation = Annotation::new(AnnotationType::Image {
+            region: Region::new(0.0, 0.0, 1.0, 1.0),
+            asset,
+            opacity: 0.5,
+        });
+
+        render_annotation(&mut base, &annotation, &assets);
+
+        // 50% white over black is ~mid-gray, not full white or unchanged black.
+        let pixel = base.get_pixel(0, 0);
+        assert!((110..=145).contains(&pixel[0]), "expected ~50% blend, got {pixel:?}");
+        assert_eq!(pixel[3], 255, "compositing onto an opaque base stays opaque");
+    }
+
+    #[test]
+    fn image_annotation_with_missing_asset_is_skipped_gracefully() {
+        let mut base = RgbaImage::from_pixel(2, 2, Rgba([9, 9, 9, 255]));
+        let annotation = Annotation::new(AnnotationType::Image {
+            region: Region::new(0.0, 0.0, 2.0, 2.0),
+            asset: AssetRef("not-in-the-map".to_string()),
+            opacity: 1.0,
+        });
+
+        render_annotation(&mut base, &annotation, &HashMap::new());
+
+        assert_eq!(*base.get_pixel(0, 0), Rgba([9, 9, 9, 255]), "no panic, base image untouched");
+    }
 }

@@ -10,6 +10,7 @@ pub mod elements;
 pub mod history;
 pub mod sidebar;
 pub mod style_panel;
+pub mod tool_flyout;
 pub mod toolbar;
 pub mod tools;
 pub mod zorder;

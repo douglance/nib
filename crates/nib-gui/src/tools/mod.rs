@@ -10,6 +10,7 @@ mod crop;
 mod ellipse;
 mod eraser;
 mod highlight;
+mod image_tool;
 mod line;
 mod manager;
 mod number;
@@ -30,6 +31,7 @@ pub use context::*;
 pub use crop::*;
 pub use ellipse::*;
 pub use eraser::*;
+pub use image_tool::*;
 pub use highlight::*;
 pub use line::*;
 pub use manager::*;
@@ -103,6 +105,16 @@ pub enum ToolResult {
 
     /// Tool created a new annotation
     Created(Annotation),
+
+    /// Tool created a new Image annotation that references an out-of-band
+    /// asset; the asset's bytes must be registered (e.g. into EditorView's
+    /// asset cache) before/alongside pushing the annotation, since an
+    /// `Annotation` only ever carries the asset's content-hash reference.
+    CreatedWithAsset {
+        annotation: Annotation,
+        asset_hash: String,
+        asset: nib_core::AssetData,
+    },
 
     /// Tool updated an existing annotation
     Updated(AnnotationId),

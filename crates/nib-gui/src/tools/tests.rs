@@ -81,9 +81,9 @@ mod tool_id_tests {
     use super::*;
 
     #[test]
-    fn test_tool_id_all_returns_thirteen_tools() {
+    fn test_tool_id_all_returns_fourteen_tools() {
         let all_tools = ToolId::all();
-        assert_eq!(all_tools.len(), 13, "Expected 13 tools");
+        assert_eq!(all_tools.len(), 14, "Expected 14 tools");
     }
 
     #[test]
@@ -1987,7 +1987,7 @@ mod tool_manager_tests {
         let manager = ToolManager::with_all_tools();
 
         let registered: Vec<ToolId> = manager.registered_tools().collect();
-        assert_eq!(registered.len(), 13);
+        assert_eq!(registered.len(), 14);
     }
 
     #[test]
