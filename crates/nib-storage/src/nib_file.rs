@@ -1494,6 +1494,40 @@ mod tests {
     }
 
     #[test]
+    fn test_sticky_note_round_trip_through_sqlite() {
+        // A sticky note is a Text annotation with background/max_width set --
+        // not a new AnnotationType -- so it round-trips through the existing
+        // Text (de)serialization with no special-casing needed.
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.nib");
+        let image_data = create_test_image();
+
+        let nib = NibFile::create(&path, &image_data, "png", 100, 100).unwrap();
+
+        let annotation = Annotation::new(AnnotationType::Text {
+            position: Point::new(10.0, 20.0),
+            content: "Sticky note text".to_string(),
+            font_size: 16.0,
+            align: TextAlign::Left,
+            background: Some(Color::rgb(255, 220, 130)),
+            max_width: Some(200.0),
+        })
+        .with_color(Color::rgb(0, 0, 0));
+
+        let id = nib.add_annotation(&annotation).unwrap();
+        let retrieved = nib.get_annotation(&id).unwrap().unwrap();
+
+        match retrieved.annotation_type {
+            AnnotationType::Text { background, max_width, content, .. } => {
+                assert_eq!(background, Some(Color::rgb(255, 220, 130)));
+                assert_eq!(max_width, Some(200.0));
+                assert_eq!(content, "Sticky note text");
+            }
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_color_conversion() {
         // Test full RGBA
         let color = Color::rgba(255, 128, 0, 200);

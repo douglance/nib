@@ -17,6 +17,7 @@ mod pencil;
 mod rectangle;
 mod select;
 mod state;
+mod sticky;
 mod text;
 mod r#trait;
 
@@ -37,6 +38,7 @@ pub use pencil::*;
 pub use rectangle::*;
 pub use select::*;
 pub use state::*;
+pub use sticky::*;
 pub use text::*;
 pub use r#trait::*;
 
@@ -142,7 +144,21 @@ pub enum ToolMode {
         position: Point,
         initial_content: String,
         editing_annotation_id: Option<AnnotationId>,
+        /// Set by the Sticky tool to make the resulting Text annotation carry a
+        /// background/max_width (a "sticky note") instead of the plain default.
+        /// `None` for ordinary Text tool usage.
+        sticky_style: Option<StickyStyle>,
     },
+}
+
+/// Background/text color and wrap width for a sticky note, carried through
+/// `ToolMode::TextInput` so EditorView can seed the shared text-edit flow
+/// (see `TextTool::begin_sticky`) instead of duplicating it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StickyStyle {
+    pub background: Color,
+    pub text_color: Color,
+    pub max_width: f64,
 }
 
 /// Renderable preview during tool operation

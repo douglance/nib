@@ -670,6 +670,31 @@ mod tests {
     }
 
     #[test]
+    fn old_format_text_fixture_without_style_block_has_no_sticky_background() {
+        // A pre-Phase-3 sidecar text entry (no style block at all) must not
+        // suddenly look like a sticky note -- background/max_width both stay
+        // None, exactly like `deserialize_annotation`'s hardcoded defaults did
+        // before the style block existed.
+        let json = r##"{
+            "id": "a1",
+            "type": "text",
+            "x": 5.0,
+            "y": 6.0,
+            "content": "plain text",
+            "color": "#000000"
+        }"##;
+        let parsed: SerializedAnnotation = serde_json::from_str(json).expect("parse old fixture");
+        let annotation = deserialize_annotation(&parsed).expect("deserialize");
+        match annotation.annotation_type {
+            AnnotationType::Text { background, max_width, .. } => {
+                assert_eq!(background, None);
+                assert_eq!(max_width, None);
+            }
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn dash_helper_pure_test_lives_in_nib_core_and_is_reused() {
         // nib-serde doesn't render, but this documents where the pure dash_segments()
         // helper actually lives (nib-core) so both nib-gui and nib-storage share it.

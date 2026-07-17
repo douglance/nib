@@ -283,6 +283,7 @@ impl Tool for SelectTool {
                                 position: *text_pos,
                                 initial_content: content.clone(),
                                 editing_annotation_id: Some(clicked_id),
+                                sticky_style: None,
                             });
                         }
                     }

@@ -31,6 +31,7 @@ mod embedded_icons {
     pub static CROP: &[u8] = include_bytes!("../../../assets/icons/crop.svg");
     pub static PENCIL: &[u8] = include_bytes!("../../../assets/icons/pencil.svg");
     pub static ERASER: &[u8] = include_bytes!("../../../assets/icons/eraser.svg");
+    pub static STICKY: &[u8] = include_bytes!("../../../assets/icons/sticky.svg");
 
     pub fn get(path: &str) -> Option<&'static [u8]> {
         match path {
@@ -46,6 +47,7 @@ mod embedded_icons {
             "assets/icons/crop.svg" => Some(CROP),
             "assets/icons/pencil.svg" => Some(PENCIL),
             "assets/icons/eraser.svg" => Some(ERASER),
+            "assets/icons/sticky.svg" => Some(STICKY),
             _ => None,
         }
     }
@@ -949,6 +951,52 @@ impl EditorView {
             )
     }
 
+    /// Render a sticky note: an opaque rounded background rect sized to the
+    /// (wrapped) text, with plain text on top. Unlike `render_text_with_outline`,
+    /// there's no shadow/outline -- the opaque background already guarantees
+    /// legibility, and doubling up would look muddy.
+    #[allow(clippy::too_many_arguments)] // screen-space draw params, splitting them adds no clarity
+    fn render_sticky_note(
+        content: String,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        max_width: Option<f32>,
+        text_color: gpui::Hsla,
+        background: Color,
+    ) -> impl IntoElement {
+        let lines = crate::elements::text::wrap_text(&content, font_size as f64, max_width.map(|w| w as f64));
+        let padding = (font_size * 0.25).max(4.0);
+        let line_height = font_size * 1.2;
+
+        let longest_line_chars = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
+        let natural_width = longest_line_chars as f32 * font_size * 0.6;
+        let box_width = max_width.unwrap_or(natural_width);
+        let box_height = (lines.len().max(1)) as f32 * line_height;
+
+        let gpui_background = rgb(
+            background.r as u32 * 0x10000 + background.g as u32 * 0x100 + background.b as u32,
+        );
+
+        div()
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .w(px(box_width + padding * 2.0))
+            .h(px(box_height + padding * 2.0))
+            .bg(gpui_background)
+            .rounded_md()
+            .p(px(padding))
+            .flex()
+            .flex_col()
+            .children(lines.into_iter().map(move |line| {
+                div()
+                    .text_color(text_color)
+                    .text_size(px(font_size))
+                    .child(line)
+            }))
+    }
+
     /// Create a line element using paint_path with proper bounds adjustment
     /// paint_path uses window coordinates, so we adjust by bounds origin
     #[allow(clippy::too_many_arguments)] // screen-space draw params, splitting them adds no clarity
@@ -1200,7 +1248,16 @@ impl EditorView {
             }
             ToolResult::EnterMode(mode) => {
                 match mode {
-                    ToolMode::TextInput { position, initial_content, editing_annotation_id } => {
+                    ToolMode::TextInput { position, initial_content, editing_annotation_id, sticky_style } => {
+                        // Sticky tool hands off to the Text tool's existing typing/confirm
+                        // flow: switch the active tool so KeyDown routes to TextTool, then
+                        // seed it with the sticky background/text color/max_width.
+                        if let Some(style) = sticky_style {
+                            self.select_tool(ToolId::Text, cx);
+                            if let Some(text_tool) = self.tool_manager.get_tool_as_mut::<TextTool>(ToolId::Text) {
+                                text_tool.begin_sticky(position, style);
+                            }
+                        }
                         // Convert image position to screen position
                         let (screen_x, screen_y) = self.scale_point(position.x, position.y);
                         // Adjust for font height (text is drawn with baseline at position)
@@ -2290,19 +2347,36 @@ impl EditorView {
 
                 element.into_any_element()
             }
-            AnnotationType::Text { position, content, font_size, .. } => {
+            AnnotationType::Text { position, content, font_size, background, max_width, .. } => {
                 // Scale position and font size
                 let (sx, sy) = self.scale_point(position.x, position.y);
                 let scaled_font_size = *font_size as f32 * scale;
 
-                Self::render_text_with_outline(
-                    content.clone(),
-                    sx,
-                    sy,
-                    scaled_font_size,
-                    border_color.into(),
-                )
-                .into_any_element()
+                match background {
+                    // Sticky note: opaque background rect, wrapped plain text, no outline
+                    Some(bg) => {
+                        let scaled_max_width = max_width.map(|w| w as f32 * scale);
+                        Self::render_sticky_note(
+                            content.clone(),
+                            sx,
+                            sy,
+                            scaled_font_size,
+                            scaled_max_width,
+                            border_color.into(),
+                            *bg,
+                        )
+                        .into_any_element()
+                    }
+                    // Ordinary text: outlined for legibility over an arbitrary image
+                    None => Self::render_text_with_outline(
+                        content.clone(),
+                        sx,
+                        sy,
+                        scaled_font_size,
+                        border_color.into(),
+                    )
+                    .into_any_element(),
+                }
             }
             AnnotationType::Number { position, value, radius } => {
                 // Scale position and radius

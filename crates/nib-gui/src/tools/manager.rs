@@ -35,6 +35,7 @@ impl ToolManager {
         manager.register(Box::new(super::CropTool::new()));
         manager.register(Box::new(super::PencilTool::new()));
         manager.register(Box::new(super::EraserTool::new()));
+        manager.register(Box::new(super::StickyTool::new()));
 
         manager
     }

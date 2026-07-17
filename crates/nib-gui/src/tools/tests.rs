@@ -81,9 +81,9 @@ mod tool_id_tests {
     use super::*;
 
     #[test]
-    fn test_tool_id_all_returns_twelve_tools() {
+    fn test_tool_id_all_returns_thirteen_tools() {
         let all_tools = ToolId::all();
-        assert_eq!(all_tools.len(), 12, "Expected 12 tools");
+        assert_eq!(all_tools.len(), 13, "Expected 13 tools");
     }
 
     #[test]
@@ -1414,6 +1414,58 @@ mod text_tool_tests {
     }
 
     #[test]
+    fn test_sticky_note_creation_carries_background_and_max_width() {
+        let mut tool = TextTool::new();
+        let ctx = make_test_context();
+        let background = Color::rgb(255, 220, 130);
+        let text_color = Color::rgb(0, 0, 0);
+
+        tool.begin_sticky(
+            Point::new(50.0, 60.0),
+            StickyStyle { background, text_color, max_width: 200.0 },
+        );
+        tool.handle_event(
+            ToolEvent::KeyDown {
+                key: "H".to_string(),
+                key_char: Some('H'),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        let result = tool.confirm_text(&ctx);
+        match result {
+            ToolResult::Batch(results) => match &results[0] {
+                ToolResult::Created(annotation) => {
+                    assert_eq!(annotation.color, text_color, "sticky text uses the contrasting color, not ctx's style color");
+                    match &annotation.annotation_type {
+                        AnnotationType::Text { background: bg, max_width, .. } => {
+                            assert_eq!(*bg, Some(background));
+                            assert_eq!(*max_width, Some(200.0));
+                        }
+                        other => panic!("expected Text, got {other:?}"),
+                    }
+                }
+                other => panic!("expected Created, got {other:?}"),
+            },
+            other => panic!("expected Batch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_sticky_note_with_empty_content_is_discarded_like_plain_text() {
+        let mut tool = TextTool::new();
+        let ctx = make_test_context();
+
+        tool.begin_sticky(
+            Point::new(0.0, 0.0),
+            StickyStyle { background: Color::RED, text_color: Color::rgb(0, 0, 0), max_width: 200.0 },
+        );
+        let result = tool.confirm_text(&ctx);
+        assert!(matches!(result, ToolResult::ExitMode));
+    }
+
+    #[test]
     fn test_text_tool_backspace() {
         let mut tool = TextTool::new();
         let ctx = make_test_context();
@@ -1771,6 +1823,7 @@ mod select_tool_tests {
                 position,
                 initial_content,
                 editing_annotation_id,
+                ..
             }) => {
                 assert_eq!(position.x, 100.0);
                 assert_eq!(position.y, 100.0);
@@ -1934,7 +1987,7 @@ mod tool_manager_tests {
         let manager = ToolManager::with_all_tools();
 
         let registered: Vec<ToolId> = manager.registered_tools().collect();
-        assert_eq!(registered.len(), 12);
+        assert_eq!(registered.len(), 13);
     }
 
     #[test]

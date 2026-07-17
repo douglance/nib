@@ -19,6 +19,7 @@ pub enum ToolId {
     Crop,
     Pencil,
     Eraser,
+    Sticky,
 }
 
 impl ToolId {
@@ -37,6 +38,7 @@ impl ToolId {
             ToolId::Crop,
             ToolId::Pencil,
             ToolId::Eraser,
+            ToolId::Sticky,
         ]
     }
 
@@ -55,6 +57,7 @@ impl ToolId {
             ToolId::Crop => "Crop",
             ToolId::Pencil => "Pencil",
             ToolId::Eraser => "Eraser",
+            ToolId::Sticky => "Sticky",
         }
     }
 
@@ -73,6 +76,7 @@ impl ToolId {
             ToolId::Crop => 'c',
             ToolId::Pencil => 'p',
             ToolId::Eraser => 'x',
+            ToolId::Sticky => 'k',
         }
     }
 
@@ -91,6 +95,7 @@ impl ToolId {
             ToolId::Crop => "assets/icons/crop.svg",
             ToolId::Pencil => "assets/icons/pencil.svg",
             ToolId::Eraser => "assets/icons/eraser.svg",
+            ToolId::Sticky => "assets/icons/sticky.svg",
         }
     }
 }
