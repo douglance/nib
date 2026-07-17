@@ -100,11 +100,15 @@ nib feedback /tmp/nib_shot.png \
 
 ### Step 4: Parse Response
 
-Human draws annotations and hits Cmd+Enter. You get back only their annotations:
+Human draws annotations, then makes a decision: **Approve** (⇧⌘A), **Reject** (⇧⌘R), or plain send = **comment** (⌘Enter). You get back the decision plus their new annotations:
 
 ```json
-{"annotations": [{"id": "a1", "type": "arrow", "at": [150, 200, 300, 100], "owner": "human"}]}
+{"decision": "approve", "annotations": [{"id": "a1", "type": "arrow", "at": [150, 200, 300, 100], "owner": "human"}]}
 ```
+
+- `"approve"` — accepted as-is; proceed. Annotations may be empty.
+- `"reject"` — not acceptable; act on the annotations, rework, re-ask with a fresh one-shot call.
+- `"comment"` — feedback without a verdict; treat the annotations as change requests.
 
 Timeout returns `{"event": "timeout"}` (exit code 0, not an error).
 
@@ -152,7 +156,7 @@ nib judge expected.png actual.png --format json
 `generate` passes the generator's JSON contract through (`{status, out, requested,
 actual, matched, ...}`); errors surface the tool's own envelope verbatim. `--nib`
 also imports the result to a `.nib`. `--feedback` is one-shot: GUI opens, human
-hits Cmd+Enter, payload returns, done.
+approves/rejects/comments, the decision payload returns, done.
 
 ## Headless Mode
 
