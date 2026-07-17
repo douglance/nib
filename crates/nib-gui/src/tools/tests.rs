@@ -1,6 +1,9 @@
 //! Unit tests for tool trait implementations
 
-use nib_core::{Annotation, AnnotationStyle, AnnotationType, Color, Point, Region};
+use nib_core::{
+    Annotation, AnnotationStyle, AnnotationType, ArrowHead, BlurIntensity, Color, Point, Region,
+    StrokeStyle,
+};
 use crate::tools::*;
 
 // ============================================================================
@@ -15,6 +18,11 @@ fn make_test_context() -> ToolContext<'static> {
         custom_color: Color::RED,
         stroke_width: 2.0,
         fill_enabled: false,
+        stroke_style: StrokeStyle::Solid,
+        arrow_head: ArrowHead::End,
+        font_size: 32.0,
+        blur_intensity: BlurIntensity::Medium,
+        opacity: 1.0,
         image_size: (1920, 1080),
         scale: 1.0,
         offset: (0.0, 0.0),
@@ -30,6 +38,11 @@ fn make_test_context_with_annotations(annotations: &[Annotation]) -> ToolContext
         custom_color: Color::RED,
         stroke_width: 2.0,
         fill_enabled: false,
+        stroke_style: StrokeStyle::Solid,
+        arrow_head: ArrowHead::End,
+        font_size: 32.0,
+        blur_intensity: BlurIntensity::Medium,
+        opacity: 1.0,
         image_size: (1920, 1080),
         scale: 1.0,
         offset: (0.0, 0.0),
@@ -141,6 +154,11 @@ mod tool_context_tests {
             custom_color: Color::RED,
             stroke_width: 2.0,
             fill_enabled: false,
+            stroke_style: StrokeStyle::Solid,
+            arrow_head: ArrowHead::End,
+            font_size: 32.0,
+            blur_intensity: BlurIntensity::Medium,
+            opacity: 1.0,
             image_size: (1920, 1080),
             scale: 2.0,
             offset: (0.0, 0.0),
@@ -160,6 +178,11 @@ mod tool_context_tests {
             custom_color: Color::RED,
             stroke_width: 2.0,
             fill_enabled: false,
+            stroke_style: StrokeStyle::Solid,
+            arrow_head: ArrowHead::End,
+            font_size: 32.0,
+            blur_intensity: BlurIntensity::Medium,
+            opacity: 1.0,
             image_size: (1920, 1080),
             scale: 1.0,
             offset: (50.0, 100.0),
@@ -187,6 +210,11 @@ mod tool_context_tests {
             custom_color: Color::RED,
             stroke_width: 2.0,
             fill_enabled: false,
+            stroke_style: StrokeStyle::Solid,
+            arrow_head: ArrowHead::End,
+            font_size: 32.0,
+            blur_intensity: BlurIntensity::Medium,
+            opacity: 1.0,
             image_size: (1920, 1080),
             scale: 2.0,
             offset: (50.0, 100.0),
@@ -368,6 +396,52 @@ mod rectangle_tool_tests {
     }
 
     #[test]
+    fn test_rectangle_tool_creation_carries_ctx_style_values() {
+        let mut tool = RectangleTool::new();
+        let ctx = ToolContext {
+            stroke_width: 8.0,
+            stroke_style: StrokeStyle::Dashed,
+            fill_enabled: true,
+            ..make_test_context()
+        };
+
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(100.0, 100.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        tool.handle_event(
+            ToolEvent::MouseMove {
+                position: Point::new(200.0, 150.0),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        let result = tool.handle_event(
+            ToolEvent::MouseUp {
+                position: Point::new(200.0, 150.0),
+                button: MouseButton::Left,
+            },
+            &ctx,
+        );
+
+        match result {
+            ToolResult::Created(annotation) => match annotation.annotation_type {
+                AnnotationType::Box { stroke_width, stroke_style, filled, .. } => {
+                    assert_eq!(stroke_width, 8.0);
+                    assert_eq!(stroke_style, StrokeStyle::Dashed);
+                    assert!(filled);
+                }
+                other => panic!("expected Box, got {other:?}"),
+            },
+            other => panic!("expected Created, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_rectangle_tool_small_drag_ignored() {
         let mut tool = RectangleTool::new();
         let ctx = make_test_context();
@@ -537,6 +611,50 @@ mod arrow_tool_tests {
     }
 
     #[test]
+    fn test_arrow_tool_creation_carries_ctx_style_values() {
+        let mut tool = ArrowTool::new();
+        let ctx = ToolContext {
+            stroke_width: 8.0,
+            arrow_head: ArrowHead::Both,
+            ..make_test_context()
+        };
+
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(100.0, 100.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        tool.handle_event(
+            ToolEvent::MouseMove {
+                position: Point::new(200.0, 200.0),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        let result = tool.handle_event(
+            ToolEvent::MouseUp {
+                position: Point::new(200.0, 200.0),
+                button: MouseButton::Left,
+            },
+            &ctx,
+        );
+
+        match result {
+            ToolResult::Created(annotation) => match annotation.annotation_type {
+                AnnotationType::Arrow { stroke_width, head, .. } => {
+                    assert_eq!(stroke_width, 8.0);
+                    assert_eq!(head, ArrowHead::Both);
+                }
+                other => panic!("expected Arrow, got {other:?}"),
+            },
+            other => panic!("expected Created, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_arrow_tool_preview_is_line() {
         let mut tool = ArrowTool::new();
         let ctx = make_test_context();
@@ -633,6 +751,50 @@ mod line_tool_tests {
             &ctx,
         );
         assert_created_type(&result, "line");
+    }
+
+    #[test]
+    fn test_line_tool_creation_carries_ctx_style_values() {
+        let mut tool = LineTool::new();
+        let ctx = ToolContext {
+            stroke_width: 8.0,
+            stroke_style: StrokeStyle::Dotted,
+            ..make_test_context()
+        };
+
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(100.0, 100.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        tool.handle_event(
+            ToolEvent::MouseMove {
+                position: Point::new(300.0, 300.0),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        let result = tool.handle_event(
+            ToolEvent::MouseUp {
+                position: Point::new(300.0, 300.0),
+                button: MouseButton::Left,
+            },
+            &ctx,
+        );
+
+        match result {
+            ToolResult::Created(annotation) => match annotation.annotation_type {
+                AnnotationType::Line { stroke_width, stroke_style, .. } => {
+                    assert_eq!(stroke_width, 8.0);
+                    assert_eq!(stroke_style, StrokeStyle::Dotted);
+                }
+                other => panic!("expected Line, got {other:?}"),
+            },
+            other => panic!("expected Created, got {other:?}"),
+        }
     }
 
     #[test]
@@ -882,6 +1044,48 @@ mod blur_tool_tests {
             &ctx,
         );
         assert_created_type(&result, "blur");
+    }
+
+    #[test]
+    fn test_blur_tool_creation_carries_ctx_style_values() {
+        let mut tool = BlurTool::new();
+        let ctx = ToolContext {
+            blur_intensity: BlurIntensity::Heavy,
+            ..make_test_context()
+        };
+
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(100.0, 100.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        tool.handle_event(
+            ToolEvent::MouseMove {
+                position: Point::new(200.0, 200.0),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        let result = tool.handle_event(
+            ToolEvent::MouseUp {
+                position: Point::new(200.0, 200.0),
+                button: MouseButton::Left,
+            },
+            &ctx,
+        );
+
+        match result {
+            ToolResult::Created(annotation) => match annotation.annotation_type {
+                AnnotationType::Blur { intensity, .. } => {
+                    assert_eq!(intensity, BlurIntensity::Heavy);
+                }
+                other => panic!("expected Blur, got {other:?}"),
+            },
+            other => panic!("expected Created, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1169,6 +1373,44 @@ mod text_tool_tests {
         );
 
         assert_eq!(tool.text_state().content, "Hi");
+    }
+
+    #[test]
+    fn test_text_tool_creation_carries_ctx_font_size() {
+        let mut tool = TextTool::new();
+        let ctx = ToolContext {
+            font_size: 48.0,
+            ..make_test_context()
+        };
+
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(100.0, 100.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        tool.handle_event(
+            ToolEvent::KeyDown {
+                key: "H".to_string(),
+                key_char: Some('H'),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        let result = tool.confirm_text(&ctx);
+        match result {
+            ToolResult::Batch(results) => match &results[0] {
+                ToolResult::Created(annotation) => match &annotation.annotation_type {
+                    AnnotationType::Text { font_size, .. } => assert_eq!(*font_size, 48.0),
+                    other => panic!("expected Text, got {other:?}"),
+                },
+                other => panic!("expected Created, got {other:?}"),
+            },
+            other => panic!("expected Batch, got {other:?}"),
+        }
     }
 
     #[test]

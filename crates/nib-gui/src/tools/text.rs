@@ -56,7 +56,7 @@ impl TextTool {
             let annotation = Annotation::new(AnnotationType::Text {
                 position,
                 content,
-                font_size: TEXT_FONT_SIZE,
+                font_size: ctx.font_size,
                 align: TextAlign::Left,
                 background: None,
                 max_width: None,

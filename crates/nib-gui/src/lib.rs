@@ -8,6 +8,7 @@ pub mod canvas;
 pub mod color_picker;
 pub mod elements;
 pub mod sidebar;
+pub mod style_panel;
 pub mod toolbar;
 pub mod tools;
 

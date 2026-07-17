@@ -2,7 +2,7 @@
 
 use std::any::Any;
 
-use nib_core::{Annotation, AnnotationType, Region, StrokeStyle};
+use nib_core::{Annotation, AnnotationType, Region};
 
 use super::{DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult};
 
@@ -78,7 +78,7 @@ impl Tool for RectangleTool {
                     let annotation = Annotation::new(AnnotationType::Box {
                         region,
                         stroke_width: ctx.stroke_width,
-                        stroke_style: StrokeStyle::Solid,
+                        stroke_style: ctx.stroke_style,
                         filled: ctx.fill_enabled,
                         corner_radius: 0.0,
                     })

@@ -2,7 +2,7 @@
 
 use std::any::Any;
 
-use nib_core::{Annotation, AnnotationType, BlurIntensity, Color, Region};
+use nib_core::{Annotation, AnnotationType, Color, Region};
 
 use super::{DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult};
 
@@ -80,7 +80,7 @@ impl Tool for BlurTool {
 
                     let annotation = Annotation::new(AnnotationType::Blur {
                         region,
-                        intensity: BlurIntensity::Medium,
+                        intensity: ctx.blur_intensity,
                     })
                     .with_color(ctx.effective_color());
 

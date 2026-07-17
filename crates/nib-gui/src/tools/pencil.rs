@@ -2,7 +2,7 @@
 
 use std::any::Any;
 
-use nib_core::{Annotation, AnnotationType, Point, StrokeStyle};
+use nib_core::{Annotation, AnnotationType, Point};
 
 use super::{MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult};
 
@@ -83,7 +83,7 @@ impl Tool for PencilTool {
                 let annotation = Annotation::new(AnnotationType::Path {
                     points: self.points.clone(),
                     stroke_width: ctx.stroke_width,
-                    stroke_style: StrokeStyle::Solid,
+                    stroke_style: ctx.stroke_style,
                 })
                 .with_color(ctx.effective_color());
 

@@ -4,7 +4,7 @@
 
 use gpui::{
     canvas, div, img, point, px, rgb, rgba, size, svg, App, AppContext, Application, AssetSource,
-    Bounds, Context, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent,
+    Bounds, Context, Div, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, PathBuilder, Point,
     Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement,
     Styled, StyledImage, Task, Window, WindowBounds, WindowKind, WindowOptions,
@@ -82,13 +82,15 @@ impl AssetSource for Assets {
 use nib_collab::session::Session;
 use nib_collab::types::ClientType;
 use nib_core::blur::apply_blur_region;
-use nib_core::{Annotation, AnnotationId, AnnotationStyle, AnnotationType, Color, Region};
+use nib_core::{
+    dash_segments, Annotation, AnnotationId, AnnotationType, ArrowHead, Color, Region, StrokeStyle,
+};
 use nib_core::Point as NibPoint;
 use crate::canvas::{Canvas, ZOOM_FACTOR};
 use crate::toolbar::Tool;
 use crate::tools::{
-    Modifiers, MouseButton as ToolMouseButton, TextTool, ToolContext, ToolEvent, ToolId,
-    ToolManager, ToolMode, ToolPreview, ToolResult, TEXT_FONT_SIZE,
+    Modifiers, MouseButton as ToolMouseButton, StyleState, TextTool, ToolContext, ToolEvent,
+    ToolId, ToolManager, ToolMode, ToolPreview, ToolResult,
 };
 use nib_storage::nib_file::NibFile;
 
@@ -266,15 +268,15 @@ pub struct EditorView {
     /// Path to the image file being edited (for .nib files, this is the extracted temp image)
     file_path: Option<PathBuf>,
     /// List of completed annotations
-    annotations: Vec<Annotation>,
+    pub(crate) annotations: Vec<Annotation>,
     /// Currently selected tool
     active_tool: Tool,
-    /// Current annotation style (semantic preset)
-    current_style: AnnotationStyle,
-    /// Custom color (used when style == Custom)
-    custom_color: Color,
+    /// Style option defaults for newly-created annotations (stroke width, fill, stroke
+    /// style, arrowhead, font size, blur intensity, opacity) plus the semantic style
+    /// preset/custom color. Also fed into every `ToolContext` construction site.
+    pub(crate) style_state: StyleState,
     /// Whether the collapsed style/color picker popup is open
-    style_picker_open: bool,
+    pub(crate) style_picker_open: bool,
     /// Last modification time of the sidecar annotations file (for file watching)
     last_sidecar_modified: Option<SystemTime>,
     /// Original image width in pixels
@@ -295,7 +297,7 @@ pub struct EditorView {
     /// Could be removed in a future refactor by computing screen coords during render.
     text_input_state: Option<TextInputState>,
     /// Tool manager for trait-based tool dispatch
-    tool_manager: ToolManager,
+    pub(crate) tool_manager: ToolManager,
     /// NibFile handle for .nib format (SQLite-based storage)
     nib_file: Option<NibFile>,
     /// Original .nib file path (file_path points to extracted temp image for rendering)
@@ -409,8 +411,7 @@ impl EditorView {
             file_path: actual_file_path,
             annotations: Vec::new(),
             active_tool: Tool::Rectangle,
-            current_style: AnnotationStyle::default(),
-            custom_color: Color::RED,
+            style_state: StyleState::default(),
             style_picker_open: false,
             last_sidecar_modified: None,
             image_width,
@@ -843,10 +844,7 @@ impl EditorView {
     /// Get the effective color based on current style
     /// Returns custom_color if style is Custom, otherwise the style's default color
     fn effective_color(&self) -> Color {
-        match self.current_style {
-            AnnotationStyle::Custom => self.custom_color,
-            _ => self.current_style.color(),
-        }
+        self.style_state.effective_color()
     }
 
     /// Scale image coordinates to canvas coordinates for rendering
@@ -924,29 +922,35 @@ impl EditorView {
 
     /// Create a line element using paint_path with proper bounds adjustment
     /// paint_path uses window coordinates, so we adjust by bounds origin
+    #[allow(clippy::too_many_arguments)] // screen-space draw params, splitting them adds no clarity
     fn render_line_element(
         start_sx: f32,
         start_sy: f32,
         end_sx: f32,
         end_sy: f32,
         stroke_width: f32,
+        stroke_style: StrokeStyle,
         color: gpui::Hsla,
     ) -> impl IntoElement {
         canvas(
             move |bounds, _window, _cx| {
                 let origin_x: f32 = bounds.origin.x.into();
                 let origin_y: f32 = bounds.origin.y.into();
-                (
-                    point(px(start_sx + origin_x), px(start_sy + origin_y)),
-                    point(px(end_sx + origin_x), px(end_sy + origin_y)),
-                )
+                let start = NibPoint::new((start_sx + origin_x) as f64, (start_sy + origin_y) as f64);
+                let end = NibPoint::new((end_sx + origin_x) as f64, (end_sy + origin_y) as f64);
+                dash_segments(start, end, stroke_style, stroke_width as f64)
+                    .into_iter()
+                    .map(|(s, e)| (point(px(s.x as f32), px(s.y as f32)), point(px(e.x as f32), px(e.y as f32))))
+                    .collect::<Vec<_>>()
             },
-            move |_bounds, (p_start, p_end), window, _cx| {
-                let mut builder = PathBuilder::stroke(px(stroke_width));
-                builder.move_to(p_start);
-                builder.line_to(p_end);
-                if let Ok(path) = builder.build() {
-                    window.paint_path(path, color);
+            move |_bounds, segments, window, _cx| {
+                for (p_start, p_end) in segments {
+                    let mut builder = PathBuilder::stroke(px(stroke_width));
+                    builder.move_to(p_start);
+                    builder.line_to(p_end);
+                    if let Ok(path) = builder.build() {
+                        window.paint_path(path, color);
+                    }
                 }
             },
         )
@@ -958,29 +962,39 @@ impl EditorView {
     fn render_path_element(
         points: Vec<(f32, f32)>,
         stroke_width: f32,
+        stroke_style: StrokeStyle,
         color: gpui::Hsla,
     ) -> impl IntoElement {
         canvas(
             move |bounds, _window, _cx| {
                 let origin_x: f32 = bounds.origin.x.into();
                 let origin_y: f32 = bounds.origin.y.into();
-                let adjusted: Vec<_> = points
+                let adjusted: Vec<(f32, f32)> = points
                     .iter()
-                    .map(|(x, y)| point(px(*x + origin_x), px(*y + origin_y)))
+                    .map(|(x, y)| (*x + origin_x, *y + origin_y))
                     .collect();
-                adjusted
+
+                let mut segments = Vec::new();
+                for pair in adjusted.windows(2) {
+                    let start = NibPoint::new(pair[0].0 as f64, pair[0].1 as f64);
+                    let end = NibPoint::new(pair[1].0 as f64, pair[1].1 as f64);
+                    for (s, e) in dash_segments(start, end, stroke_style, stroke_width as f64) {
+                        segments.push((
+                            point(px(s.x as f32), px(s.y as f32)),
+                            point(px(e.x as f32), px(e.y as f32)),
+                        ));
+                    }
+                }
+                segments
             },
-            move |_bounds, adjusted_points, window, _cx| {
-                if adjusted_points.len() < 2 {
-                    return;
-                }
-                let mut builder = PathBuilder::stroke(px(stroke_width));
-                builder.move_to(adjusted_points[0]);
-                for pt in &adjusted_points[1..] {
-                    builder.line_to(*pt);
-                }
-                if let Ok(path) = builder.build() {
-                    window.paint_path(path, color);
+            move |_bounds, segments, window, _cx| {
+                for (p_start, p_end) in segments {
+                    let mut builder = PathBuilder::stroke(px(stroke_width));
+                    builder.move_to(p_start);
+                    builder.line_to(p_end);
+                    if let Ok(path) = builder.build() {
+                        window.paint_path(path, color);
+                    }
                 }
             },
         )
@@ -989,12 +1003,14 @@ impl EditorView {
     }
 
     /// Create an arrow element using paint_path with proper bounds adjustment
+    #[allow(clippy::too_many_arguments)] // screen-space draw params, splitting them adds no clarity
     fn render_arrow_element(
         start_sx: f32,
         start_sy: f32,
         end_sx: f32,
         end_sy: f32,
         stroke_width: f32,
+        head: ArrowHead,
         color: gpui::Hsla,
     ) -> impl IntoElement {
         // Calculate arrowhead geometry
@@ -1004,10 +1020,21 @@ impl EditorView {
         let arrow_size: f32 = 12.0;
         let arrow_angle: f32 = 0.5; // ~28 degrees
 
+        // Wings for a head drawn at the `end` point, pointing back along `angle`
         let ax1_offset = -arrow_size * (angle + arrow_angle).cos();
         let ay1_offset = -arrow_size * (angle + arrow_angle).sin();
         let ax2_offset = -arrow_size * (angle - arrow_angle).cos();
         let ay2_offset = -arrow_size * (angle - arrow_angle).sin();
+
+        // Wings for a head drawn at the `start` point, pointing back the other way
+        let start_angle = angle + std::f32::consts::PI;
+        let bx1_offset = -arrow_size * (start_angle + arrow_angle).cos();
+        let by1_offset = -arrow_size * (start_angle + arrow_angle).sin();
+        let bx2_offset = -arrow_size * (start_angle - arrow_angle).cos();
+        let by2_offset = -arrow_size * (start_angle - arrow_angle).sin();
+
+        let draw_end = matches!(head, ArrowHead::End | ArrowHead::Both);
+        let draw_start = matches!(head, ArrowHead::Start | ArrowHead::Both);
 
         canvas(
             move |bounds, _window, _cx| {
@@ -1022,10 +1049,12 @@ impl EditorView {
                     point(px(end_wx), px(end_wy)),
                     point(px(end_wx + ax1_offset), px(end_wy + ay1_offset)),
                     point(px(end_wx + ax2_offset), px(end_wy + ay2_offset)),
+                    point(px(start_wx + bx1_offset), px(start_wy + by1_offset)),
+                    point(px(start_wx + bx2_offset), px(start_wy + by2_offset)),
                 )
             },
-            move |_bounds, (p_start, p_end, p_arrow1, p_arrow2), window, _cx| {
-                // Draw main line
+            move |_bounds, (p_start, p_end, p_arrow1, p_arrow2, p_arrow3, p_arrow4), window, _cx| {
+                // Draw main line (Arrow has no stroke_style field, so this stays solid)
                 let mut builder = PathBuilder::stroke(px(stroke_width));
                 builder.move_to(p_start);
                 builder.line_to(p_end);
@@ -1033,19 +1062,26 @@ impl EditorView {
                     window.paint_path(path, color);
                 }
 
-                // Draw arrowhead
-                let mut arrow1 = PathBuilder::stroke(px(stroke_width));
-                arrow1.move_to(p_end);
-                arrow1.line_to(p_arrow1);
-                if let Ok(path) = arrow1.build() {
-                    window.paint_path(path, color);
+                if draw_end {
+                    for wing in [p_arrow1, p_arrow2] {
+                        let mut b = PathBuilder::stroke(px(stroke_width));
+                        b.move_to(p_end);
+                        b.line_to(wing);
+                        if let Ok(path) = b.build() {
+                            window.paint_path(path, color);
+                        }
+                    }
                 }
 
-                let mut arrow2 = PathBuilder::stroke(px(stroke_width));
-                arrow2.move_to(p_end);
-                arrow2.line_to(p_arrow2);
-                if let Ok(path) = arrow2.build() {
-                    window.paint_path(path, color);
+                if draw_start {
+                    for wing in [p_arrow3, p_arrow4] {
+                        let mut b = PathBuilder::stroke(px(stroke_width));
+                        b.move_to(p_start);
+                        b.line_to(wing);
+                        if let Ok(path) = b.build() {
+                            window.paint_path(path, color);
+                        }
+                    }
                 }
             },
         )
@@ -1064,17 +1100,13 @@ impl EditorView {
     /// Build a ToolContext for tool event handling
     fn build_tool_context(&self) -> ToolContext<'_> {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
-        ToolContext {
-            style: self.current_style,
-                custom_color: self.custom_color,
-            stroke_width: 2.0,
-            fill_enabled: false,
-            image_size: (self.image_width, self.image_height),
+        self.style_state.tool_context(
+            (self.image_width, self.image_height),
             scale,
-            offset: (offset_x, offset_y),
-            annotations: &self.annotations,
-            min_drag_distance: 5.0,
-        }
+            (offset_x, offset_y),
+            &self.annotations,
+            5.0,
+        )
     }
 
     /// Process a ToolResult and update EditorView state accordingly
@@ -1136,7 +1168,7 @@ impl EditorView {
                         let (screen_x, screen_y) = self.scale_point(position.x, position.y);
                         // Adjust for font height (text is drawn with baseline at position)
                         let (scale, _, _) = self.calculate_scale_and_offset();
-                        let adjusted_screen_y = screen_y + (TEXT_FONT_SIZE as f32 * scale);
+                        let adjusted_screen_y = screen_y + (self.style_state.font_size as f32 * scale);
                         self.text_input_state = Some(TextInputState {
                             screen_x,
                             screen_y: adjusted_screen_y,
@@ -1396,7 +1428,7 @@ impl EditorView {
     }
 
     /// Save annotations to a sidecar JSON file or .nib file
-    fn save_annotations(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn save_annotations(&mut self, cx: &mut Context<Self>) {
         let t0 = std::time::Instant::now();
 
         // For .nib files, save to NibFile
@@ -1726,17 +1758,13 @@ impl EditorView {
         let deactivation_result = {
             let scale = self.canvas.scale();
             let offset = self.canvas.offset_tuple();
-            let ctx = ToolContext {
-                style: self.current_style,
-                custom_color: self.custom_color,
-                stroke_width: 2.0,
-                fill_enabled: false,
-                image_size: (self.image_width, self.image_height),
+            let ctx = self.style_state.tool_context(
+                (self.image_width, self.image_height),
                 scale,
                 offset,
-                annotations: &self.annotations,
-                min_drag_distance: 5.0,
-            };
+                &self.annotations,
+                5.0,
+            );
             self.tool_manager.set_active_tool(tool, &ctx)
         };
 
@@ -1785,17 +1813,13 @@ impl EditorView {
         let result = {
             let scale = self.canvas.scale();
             let offset = self.canvas.offset_tuple();
-            let ctx = ToolContext {
-                style: self.current_style,
-                custom_color: self.custom_color,
-                stroke_width: 2.0,
-                fill_enabled: false,
-                image_size: (self.image_width, self.image_height),
+            let ctx = self.style_state.tool_context(
+                (self.image_width, self.image_height),
                 scale,
                 offset,
-                annotations: &self.annotations,
-                min_drag_distance: 5.0,
-            };
+                &self.annotations,
+                5.0,
+            );
             self.tool_manager.handle_event(tool_event, &ctx)
         };
         self.process_tool_result(result, cx);
@@ -1820,17 +1844,13 @@ impl EditorView {
         let result = {
             let scale = self.canvas.scale();
             let offset = self.canvas.offset_tuple();
-            let ctx = ToolContext {
-                style: self.current_style,
-                custom_color: self.custom_color,
-                stroke_width: 2.0,
-                fill_enabled: false,
-                image_size: (self.image_width, self.image_height),
+            let ctx = self.style_state.tool_context(
+                (self.image_width, self.image_height),
                 scale,
                 offset,
-                annotations: &self.annotations,
-                min_drag_distance: 5.0,
-            };
+                &self.annotations,
+                5.0,
+            );
             self.tool_manager.handle_event(tool_event, &ctx)
         };
         self.process_tool_result(result, cx);
@@ -1863,17 +1883,13 @@ impl EditorView {
         let result = {
             let scale = self.canvas.scale();
             let offset = self.canvas.offset_tuple();
-            let ctx = ToolContext {
-                style: self.current_style,
-                custom_color: self.custom_color,
-                stroke_width: 2.0,
-                fill_enabled: false,
-                image_size: (self.image_width, self.image_height),
+            let ctx = self.style_state.tool_context(
+                (self.image_width, self.image_height),
                 scale,
                 offset,
-                annotations: &self.annotations,
-                min_drag_distance: 5.0,
-            };
+                &self.annotations,
+                5.0,
+            );
             self.tool_manager.handle_event(tool_event, &ctx)
         };
         self.process_tool_result(result, cx);
@@ -1997,11 +2013,7 @@ impl EditorView {
                     // width accounting this collapse relies on to keep the default 1200x800
                     // window uncropped)
                     .child({
-                        let selected_color = if self.current_style == AnnotationStyle::Custom {
-                            self.custom_color
-                        } else {
-                            self.current_style.color()
-                        };
+                        let selected_color = self.style_state.effective_color();
                         let gpui_selected_color = rgb(
                             selected_color.r as u32 * 0x10000 +
                             selected_color.g as u32 * 0x100 +
@@ -2043,80 +2055,17 @@ impl EditorView {
                                     .text_color(text_color)
                                     .text_size(px(9.))
                                     .mt(px(2.))
-                                    .child(self.current_style.label())
+                                    .child(self.style_state.style.label())
                             )
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.style_picker_open = !this.style_picker_open;
                                 cx.notify();
                             }))
-                            // Popup flyout with the full style/color choices
+                            // Popup flyout body: style/color swatches + contextual style
+                            // rows (stroke width, fill, stroke style, arrowhead, font size,
+                            // blur intensity, opacity), rendered by style_panel.rs
                             .when(picker_open, |el| {
-                                el.child(
-                                    div()
-                                        .absolute()
-                                        .bottom(px(56.))
-                                        .left(px(-138.))
-                                        .flex()
-                                        .flex_row()
-                                        .gap_1()
-                                        .px_2()
-                                        .py_2()
-                                        .bg(rgba(0x2d2d2dee))
-                                        .rounded_lg()
-                                        .border_1()
-                                        .border_color(rgba(0x00000044))
-                                        .shadow_lg()
-                                        .children(AnnotationStyle::all().iter().map(|style| {
-                                            let is_active = *style == self.current_style;
-                                            let style_copy = *style;
-                                            let style_color = if *style == AnnotationStyle::Custom {
-                                                self.custom_color
-                                            } else {
-                                                style.color()
-                                            };
-                                            let gpui_style_color = rgb(
-                                                style_color.r as u32 * 0x10000 +
-                                                style_color.g as u32 * 0x100 +
-                                                style_color.b as u32
-                                            );
-
-                                            div()
-                                                .id(style.label())
-                                                .flex()
-                                                .flex_col()
-                                                .items_center()
-                                                .justify_center()
-                                                .w(px(48.))
-                                                .h(px(48.))
-                                                .rounded_md()
-                                                .cursor_pointer()
-                                                .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
-                                                .hover(|s| s.bg(button_bg))
-                                                // Color indicator circle
-                                                .child(
-                                                    div()
-                                                        .w(px(20.))
-                                                        .h(px(20.))
-                                                        .rounded_full()
-                                                        .bg(gpui_style_color)
-                                                        .border_2()
-                                                        .border_color(if is_active { rgb(0xffffff) } else { rgba(0xffffff66) })
-                                                )
-                                                // Style name
-                                                .child(
-                                                    div()
-                                                        .text_color(text_color)
-                                                        .text_size(px(9.))
-                                                        .mt(px(2.))
-                                                        .child(style.label())
-                                                )
-                                                .on_click(cx.listener(move |this, _event, _window, cx| {
-                                                    this.current_style = style_copy;
-                                                    this.style_picker_open = false;
-                                                    cx.notify();
-                                                }))
-                                        }))
-                                )
+                                el.child(self.render_style_flyout(button_bg, button_active_bg, text_color, cx))
                             })
                     })
                     // Separator before Send button
@@ -2229,7 +2178,7 @@ impl EditorView {
         let (scale, _, _) = self.calculate_scale_and_offset();
 
         match &annotation.annotation_type {
-            AnnotationType::Box { region, filled, corner_radius, .. } => {
+            AnnotationType::Box { region, stroke_width, stroke_style, filled, corner_radius } => {
                 // Scale coordinates from image space to screen space
                 let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
                 let mut element = div()
@@ -2238,8 +2187,11 @@ impl EditorView {
                     .top(px(sy))
                     .w(px(sw))
                     .h(px(sh))
-                    .border_2()
                     .border_color(border_color);
+                element = Self::apply_border_width(element, *stroke_width);
+                if *stroke_style != StrokeStyle::Solid {
+                    element = element.border_dashed();
+                }
 
                 if *corner_radius > 0.0 {
                     element = element.rounded_md();
@@ -2251,19 +2203,21 @@ impl EditorView {
 
                 element.into_any_element()
             }
-            AnnotationType::Arrow { start, end, .. } => {
+            AnnotationType::Arrow { start, end, head, stroke_width } => {
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
-                Self::render_arrow_element(start_sx, start_sy, end_sx, end_sy, 2.0, border_color.into())
+                let stroke = *stroke_width as f32 * scale;
+                Self::render_arrow_element(start_sx, start_sy, end_sx, end_sy, stroke, *head, border_color.into())
                     .into_any_element()
             }
-            AnnotationType::Line { start, end, .. } => {
+            AnnotationType::Line { start, end, stroke_width, stroke_style } => {
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
-                Self::render_line_element(start_sx, start_sy, end_sx, end_sy, 2.0, border_color.into())
+                let stroke = *stroke_width as f32 * scale;
+                Self::render_line_element(start_sx, start_sy, end_sx, end_sy, stroke, *stroke_style, border_color.into())
                     .into_any_element()
             }
-            AnnotationType::Ellipse { center, radius_x, radius_y, filled, .. } => {
+            AnnotationType::Ellipse { center, radius_x, radius_y, stroke_width, filled } => {
                 // Scale center and radii
                 let (center_sx, center_sy) = self.scale_point(center.x, center.y);
                 let scaled_radius_x = *radius_x as f32 * scale;
@@ -2275,9 +2229,9 @@ impl EditorView {
                     .top(px(center_sy - scaled_radius_y))
                     .w(px(scaled_radius_x * 2.0))
                     .h(px(scaled_radius_y * 2.0))
-                    .border_2()
                     .border_color(border_color)
                     .rounded_full();
+                element = Self::apply_border_width(element, *stroke_width);
 
                 if *filled {
                     element = element.bg(gpui_color);
@@ -2368,7 +2322,7 @@ impl EditorView {
                     .border_color(rgb(0x00ff00))
                     .into_any_element()
             }
-            AnnotationType::Path { points, stroke_width, .. } => {
+            AnnotationType::Path { points, stroke_width, stroke_style } => {
                 if points.len() < 2 {
                     return div().into_any_element();
                 }
@@ -2381,9 +2335,23 @@ impl EditorView {
 
                 let stroke = *stroke_width as f32 * scale;
 
-                Self::render_path_element(scaled_points, stroke, border_color.into())
+                Self::render_path_element(scaled_points, stroke, *stroke_style, border_color.into())
                     .into_any_element()
             }
+        }
+    }
+
+    /// Map a stroke width to the closest of GPUI's fixed border-width presets
+    /// (it only ships `border_1`..`border_8`, no arbitrary-width border). The style
+    /// panel only offers S/M/L = 2/4/8, so this covers those exactly and snaps any
+    /// other value (e.g. from older sidecars) to the nearest preset.
+    fn apply_border_width(element: Div, stroke_width: f64) -> Div {
+        if stroke_width <= 3.0 {
+            element.border_2()
+        } else if stroke_width <= 6.0 {
+            element.border_4()
+        } else {
+            element.border_8()
         }
     }
 
@@ -2430,7 +2398,7 @@ impl EditorView {
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
 
                 Some(
-                    Self::render_line_element(start_sx, start_sy, end_sx, end_sy, 2.0, preview_color.into())
+                    Self::render_line_element(start_sx, start_sy, end_sx, end_sy, 2.0, StrokeStyle::Solid, preview_color.into())
                         .into_any_element(),
                 )
             }
@@ -2552,7 +2520,7 @@ impl EditorView {
                 let stroke = stroke_width as f32 * self.calculate_scale_and_offset().0;
 
                 Some(
-                    Self::render_path_element(scaled_points, stroke, preview_color.into())
+                    Self::render_path_element(scaled_points, stroke, StrokeStyle::Solid, preview_color.into())
                         .into_any_element(),
                 )
             }
@@ -2770,17 +2738,13 @@ impl EditorView {
         let result = {
             let scale = self.canvas.scale();
             let offset = self.canvas.offset_tuple();
-            let ctx = ToolContext {
-                style: self.current_style,
-                custom_color: self.custom_color,
-                stroke_width: 2.0,
-                fill_enabled: false,
-                image_size: (self.image_width, self.image_height),
+            let ctx = self.style_state.tool_context(
+                (self.image_width, self.image_height),
                 scale,
                 offset,
-                annotations: &self.annotations,
-                min_drag_distance: 5.0,
-            };
+                &self.annotations,
+                5.0,
+            );
             self.tool_manager.handle_event(tool_event, &ctx)
         };
 
@@ -2807,17 +2771,13 @@ impl EditorView {
         // Build context inline to avoid borrow conflicts with tool_manager
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
         let result = {
-            let ctx = ToolContext {
-                style: self.current_style,
-                custom_color: self.custom_color,
-                stroke_width: 2.0,
-                fill_enabled: false,
-                image_size: (self.image_width, self.image_height),
+            let ctx = self.style_state.tool_context(
+                (self.image_width, self.image_height),
                 scale,
-                offset: (offset_x, offset_y),
-                annotations: &self.annotations,
-                min_drag_distance: 5.0,
-            };
+                (offset_x, offset_y),
+                &self.annotations,
+                5.0,
+            );
             if let Some(text_tool) = self.tool_manager.get_tool_as_mut::<TextTool>(ToolId::Text) {
                 text_tool.confirm_text(&ctx)
             } else {
@@ -2841,7 +2801,7 @@ impl EditorView {
 
         // Get scale for font sizing
         let (scale, _, _) = self.calculate_scale_and_offset();
-        let font_size = TEXT_FONT_SIZE as f32;
+        let font_size = self.style_state.font_size as f32;
         let scaled_font_size = font_size * scale;
 
         // Offset text up so it appears above the click point

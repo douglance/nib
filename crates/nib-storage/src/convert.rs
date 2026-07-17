@@ -8,7 +8,7 @@ use nib_core::{
     Annotation, AnnotationType, ArrowHead, BlurIntensity, Color, Point, Region, StrokeStyle,
     TextAlign,
 };
-use nib_serde::{AnnotationGeometry, AnnotationsFile, SerializedAnnotation};
+use nib_serde::{AnnotationGeometry, AnnotationsFile, SerializedAnnotation, SerializedStyle};
 use std::path::Path;
 
 /// Convert a SerializedAnnotation (sidecar format) to core Annotation
@@ -190,6 +190,11 @@ pub fn annotation_to_sidecar(annotation: &Annotation) -> SerializedAnnotation {
         annotation_type,
         geometry,
         color: format_color_hex(&annotation.color),
+        // This module's sidecar<->core conversion is a separate, pre-existing path from
+        // nib-serde's serialize_annotation/deserialize_annotation (used by the GUI's save/load
+        // flow) and is out of scope for the Phase 1 sidecar fidelity fix, which targets
+        // nib-serde only.
+        style: SerializedStyle::default(),
     }
 }
 
@@ -298,6 +303,7 @@ mod tests {
                 height: 50.0,
             },
             color: "#ff0000".to_string(),
+            style: SerializedStyle::default(),
         };
 
         let annotation = sidecar_to_annotation(&serialized).unwrap();
@@ -319,6 +325,7 @@ mod tests {
                 end_y: 100.0,
             },
             color: "#00ff00".to_string(),
+            style: SerializedStyle::default(),
         };
 
         let annotation = sidecar_to_annotation(&serialized).unwrap();

@@ -4,11 +4,12 @@
 
 use crate::StorageResult;
 use nib_core::blur::apply_blur_region;
-use nib_core::{Annotation, AnnotationType, Color, NibImage, Region, StorageError};
-use image::{DynamicImage, Rgba, RgbaImage};
-use imageproc::drawing::{
-    draw_filled_circle_mut, draw_filled_rect_mut, draw_hollow_rect_mut, draw_line_segment_mut,
+use nib_core::{
+    dash_segments, Annotation, AnnotationType, ArrowHead, Color, NibImage, Point, Region,
+    StorageError, StrokeStyle,
 };
+use image::{DynamicImage, Rgba, RgbaImage};
+use imageproc::drawing::{draw_filled_circle_mut, draw_filled_rect_mut, draw_line_segment_mut};
 use imageproc::rect::Rect;
 use std::path::Path;
 
@@ -134,10 +135,10 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation) {
     let color = color_to_rgba(&annotation.color);
 
     match &annotation.annotation_type {
-        AnnotationType::Arrow { start, end, stroke_width, .. } => {
-            draw_arrow(img, *start, *end, color, *stroke_width as i32);
+        AnnotationType::Arrow { start, end, head, stroke_width } => {
+            draw_arrow(img, *start, *end, *head, color, *stroke_width as i32);
         }
-        AnnotationType::Box { region, stroke_width, filled, .. } => {
+        AnnotationType::Box { region, stroke_width, stroke_style, filled, .. } => {
             let rect = Rect::at(region.x as i32, region.y as i32)
                 .of_size(region.width as u32, region.height as u32);
 
@@ -146,15 +147,7 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation) {
                 draw_filled_rect_mut(img, rect, fill_color);
             }
 
-            // Draw border multiple times for stroke width
-            for i in 0..(*stroke_width as i32).max(1) {
-                let adjusted = Rect::at(region.x as i32 + i, region.y as i32 + i)
-                    .of_size(
-                        (region.width as i32 - 2 * i).max(1) as u32,
-                        (region.height as i32 - 2 * i).max(1) as u32,
-                    );
-                draw_hollow_rect_mut(img, adjusted, color);
-            }
+            draw_rect_outline_styled(img, region, *stroke_width, *stroke_style, color);
         }
         AnnotationType::Text { position, content, font_size, background, .. } => {
             // Draw background if specified
@@ -217,17 +210,8 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation) {
                 .of_size(region.width as u32, region.height as u32);
             draw_filled_rect_mut(img, rect, highlight_color);
         }
-        AnnotationType::Line { start, end, stroke_width, .. } => {
-            // Draw line with thickness
-            for offset in 0..(*stroke_width as i32).max(1) {
-                let dy = if offset == 0 { 0 } else { offset / 2 };
-                draw_line_segment_mut(
-                    img,
-                    (start.x as f32, start.y as f32 + dy as f32),
-                    (end.x as f32, end.y as f32 + dy as f32),
-                    color,
-                );
-            }
+        AnnotationType::Line { start, end, stroke_width, stroke_style } => {
+            draw_styled_line(img, *start, *end, *stroke_style, *stroke_width, color);
         }
         AnnotationType::Ellipse { center, radius_x, radius_y, filled, .. } => {
             // Approximate ellipse with polygon or use filled circle for now
@@ -252,22 +236,9 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation) {
         AnnotationType::Crop { .. } => {
             // Crop regions are not rendered, they're used for export bounds
         }
-        AnnotationType::Path { points, stroke_width, .. } => {
-            if points.len() >= 2 {
-                // Draw connected line segments for the path
-                for offset in 0..(*stroke_width as i32).max(1) {
-                    let dy = if offset == 0 { 0.0 } else { offset as f32 / 2.0 };
-                    for i in 0..points.len() - 1 {
-                        let start = &points[i];
-                        let end = &points[i + 1];
-                        draw_line_segment_mut(
-                            img,
-                            (start.x as f32, start.y as f32 + dy),
-                            (end.x as f32, end.y as f32 + dy),
-                            color,
-                        );
-                    }
-                }
+        AnnotationType::Path { points, stroke_width, stroke_style } => {
+            for pair in points.windows(2) {
+                draw_styled_line(img, pair[0], pair[1], *stroke_style, *stroke_width, color);
             }
         }
     }
@@ -281,10 +252,11 @@ fn draw_arrow(
     img: &mut RgbaImage,
     start: nib_core::Point,
     end: nib_core::Point,
+    head: ArrowHead,
     color: Rgba<u8>,
     stroke_width: i32,
 ) {
-    // Draw line
+    // Draw line (Arrow has no stroke_style field, so this stays solid)
     for offset in 0..stroke_width.max(1) {
         let dy = if offset == 0 { 0.0 } else { offset as f32 / 2.0 };
         draw_line_segment_mut(
@@ -295,28 +267,82 @@ fn draw_arrow(
         );
     }
 
-    // Draw arrowhead
     let dx = end.x - start.x;
     let dy = end.y - start.y;
     let len = (dx * dx + dy * dy).sqrt();
 
     if len > 0.0 {
-        let arrow_size: f64 = 15.0;
-        let angle: f64 = 0.5; // radians
-
-        // Normalize direction
         let ndx = dx / len;
         let ndy = dy / len;
 
-        // Calculate arrowhead points
-        let ax1 = end.x - arrow_size * (ndx * angle.cos() + ndy * angle.sin());
-        let ay1 = end.y - arrow_size * (ndy * angle.cos() - ndx * angle.sin());
-        let ax2 = end.x - arrow_size * (ndx * angle.cos() - ndy * angle.sin());
-        let ay2 = end.y - arrow_size * (ndy * angle.cos() + ndx * angle.sin());
+        if matches!(head, ArrowHead::End | ArrowHead::Both) {
+            draw_arrow_wing(img, end, ndx, ndy, color);
+        }
+        if matches!(head, ArrowHead::Start | ArrowHead::Both) {
+            draw_arrow_wing(img, start, -ndx, -ndy, color);
+        }
+    }
+}
 
-        // Draw arrowhead lines
-        draw_line_segment_mut(img, (end.x as f32, end.y as f32), (ax1 as f32, ay1 as f32), color);
-        draw_line_segment_mut(img, (end.x as f32, end.y as f32), (ax2 as f32, ay2 as f32), color);
+/// Draw the two wing lines of an arrowhead at `tip`, pointing back along the
+/// normalized incoming direction `(dir_x, dir_y)`.
+fn draw_arrow_wing(
+    img: &mut RgbaImage,
+    tip: nib_core::Point,
+    dir_x: f64,
+    dir_y: f64,
+    color: Rgba<u8>,
+) {
+    let arrow_size: f64 = 15.0;
+    let angle: f64 = 0.5; // radians
+
+    let ax1 = tip.x - arrow_size * (dir_x * angle.cos() + dir_y * angle.sin());
+    let ay1 = tip.y - arrow_size * (dir_y * angle.cos() - dir_x * angle.sin());
+    let ax2 = tip.x - arrow_size * (dir_x * angle.cos() - dir_y * angle.sin());
+    let ay2 = tip.y - arrow_size * (dir_y * angle.cos() + dir_x * angle.sin());
+
+    draw_line_segment_mut(img, (tip.x as f32, tip.y as f32), (ax1 as f32, ay1 as f32), color);
+    draw_line_segment_mut(img, (tip.x as f32, tip.y as f32), (ax2 as f32, ay2 as f32), color);
+}
+
+/// Draw a line honoring `stroke_style` (dashed/dotted segments via the shared
+/// `dash_segments` helper) with `stroke_width`-scaled thickness.
+fn draw_styled_line(
+    img: &mut RgbaImage,
+    start: Point,
+    end: Point,
+    stroke_style: StrokeStyle,
+    stroke_width: f64,
+    color: Rgba<u8>,
+) {
+    for (seg_start, seg_end) in dash_segments(start, end, stroke_style, stroke_width) {
+        for offset in 0..(stroke_width as i32).max(1) {
+            let dy = if offset == 0 { 0.0 } else { offset as f32 / 2.0 };
+            draw_line_segment_mut(
+                img,
+                (seg_start.x as f32, seg_start.y as f32 + dy),
+                (seg_end.x as f32, seg_end.y as f32 + dy),
+                color,
+            );
+        }
+    }
+}
+
+/// Draw a rectangle outline as four styled edges (supports dashed/dotted).
+fn draw_rect_outline_styled(
+    img: &mut RgbaImage,
+    region: &Region,
+    stroke_width: f64,
+    stroke_style: StrokeStyle,
+    color: Rgba<u8>,
+) {
+    let tl = Point::new(region.x, region.y);
+    let tr = Point::new(region.x + region.width, region.y);
+    let br = Point::new(region.x + region.width, region.y + region.height);
+    let bl = Point::new(region.x, region.y + region.height);
+
+    for (a, b) in [(tl, tr), (tr, br), (br, bl), (bl, tl)] {
+        draw_styled_line(img, a, b, stroke_style, stroke_width, color);
     }
 }
 
