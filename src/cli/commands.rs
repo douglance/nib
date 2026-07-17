@@ -1106,12 +1106,13 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
     // Check if this is a .nib file or an image file
     let is_nib_file = args.file.extension().map(|e| e == "nib").unwrap_or(false);
 
-    let (image_data, width, height, annotations) = if is_nib_file {
+    let (image_data, width, height, annotations, assets) = if is_nib_file {
         // Load directly from .nib file
         let nib = NibFile::open(&args.file)?;
         let (data, info) = nib.get_image()?;
         let anns = nib.list_annotations()?;
-        (data, info.width, info.height, anns)
+        let assets = nib.get_all_assets()?;
+        (data, info.width, info.height, anns, assets)
     } else {
         // For image files, look for corresponding .nib file
         let nib_path = args.file.with_extension("nib");
@@ -1120,17 +1121,18 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
             // Load annotations from .nib file
             let nib = NibFile::open(&nib_path)?;
             let anns = nib.list_annotations()?;
+            let assets = nib.get_all_assets()?;
             // But use the image data from the original file for freshness
             let image_data = std::fs::read(&args.file)?;
             let img = image::load_from_memory(&image_data)
                 .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
-            (image_data, img.width(), img.height(), anns)
+            (image_data, img.width(), img.height(), anns, assets)
         } else {
             // No .nib file exists - render with no annotations
             let image_data = std::fs::read(&args.file)?;
             let img = image::load_from_memory(&image_data)
                 .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
-            (image_data, img.width(), img.height(), Vec::new())
+            (image_data, img.width(), img.height(), Vec::new(), std::collections::HashMap::new())
         }
     };
 
@@ -1141,7 +1143,7 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
         height,
         source: crate::core::ImageSource::File(args.file.clone()),
         annotations,
-        assets: std::collections::HashMap::new(),
+        assets,
         title: None,
         description: None,
         tags: Vec::new(),
@@ -2465,6 +2467,7 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
     // Get the image and annotations
     let (image_data, image_info) = nib.get_image()?;
     let annotations = nib.list_annotations()?;
+    let assets = nib.get_all_assets()?;
 
     // Determine output path
     let output_path = args.output.clone().unwrap_or_else(|| {
@@ -2481,7 +2484,7 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
                 height: image_info.height,
                 source: crate::core::ImageSource::File(args.file.clone()),
                 annotations,
-                assets: std::collections::HashMap::new(),
+                assets,
                 title: None,
                 description: None,
                 tags: Vec::new(),
@@ -2524,7 +2527,7 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
                 height: image_info.height,
                 source: crate::core::ImageSource::File(args.file.clone()),
                 annotations,
-                assets: std::collections::HashMap::new(),
+                assets,
                 title: None,
                 description: None,
                 tags: Vec::new(),
@@ -2849,6 +2852,7 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
             // Render the annotations onto the image
             let nib = NibFile::open(&nib_path)?;
             let all_annotations = nib.list_annotations()?;
+            let assets = nib.get_all_assets()?;
             let (image_data, image_info) = nib.get_image()?;
 
             let stem = nib_path.file_stem().unwrap_or_default().to_string_lossy();
@@ -2860,7 +2864,7 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
                 height: image_info.height,
                 source: crate::core::ImageSource::File(nib_path.clone()),
                 annotations: all_annotations,
-                assets: std::collections::HashMap::new(),
+                assets,
                 title: None,
                 description: None,
                 tags: Vec::new(),
@@ -2887,6 +2891,94 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
                 Err(crate::core::NibError::Other(format!("Wait failed: {}", e)))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{Annotation, AnnotationType, AssetData, AssetRef, Region};
+    use image::{DynamicImage, Rgba, RgbaImage};
+    use tempfile::TempDir;
+
+    /// Encode a solid-color `width`x`height` RGBA image as PNG bytes.
+    fn solid_png(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+        let img = RgbaImage::from_pixel(width, height, Rgba(color));
+        let mut bytes = Vec::new();
+        DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    /// Builds a `.nib` fixture with a 20x20 solid-black base image and a
+    /// single Image annotation (4x4 solid red asset) placed at (2,2)-(6,6).
+    /// Returns the fixture's directory (kept alive for the caller) and the
+    /// path to the `.nib` file.
+    fn build_nib_with_image_annotation() -> (TempDir, PathBuf) {
+        let temp_dir = TempDir::new().unwrap();
+        let nib_path = temp_dir.path().join("fixture.nib");
+
+        let base_image = solid_png(20, 20, [0, 0, 0, 255]);
+        let nib = NibFile::create(&nib_path, &base_image, "png", 20, 20).unwrap();
+
+        let asset_bytes = solid_png(4, 4, [255, 0, 0, 255]);
+        let asset = AssetRef::from_bytes(&asset_bytes);
+        nib.add_asset(
+            &asset.0,
+            &AssetData { bytes: asset_bytes, format: "png".to_string(), width: 4, height: 4 },
+        )
+        .unwrap();
+
+        let annotation = Annotation::new(AnnotationType::Image {
+            region: Region::new(2.0, 2.0, 4.0, 4.0),
+            asset,
+            opacity: 1.0,
+        });
+        nib.add_annotation(&annotation).unwrap();
+
+        (temp_dir, nib_path)
+    }
+
+    /// Proves `run_render` composites Image annotations end-to-end: before
+    /// the fix, `commands.rs` passed an empty `assets` map to `NibImage`, so
+    /// `render_annotation` silently skipped the Image annotation and pixel
+    /// (3,3) stayed the base black instead of the asset's red.
+    #[test]
+    fn run_render_composites_image_annotation() {
+        let (_temp_dir, nib_path) = build_nib_with_image_annotation();
+        let out_path = nib_path.with_extension("rendered.png");
+
+        run_render(&RenderArgs { file: nib_path.clone(), output: Some(out_path.clone()) }).unwrap();
+
+        let rendered = image::open(&out_path).unwrap().to_rgba8();
+        assert_eq!(
+            *rendered.get_pixel(3, 3),
+            Rgba([255, 0, 0, 255]),
+            "pixel inside the Image annotation region should be the asset's red, not the black base"
+        );
+    }
+
+    /// Same bug, second site: `run_export --format rendered` must also
+    /// composite Image annotations.
+    #[test]
+    fn run_export_rendered_composites_image_annotation() {
+        let (_temp_dir, nib_path) = build_nib_with_image_annotation();
+        let out_path = nib_path.with_extension("png");
+
+        run_export(&super::super::args::ExportArgs {
+            file: nib_path.clone(),
+            output: Some(out_path.clone()),
+            export_format: super::super::args::ExportFormat::Rendered,
+        })
+        .unwrap();
+
+        let rendered = image::open(&out_path).unwrap().to_rgba8();
+        assert_eq!(
+            *rendered.get_pixel(3, 3),
+            Rgba([255, 0, 0, 255]),
+            "pixel inside the Image annotation region should be the asset's red, not the black base"
+        );
     }
 }
 
