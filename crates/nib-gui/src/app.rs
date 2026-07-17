@@ -32,6 +32,7 @@ mod embedded_icons {
     pub static PENCIL: &[u8] = include_bytes!("../../../assets/icons/pencil.svg");
     pub static ERASER: &[u8] = include_bytes!("../../../assets/icons/eraser.svg");
     pub static STICKY: &[u8] = include_bytes!("../../../assets/icons/sticky.svg");
+    pub static IMAGE: &[u8] = include_bytes!("../../../assets/icons/image.svg");
 
     pub fn get(path: &str) -> Option<&'static [u8]> {
         match path {
@@ -48,6 +49,7 @@ mod embedded_icons {
             "assets/icons/pencil.svg" => Some(PENCIL),
             "assets/icons/eraser.svg" => Some(ERASER),
             "assets/icons/sticky.svg" => Some(STICKY),
+            "assets/icons/image.svg" => Some(IMAGE),
             _ => None,
         }
     }
@@ -2095,7 +2097,14 @@ impl EditorView {
         // Rectangle/Ellipse/Line/Pencil/Highlight live behind the shape
         // flyout (see tool_flyout.rs) instead of individual toolbar slots.
         let tools_before_shapes = [Tool::Select, Tool::Arrow];
-        let tools_after_shapes = [Tool::Text, Tool::Number, Tool::Blur, Tool::Eraser, Tool::Image];
+        let tools_after_shapes = [
+            Tool::Text,
+            Tool::Sticky,
+            Tool::Number,
+            Tool::Blur,
+            Tool::Eraser,
+            Tool::Image,
+        ];
 
         let button_bg = rgb(0x3d3d3d);
         let button_active_bg = rgb(0x0078d4);
@@ -3280,9 +3289,10 @@ mod toolbar_layout_tests {
     const TOOLBAR_PADDING_X: f32 = 24.0; // px_3, both sides
     const GAP: f32 = 4.0; // gap_1, applied between each of the direct children below
     // Phase 4: Rectangle/Ellipse/Line/Pencil/Highlight collapsed into one shape-flyout
-    // button (tool_flyout.rs), and Image added -- 2 (before) + 1 (flyout) + 5 (after,
-    // includes Image) = 8 buttons, all the same 56px width. Margin ~288px, still passes.
-    const NUM_TOOL_BUTTONS: f32 = 8.0;
+    // button (tool_flyout.rs), and Image added; Sticky button added post-acceptance --
+    // 2 (before) + 1 (flyout) + 6 (after, includes Sticky + Image) = 9 buttons, all the
+    // same 56px width. Margin ~228px, still passes.
+    const NUM_TOOL_BUTTONS: f32 = 9.0;
     const TOOL_BUTTON_W: f32 = 56.0;
     const SEPARATOR_W: f32 = 1.0 + 8.0 * 2.0; // 1px rule + mx_2 margin both sides
     const STYLE_PICKER_BUTTON_W: f32 = 48.0; // collapsed swatch button (was 6 * 48px inline)
