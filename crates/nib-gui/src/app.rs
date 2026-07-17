@@ -9,6 +9,7 @@ use gpui::{
     Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement,
     Styled, StyledImage, Task, Window, WindowBounds, WindowKind, WindowOptions,
 };
+use gpui::prelude::FluentBuilder;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use std::borrow::Cow;
@@ -218,6 +219,8 @@ pub struct EditorView {
     current_style: AnnotationStyle,
     /// Custom color (used when style == Custom)
     custom_color: Color,
+    /// Whether the collapsed style/color picker popup is open
+    style_picker_open: bool,
     /// Last modification time of the sidecar annotations file (for file watching)
     last_sidecar_modified: Option<SystemTime>,
     /// Original image width in pixels
@@ -354,6 +357,7 @@ impl EditorView {
             active_tool: Tool::Rectangle,
             current_style: AnnotationStyle::default(),
             custom_color: Color::RED,
+            style_picker_open: false,
             last_sidecar_modified: None,
             image_width,
             image_height,
@@ -1951,23 +1955,26 @@ impl EditorView {
                             .mx_2()
                             .bg(rgba(0xffffff33))
                     )
-                    // Style selector
-                    .children(AnnotationStyle::all().iter().map(|style| {
-                        let is_active = *style == self.current_style;
-                        let style_copy = *style;
-                        let style_color = if *style == AnnotationStyle::Custom {
+                    // Style selector: collapsed into one swatch button that toggles a popup
+                    // (see toolbar_layout_tests::toolbar_fits_default_window_with_margin for the
+                    // width accounting this collapse relies on to keep the default 1200x800
+                    // window uncropped)
+                    .child({
+                        let selected_color = if self.current_style == AnnotationStyle::Custom {
                             self.custom_color
                         } else {
-                            style.color()
+                            self.current_style.color()
                         };
-                        let gpui_style_color = rgb(
-                            style_color.r as u32 * 0x10000 +
-                            style_color.g as u32 * 0x100 +
-                            style_color.b as u32
+                        let gpui_selected_color = rgb(
+                            selected_color.r as u32 * 0x10000 +
+                            selected_color.g as u32 * 0x100 +
+                            selected_color.b as u32
                         );
+                        let picker_open = self.style_picker_open;
 
                         div()
-                            .id(style.label())
+                            .id("style-picker-button")
+                            .relative()
                             .flex()
                             .flex_col()
                             .items_center()
@@ -1976,31 +1983,100 @@ impl EditorView {
                             .h(px(48.))
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
+                            .bg(if picker_open { button_active_bg } else { rgba(0x3d3d3d00) })
                             .hover(|s| s.bg(button_bg))
-                            // Color indicator circle
+                            // Selected color indicator circle
                             .child(
                                 div()
                                     .w(px(20.))
                                     .h(px(20.))
                                     .rounded_full()
-                                    .bg(gpui_style_color)
+                                    .bg(gpui_selected_color)
                                     .border_2()
-                                    .border_color(if is_active { rgb(0xffffff) } else { rgba(0xffffff66) })
+                                    .border_color(rgb(0xffffff))
                             )
-                            // Style name
+                            // Selected style name
                             .child(
                                 div()
                                     .text_color(text_color)
                                     .text_size(px(9.))
                                     .mt(px(2.))
-                                    .child(style.label())
+                                    .child(self.current_style.label())
                             )
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.current_style = style_copy;
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.style_picker_open = !this.style_picker_open;
                                 cx.notify();
                             }))
-                    }))
+                            // Popup flyout with the full style/color choices
+                            .when(picker_open, |el| {
+                                el.child(
+                                    div()
+                                        .absolute()
+                                        .bottom(px(56.))
+                                        .left(px(-138.))
+                                        .flex()
+                                        .flex_row()
+                                        .gap_1()
+                                        .px_2()
+                                        .py_2()
+                                        .bg(rgba(0x2d2d2dee))
+                                        .rounded_lg()
+                                        .border_1()
+                                        .border_color(rgba(0x00000044))
+                                        .shadow_lg()
+                                        .children(AnnotationStyle::all().iter().map(|style| {
+                                            let is_active = *style == self.current_style;
+                                            let style_copy = *style;
+                                            let style_color = if *style == AnnotationStyle::Custom {
+                                                self.custom_color
+                                            } else {
+                                                style.color()
+                                            };
+                                            let gpui_style_color = rgb(
+                                                style_color.r as u32 * 0x10000 +
+                                                style_color.g as u32 * 0x100 +
+                                                style_color.b as u32
+                                            );
+
+                                            div()
+                                                .id(style.label())
+                                                .flex()
+                                                .flex_col()
+                                                .items_center()
+                                                .justify_center()
+                                                .w(px(48.))
+                                                .h(px(48.))
+                                                .rounded_md()
+                                                .cursor_pointer()
+                                                .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
+                                                .hover(|s| s.bg(button_bg))
+                                                // Color indicator circle
+                                                .child(
+                                                    div()
+                                                        .w(px(20.))
+                                                        .h(px(20.))
+                                                        .rounded_full()
+                                                        .bg(gpui_style_color)
+                                                        .border_2()
+                                                        .border_color(if is_active { rgb(0xffffff) } else { rgba(0xffffff66) })
+                                                )
+                                                // Style name
+                                                .child(
+                                                    div()
+                                                        .text_color(text_color)
+                                                        .text_size(px(9.))
+                                                        .mt(px(2.))
+                                                        .child(style.label())
+                                                )
+                                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                                    this.current_style = style_copy;
+                                                    this.style_picker_open = false;
+                                                    cx.notify();
+                                                }))
+                                        }))
+                                )
+                            })
+                    })
                     // Separator before Send button
                     .child(
                         div()
@@ -2828,6 +2904,62 @@ mod feedback_payload_tests {
         let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(parsed["decision"], "comment");
         assert_eq!(parsed["annotations"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod toolbar_layout_tests {
+    // This crate has no headless GPUI layout harness to measure a real render pass, so this
+    // is a static width accounting check standing in for one. The constants below mirror the
+    // literal pixel widths/margins written in `render_toolbar` (crate::app) as of this change;
+    // if those literals are edited, update these to match.
+    const TOOLBAR_PADDING_X: f32 = 24.0; // px_3, both sides
+    const GAP: f32 = 4.0; // gap_1, applied between each of the direct children below
+    const NUM_TOOL_BUTTONS: f32 = 10.0;
+    const TOOL_BUTTON_W: f32 = 56.0;
+    const SEPARATOR_W: f32 = 1.0 + 8.0 * 2.0; // 1px rule + mx_2 margin both sides
+    const STYLE_PICKER_BUTTON_W: f32 = 48.0; // collapsed swatch button (was 6 * 48px inline)
+    const SEND_BUTTON_W: f32 = 80.0;
+    const APPROVE_BUTTON_W: f32 = 110.0 + 8.0; // + ml_2
+    const REJECT_BUTTON_W: f32 = 100.0 + 8.0; // + ml_2
+    const DEFAULT_WINDOW_WIDTH: f32 = 1200.0;
+
+    fn toolbar_min_width() -> f32 {
+        // Direct children of the toolbar container, in render order:
+        // [10 tool buttons] [separator] [style picker button] [separator] [send] [approve] [reject]
+        let num_direct_children = NUM_TOOL_BUTTONS + 6.0;
+
+        TOOLBAR_PADDING_X
+            + NUM_TOOL_BUTTONS * TOOL_BUTTON_W
+            + SEPARATOR_W * 2.0
+            + STYLE_PICKER_BUTTON_W
+            + SEND_BUTTON_W
+            + APPROVE_BUTTON_W
+            + REJECT_BUTTON_W
+            + GAP * (num_direct_children - 1.0)
+    }
+
+    #[test]
+    fn toolbar_fits_default_window_with_margin() {
+        let width = toolbar_min_width();
+        assert!(
+            width < DEFAULT_WINDOW_WIDTH,
+            "toolbar width {width} does not fit default window width {DEFAULT_WINDOW_WIDTH}"
+        );
+        // Require visible margin, not just a bare fit, so Reject isn't clipped at the edge.
+        assert!(
+            DEFAULT_WINDOW_WIDTH - width >= 100.0,
+            "toolbar width {width} leaves less than 100px margin in a {DEFAULT_WINDOW_WIDTH}px window"
+        );
+    }
+
+    #[test]
+    fn collapsed_style_picker_is_narrower_than_six_inline_swatches() {
+        // Guards against regressing the collapse: before this change all 6 AnnotationStyle
+        // swatches (48px each) rendered inline in the toolbar, which is what pushed Reject
+        // past the default window's right edge.
+        let inline_swatches_width = 6.0 * STYLE_PICKER_BUTTON_W;
+        assert!(STYLE_PICKER_BUTTON_W < inline_swatches_width);
     }
 }
 
