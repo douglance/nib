@@ -18,6 +18,7 @@ pub enum ToolId {
     Line,
     Crop,
     Pencil,
+    Eraser,
 }
 
 impl ToolId {
@@ -35,6 +36,7 @@ impl ToolId {
             ToolId::Line,
             ToolId::Crop,
             ToolId::Pencil,
+            ToolId::Eraser,
         ]
     }
 
@@ -52,6 +54,7 @@ impl ToolId {
             ToolId::Line => "Line",
             ToolId::Crop => "Crop",
             ToolId::Pencil => "Pencil",
+            ToolId::Eraser => "Eraser",
         }
     }
 
@@ -69,6 +72,7 @@ impl ToolId {
             ToolId::Line => 'l',
             ToolId::Crop => 'c',
             ToolId::Pencil => 'p',
+            ToolId::Eraser => 'x',
         }
     }
 
@@ -86,6 +90,7 @@ impl ToolId {
             ToolId::Line => "assets/icons/line.svg",
             ToolId::Crop => "assets/icons/crop.svg",
             ToolId::Pencil => "assets/icons/pencil.svg",
+            ToolId::Eraser => "assets/icons/eraser.svg",
         }
     }
 }

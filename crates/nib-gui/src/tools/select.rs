@@ -53,6 +53,12 @@ impl SelectTool {
         &self.selected_ids
     }
 
+    /// Replace the current selection wholesale. Used by duplicate (⌘D) to select
+    /// the new clones, and by undo/redo to drop ids that no longer exist.
+    pub fn set_selection(&mut self, ids: Vec<AnnotationId>) {
+        self.selected_ids = ids;
+    }
+
     /// Clear selection and select a single annotation
     fn select(&mut self, id: AnnotationId) {
         self.selected_ids.clear();

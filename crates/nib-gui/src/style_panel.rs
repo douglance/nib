@@ -45,7 +45,7 @@ pub fn visible_rows(active_tool: ToolId, selected_kinds: &[&str]) -> RowVisibili
 impl EditorView {
     /// IDs of the currently selected annotations (empty if Select isn't active
     /// or nothing is selected).
-    fn selected_annotation_ids(&self) -> Vec<AnnotationId> {
+    pub(crate) fn selected_annotation_ids(&self) -> Vec<AnnotationId> {
         self.tool_manager
             .get_tool_as::<SelectTool>(ToolId::Select)
             .map(|t| t.selected().to_vec())
@@ -63,18 +63,23 @@ impl EditorView {
     }
 
     /// tldraw semantics: apply `f` to every selected annotation's type (a no-op
-    /// match arm handles variants that don't carry the field) and persist, but
-    /// only when there IS a selection. The caller always updates `style_state`
-    /// (the default for new annotations) regardless of selection.
+    /// match arm handles variants that don't carry the field), record a history
+    /// edit, and persist -- but only when there IS a selection. The caller always
+    /// updates `style_state` (the default for new annotations) regardless of
+    /// selection.
     fn apply_to_selected(&mut self, cx: &mut Context<Self>, f: impl Fn(&mut AnnotationType)) {
         let ids = self.selected_annotation_ids();
         if ids.is_empty() {
             return;
         }
+        let mut edits = Vec::new();
         for ann in self.annotations.iter_mut().filter(|a| ids.contains(&a.id)) {
+            let before = ann.clone();
             f(&mut ann.annotation_type);
             ann.touch();
+            edits.push(crate::history::Edit::Replaced { before, after: ann.clone() });
         }
+        self.record_edit(crate::history::Edit::Batch(edits));
         self.save_annotations(cx);
     }
 
@@ -148,10 +153,14 @@ impl EditorView {
         let ids = self.selected_annotation_ids();
         if !ids.is_empty() {
             let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let mut edits = Vec::new();
             for ann in self.annotations.iter_mut().filter(|a| ids.contains(&a.id)) {
+                let before = ann.clone();
                 ann.color.a = alpha;
                 ann.touch();
+                edits.push(crate::history::Edit::Replaced { before, after: ann.clone() });
             }
+            self.record_edit(crate::history::Edit::Batch(edits));
             self.save_annotations(cx);
         }
         cx.notify();

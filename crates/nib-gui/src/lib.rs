@@ -7,10 +7,12 @@ pub mod app;
 pub mod canvas;
 pub mod color_picker;
 pub mod elements;
+pub mod history;
 pub mod sidebar;
 pub mod style_panel;
 pub mod toolbar;
 pub mod tools;
+pub mod zorder;
 
 pub use app::NibApp;
 pub use app::{annotations_file_path, deserialize_annotation, AnnotationsFile, AnnotationGeometry, SerializedAnnotation};

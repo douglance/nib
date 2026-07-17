@@ -30,6 +30,7 @@ mod embedded_icons {
     pub static LINE: &[u8] = include_bytes!("../../../assets/icons/line.svg");
     pub static CROP: &[u8] = include_bytes!("../../../assets/icons/crop.svg");
     pub static PENCIL: &[u8] = include_bytes!("../../../assets/icons/pencil.svg");
+    pub static ERASER: &[u8] = include_bytes!("../../../assets/icons/eraser.svg");
 
     pub fn get(path: &str) -> Option<&'static [u8]> {
         match path {
@@ -44,6 +45,7 @@ mod embedded_icons {
             "assets/icons/line.svg" => Some(LINE),
             "assets/icons/crop.svg" => Some(CROP),
             "assets/icons/pencil.svg" => Some(PENCIL),
+            "assets/icons/eraser.svg" => Some(ERASER),
             _ => None,
         }
     }
@@ -93,6 +95,8 @@ use crate::tools::{
     ToolId, ToolManager, ToolMode, ToolPreview, ToolResult,
 };
 use nib_storage::nib_file::NibFile;
+use crate::history::{Edit, History};
+use crate::zorder;
 
 // Re-export serialization types from nib-serde
 pub use nib_serde::{
@@ -105,6 +109,9 @@ pub use nib_serde::{
 /// Mouse events are window-relative, so we subtract this to get canvas-relative coords
 const TOOLBAR_HEIGHT: f32 = 0.0; // Toolbar floats inside canvas, doesn't offset coordinates
 
+/// Cap on remembered undo entries (oldest dropped once exceeded)
+const HISTORY_CAP: usize = 100;
+
 /// Keyboard shortcut for toggling the style-picker popup. Not owned by any `Tool`, so it's
 /// defined here as the single source both `handle_key_down` and the toolbar badge read from.
 const STYLE_PICKER_SHORTCUT: char = 's';
@@ -114,6 +121,20 @@ const STYLE_PICKER_SHORTCUT: char = 's';
 const SEND_SHORTCUT_LABEL: &str = "⌘↵";
 const APPROVE_SHORTCUT_LABEL: &str = "⇧⌘A";
 const REJECT_SHORTCUT_LABEL: &str = "⇧⌘R";
+
+/// Labels for the keyboard-only commands added in Phase 2 (no toolbar badge --
+/// undo/redo/duplicate/z-order don't have toolbar buttons), used only by
+/// `command_shortcuts` below so `toolbar_shortcut_tests` covers them too.
+#[cfg(test)]
+const UNDO_SHORTCUT_LABEL: &str = "⌘Z";
+#[cfg(test)]
+const REDO_SHORTCUT_LABEL: &str = "⇧⌘Z";
+#[cfg(test)]
+const DUPLICATE_SHORTCUT_LABEL: &str = "⌘D";
+#[cfg(test)]
+const FORWARD_SHORTCUT_LABEL: &str = "⌘]";
+#[cfg(test)]
+const BACKWARD_SHORTCUT_LABEL: &str = "⌘[";
 
 /// (label, keystroke) pairs for every toolbar command's shortcut. Tool entries read from
 /// `ToolId::shortcut()` — the same source `handle_key_down` dispatches on and the toolbar
@@ -130,6 +151,11 @@ fn command_shortcuts() -> Vec<(&'static str, String)> {
     shortcuts.push(("Send", SEND_SHORTCUT_LABEL.to_string()));
     shortcuts.push(("Approve", APPROVE_SHORTCUT_LABEL.to_string()));
     shortcuts.push(("Reject", REJECT_SHORTCUT_LABEL.to_string()));
+    shortcuts.push(("Undo", UNDO_SHORTCUT_LABEL.to_string()));
+    shortcuts.push(("Redo", REDO_SHORTCUT_LABEL.to_string()));
+    shortcuts.push(("Duplicate", DUPLICATE_SHORTCUT_LABEL.to_string()));
+    shortcuts.push(("Forward", FORWARD_SHORTCUT_LABEL.to_string()));
+    shortcuts.push(("Backward", BACKWARD_SHORTCUT_LABEL.to_string()));
     shortcuts
 }
 
@@ -275,6 +301,8 @@ pub struct EditorView {
     /// style, arrowhead, font size, blur intensity, opacity) plus the semantic style
     /// preset/custom color. Also fed into every `ToolContext` construction site.
     pub(crate) style_state: StyleState,
+    /// GUI-side undo/redo command stack (see `history.rs`)
+    pub(crate) history: History,
     /// Whether the collapsed style/color picker popup is open
     pub(crate) style_picker_open: bool,
     /// Last modification time of the sidecar annotations file (for file watching)
@@ -412,6 +440,7 @@ impl EditorView {
             annotations: Vec::new(),
             active_tool: Tool::Rectangle,
             style_state: StyleState::default(),
+            history: History::new(HISTORY_CAP),
             style_picker_open: false,
             last_sidecar_modified: None,
             image_width,
@@ -1132,6 +1161,7 @@ impl EditorView {
                     other => other.type_name().to_string(),
                 };
                 tracing::info!("human created a{} {}", annotation.id.0, details);
+                self.record_edit(Edit::Added(annotation.clone()));
                 self.annotations.push(annotation);
                 self.save_annotations(cx);
                 cx.notify();
@@ -1143,21 +1173,28 @@ impl EditorView {
             }
             ToolResult::UpdatedText(id, new_content) => {
                 // Update text annotation content
-                if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
+                let edit = if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
+                    let before = ann.clone();
                     if let AnnotationType::Text { ref mut content, .. } = ann.annotation_type {
                         *content = new_content;
                     }
+                    ann.touch();
+                    Some(Edit::Replaced { before, after: ann.clone() })
+                } else {
+                    None
+                };
+                if let Some(edit) = edit {
+                    self.record_edit(edit);
                 }
                 self.save_annotations(cx);
                 cx.notify();
             }
             ToolResult::Deleted(id) => {
-                let type_name = self.annotations.iter()
-                    .find(|a| a.id == id)
-                    .map(|a| a.annotation_type.type_name())
-                    .unwrap_or("unknown");
-                tracing::info!("human deleted a{} {}", id.0, type_name);
-                self.annotations.retain(|a| a.id != id);
+                if let Some(pos) = self.annotations.iter().position(|a| a.id == id) {
+                    let removed = self.annotations.remove(pos);
+                    tracing::info!("human deleted a{} {}", id.0, removed.annotation_type.type_name());
+                    self.record_edit(Edit::Removed(removed));
+                }
                 self.save_annotations(cx);
                 cx.notify();
             }
@@ -1194,11 +1231,16 @@ impl EditorView {
                 delta_y,
             } => {
                 // Move all specified annotations by the delta
+                let mut edits = Vec::new();
                 for id in &ids {
                     if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == *id) {
+                        let before = ann.clone();
                         Self::move_annotation_type(&mut ann.annotation_type, delta_x, delta_y);
+                        ann.touch();
+                        edits.push(Edit::Replaced { before, after: ann.clone() });
                     }
                 }
+                self.record_edit(Edit::Batch(edits));
                 tracing::info!("human moved {}", ids.iter()
                     .filter_map(|id| self.annotations.iter().find(|a| a.id == *id))
                     .map(|a| format!("a{} {}", a.id.0, a.annotation_type.type_name()))
@@ -1208,12 +1250,20 @@ impl EditorView {
             }
             ToolResult::Resized { id, new_bounds } => {
                 // Resize the specified annotation to new bounds
-                let type_name = if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
+                let outcome = if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
+                    let before = ann.clone();
                     Self::resize_annotation_type(&mut ann.annotation_type, new_bounds);
                     ann.touch();
-                    ann.annotation_type.type_name()
+                    Some((Edit::Replaced { before, after: ann.clone() }, ann.annotation_type.type_name()))
                 } else {
-                    "unknown"
+                    None
+                };
+                let type_name = match outcome {
+                    Some((edit, type_name)) => {
+                        self.record_edit(edit);
+                        type_name
+                    }
+                    None => "unknown",
                 };
                 tracing::info!("human resized a{} {}", id.0, type_name);
                 self.save_annotations(cx);
@@ -1280,7 +1330,7 @@ impl EditorView {
     }
 
     /// Move an annotation type by the given delta
-    fn move_annotation_type(annotation_type: &mut AnnotationType, delta_x: f64, delta_y: f64) {
+    pub(crate) fn move_annotation_type(annotation_type: &mut AnnotationType, delta_x: f64, delta_y: f64) {
         match annotation_type {
             AnnotationType::Arrow {
                 ref mut start,
@@ -1940,6 +1990,7 @@ impl EditorView {
             Tool::Number,
             Tool::Highlight,
             Tool::Blur,
+            Tool::Eraser,
         ];
 
         let button_bg = rgb(0x3d3d3d);
@@ -2607,8 +2658,12 @@ impl EditorView {
             );
         }
 
-        // Add annotation overlays (skip text annotation being edited)
-        for annotation in &self.annotations {
+        // Add annotation overlays (skip text annotation being edited), painted in
+        // z_index order (ascending) so later/higher z_index annotations render on
+        // top -- required for ⌘]/⌘[ z-order to have any visible effect.
+        let mut z_ordered: Vec<&Annotation> = self.annotations.iter().collect();
+        z_ordered.sort_by_key(|a| a.z_index);
+        for annotation in z_ordered {
             // If we're editing this annotation, skip rendering it - we'll render the editable version
             let is_being_edited = self.text_input_state.as_ref()
                 .and_then(|state| state.editing_annotation_id)
@@ -2661,7 +2716,7 @@ impl EditorView {
             return;
         }
 
-        // Handle zoom keyboard shortcuts (Cmd/Ctrl + key)
+        // Handle zoom/undo/redo/duplicate/z-order keyboard shortcuts (Cmd/Ctrl + key)
         // Skip if in text input mode
         if keystroke.modifiers.platform && self.text_input_state.is_none() {
             let key = keystroke.key.as_str();
@@ -2688,6 +2743,30 @@ impl EditorView {
                 "1" => {
                     self.canvas.reset_zoom();
                     cx.notify();
+                    return;
+                }
+                // Cmd/Ctrl + Shift + Z : Redo. Cmd/Ctrl + Z : Undo.
+                "z" => {
+                    if keystroke.modifiers.shift {
+                        self.redo(cx);
+                    } else {
+                        self.undo(cx);
+                    }
+                    return;
+                }
+                // Cmd/Ctrl + D : Duplicate selection
+                "d" => {
+                    self.duplicate_selection(cx);
+                    return;
+                }
+                // Cmd/Ctrl + ] : Bring selected annotation forward one z-order step
+                "]" => {
+                    self.reorder_selected(zorder::Direction::Forward, cx);
+                    return;
+                }
+                // Cmd/Ctrl + [ : Send selected annotation backward one z-order step
+                "[" => {
+                    self.reorder_selected(zorder::Direction::Backward, cx);
                     return;
                 }
                 _ => {}
@@ -2930,7 +3009,7 @@ mod toolbar_layout_tests {
     // if those literals are edited, update these to match.
     const TOOLBAR_PADDING_X: f32 = 24.0; // px_3, both sides
     const GAP: f32 = 4.0; // gap_1, applied between each of the direct children below
-    const NUM_TOOL_BUTTONS: f32 = 10.0;
+    const NUM_TOOL_BUTTONS: f32 = 11.0; // Phase 2 added the Eraser button (margin ~108px, still passes)
     const TOOL_BUTTON_W: f32 = 56.0;
     const SEPARATOR_W: f32 = 1.0 + 8.0 * 2.0; // 1px rule + mx_2 margin both sides
     const STYLE_PICKER_BUTTON_W: f32 = 48.0; // collapsed swatch button (was 6 * 48px inline)
@@ -2941,7 +3020,7 @@ mod toolbar_layout_tests {
 
     fn toolbar_min_width() -> f32 {
         // Direct children of the toolbar container, in render order:
-        // [10 tool buttons] [separator] [style picker button] [separator] [send] [approve] [reject]
+        // [11 tool buttons] [separator] [style picker button] [separator] [send] [approve] [reject]
         let num_direct_children = NUM_TOOL_BUTTONS + 6.0;
 
         TOOLBAR_PADDING_X

@@ -158,16 +158,32 @@ impl<'a> ToolContext<'a> {
         (screen_x, screen_y)
     }
 
-    /// Find annotation at point (for selection)
+    /// Find annotation at point (for selection). Checks top-most first: sorted by
+    /// `z_index` ascending then reversed, so equal-z_index annotations (the default
+    /// for every annotation until z-order is used) still resolve most-recently-created
+    /// first, same as before z_index was rendering-significant.
     pub fn annotation_at(&self, point: Point) -> Option<&'a Annotation> {
-        self.annotations
+        let mut candidates: Vec<&Annotation> = self.annotations.iter().filter(|a| a.visible).collect();
+        candidates.sort_by_key(|a| a.z_index);
+        candidates.into_iter().rev().find(|a| {
+            let bounds = a.annotation_type.bounds();
+            bounds.contains(point)
+        })
+    }
+
+    /// Like `annotation_at`, but skips locked annotations (used by the Eraser tool
+    /// so it can't delete something the user locked in place).
+    pub fn topmost_unlocked_at(&self, point: Point) -> Option<&'a Annotation> {
+        let mut candidates: Vec<&Annotation> = self
+            .annotations
             .iter()
-            .rev() // Check top-most first (highest z-index)
-            .filter(|a| a.visible)
-            .find(|a| {
-                let bounds = a.annotation_type.bounds();
-                bounds.contains(point)
-            })
+            .filter(|a| a.visible && !a.locked)
+            .collect();
+        candidates.sort_by_key(|a| a.z_index);
+        candidates.into_iter().rev().find(|a| {
+            let bounds = a.annotation_type.bounds();
+            bounds.contains(point)
+        })
     }
 
     /// Get next number value for Number tool
