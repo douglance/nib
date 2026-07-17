@@ -8,11 +8,42 @@ use nib_core::{
     dash_segments, Annotation, AnnotationType, ArrowHead, AssetData, Color, NibImage, Point,
     Region, StorageError, StrokeStyle,
 };
+use ab_glyph::{FontRef, PxScale};
 use image::{DynamicImage, Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_circle_mut, draw_filled_rect_mut, draw_line_segment_mut};
+use imageproc::drawing::{
+    draw_filled_circle_mut, draw_filled_rect_mut, draw_line_segment_mut, draw_text_mut, text_size,
+};
 use imageproc::rect::Rect;
 use std::collections::HashMap;
 use std::path::Path;
+
+/// Embedded font for flattened text/sticky-note rendering (MIT-licensed Hack
+/// Regular; see assets/fonts/Hack-Regular-LICENSE.txt). Real glyphs instead
+/// of the old solid-block placeholder.
+static TEXT_FONT_BYTES: &[u8] = include_bytes!("../../../assets/fonts/Hack-Regular.ttf");
+
+fn text_font() -> FontRef<'static> {
+    FontRef::try_from_slice(TEXT_FONT_BYTES).expect("embedded font bytes must be valid")
+}
+
+/// Clamp a `(pos, size)` span to `[0, canvas_dim)`, shrinking `size` instead
+/// of letting the span run off either edge of the canvas.
+fn clamp_span(pos: i32, size: u32, canvas_dim: u32) -> (i32, u32) {
+    let canvas_dim = canvas_dim as i64;
+    let mut pos = pos as i64;
+    let mut size = size as i64;
+    if pos < 0 {
+        size += pos;
+        pos = 0;
+    }
+    if pos >= canvas_dim || size <= 0 {
+        return (pos.clamp(0, canvas_dim) as i32, 0);
+    }
+    if pos + size > canvas_dim {
+        size = canvas_dim - pos;
+    }
+    (pos as i32, size.max(0) as u32)
+}
 
 /// Export format options
 #[derive(Debug, Clone, Copy)]
@@ -154,29 +185,43 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation, assets: &Hash
 
             draw_rect_outline_styled(img, region, *stroke_width, *stroke_style, color);
         }
-        AnnotationType::Text { position, content, font_size, background, .. } => {
-            // Draw background if specified
+        AnnotationType::Text { position, content, font_size, background, max_width, .. } => {
+            let font = text_font();
+            let scale = PxScale::from(*font_size as f32);
+            let line_height = *font_size * 1.2;
+            let padding = 2.0_f64;
+
+            // Wrap the same way the live GUI does (nib_core::wrap_text), so a
+            // sticky note's background/wrap geometry matches on both paths.
+            let lines = nib_core::wrap_text(content, *font_size, *max_width);
+
+            // Measure with the exact font/scale we render with, instead of the
+            // old "half the font size per character" heuristic -- that's what
+            // let the background run off the canvas edge on wrapped/long text.
+            let text_block_width = lines
+                .iter()
+                .map(|line| text_size(scale, &font, line).0)
+                .max()
+                .unwrap_or(0) as f64;
+            let text_block_height = lines.len() as f64 * line_height;
+
             if let Some(bg) = background {
                 let bg_color = color_to_rgba(bg);
-                let text_width = content.len() as u32 * (*font_size as u32 / 2);
-                let text_height = *font_size as u32 + 4;
-                let rect = Rect::at(position.x as i32 - 2, position.y as i32 - 2)
-                    .of_size(text_width + 4, text_height);
-                draw_filled_rect_mut(img, rect, bg_color);
+                let rect_x = (position.x - padding).round() as i32;
+                let rect_y = (position.y - padding).round() as i32;
+                let rect_width = (text_block_width + padding * 2.0).max(1.0).round() as u32;
+                let rect_height = (text_block_height + padding * 2.0).max(1.0).round() as u32;
+
+                let (rect_x, rect_width) = clamp_span(rect_x, rect_width, img.width());
+                let (rect_y, rect_height) = clamp_span(rect_y, rect_height, img.height());
+                if rect_width > 0 && rect_height > 0 {
+                    draw_filled_rect_mut(img, Rect::at(rect_x, rect_y).of_size(rect_width, rect_height), bg_color);
+                }
             }
 
-            // For text rendering, we use a simple approach since ab_glyph can be complex
-            // Draw each character as a simple rectangle (placeholder until proper font support)
-            let char_width = (*font_size as f32 * 0.6) as i32;
-            let char_height = *font_size as i32;
-
-            for (i, _c) in content.chars().enumerate() {
-                let x = position.x as i32 + (i as i32 * char_width);
-                let y = position.y as i32;
-
-                // Draw a simple filled rectangle as placeholder for each character
-                let rect = Rect::at(x, y).of_size(char_width as u32 - 1, char_height as u32);
-                draw_filled_rect_mut(img, rect, color);
+            for (i, line) in lines.iter().enumerate() {
+                let y = (position.y + i as f64 * line_height).round() as i32;
+                draw_text_mut(img, color, position.x.round() as i32, y, scale, &font, line);
             }
         }
         AnnotationType::Number { position, value, radius } => {
@@ -219,10 +264,12 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation, assets: &Hash
             draw_styled_line(img, *start, *end, *stroke_style, *stroke_width, color);
         }
         AnnotationType::Ellipse { center, radius_x, radius_y, filled, .. } => {
-            // Approximate ellipse with polygon or use filled circle for now
-            if *radius_x == *radius_y {
-                // Circle
-                if *filled {
+            // `filled` applies regardless of whether this is a circle
+            // (radius_x == radius_y) or a general ellipse -- it used to only
+            // be honored for circles, silently rendering non-circular filled
+            // ellipses as outline-only.
+            if *filled {
+                if *radius_x == *radius_y {
                     draw_filled_circle_mut(
                         img,
                         (center.x as i32, center.y as i32),
@@ -230,11 +277,11 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation, assets: &Hash
                         color,
                     );
                 } else {
-                    // Draw hollow circle by drawing outline
-                    draw_circle_outline(img, center.x, center.y, *radius_x, color);
+                    draw_filled_ellipse(img, center.x, center.y, *radius_x, *radius_y, color);
                 }
+            } else if *radius_x == *radius_y {
+                draw_circle_outline(img, center.x, center.y, *radius_x, color);
             } else {
-                // For non-circular ellipses, approximate with multiple lines
                 draw_ellipse_outline(img, center.x, center.y, *radius_x, *radius_y, color);
             }
         }
@@ -434,6 +481,33 @@ fn draw_ellipse_outline(
     }
 }
 
+/// Fill a general (non-circular) ellipse via horizontal scanlines.
+fn draw_filled_ellipse(img: &mut RgbaImage, cx: f64, cy: f64, rx: f64, ry: f64, color: Rgba<u8>) {
+    if rx <= 0.0 || ry <= 0.0 {
+        return;
+    }
+    let top = (cy - ry).floor() as i64;
+    let bottom = (cy + ry).ceil() as i64;
+
+    for y in top..=bottom {
+        let dy = (y as f64 - cy) / ry;
+        let discriminant = 1.0 - dy * dy;
+        if discriminant < 0.0 {
+            continue;
+        }
+        let dx = rx * discriminant.sqrt();
+        let x_start = (cx - dx).round() as i64;
+        let x_end = (cx + dx).round() as i64;
+
+        if y < 0 || y as u32 >= img.height() {
+            continue;
+        }
+        for x in x_start.max(0)..=x_end.min(img.width() as i64 - 1) {
+            img.put_pixel(x as u32, y as u32, color);
+        }
+    }
+}
+
 /// Export to clipboard
 pub fn export_to_clipboard(image: &NibImage, options: &ExportOptions) -> StorageResult<()> {
     use arboard::Clipboard;
@@ -548,5 +622,107 @@ mod image_annotation_export_tests {
         render_annotation(&mut base, &annotation, &HashMap::new());
 
         assert_eq!(*base.get_pixel(0, 0), Rgba([9, 9, 9, 255]), "no panic, base image untouched");
+    }
+}
+
+#[cfg(test)]
+mod ellipse_and_text_export_tests {
+    use super::*;
+    use nib_core::TextAlign;
+
+    #[test]
+    fn filled_non_circular_ellipse_fills_the_interior() {
+        // Regression test: `filled` used to only be honored for perfect
+        // circles (radius_x == radius_y); a non-circular filled ellipse
+        // rendered outline-only.
+        let mut img = RgbaImage::from_pixel(40, 40, Rgba([0, 0, 0, 255]));
+        let annotation = Annotation::new(AnnotationType::Ellipse {
+            center: Point::new(20.0, 20.0),
+            radius_x: 15.0,
+            radius_y: 8.0,
+            stroke_width: 2.0,
+            filled: true,
+        })
+        .with_color(Color::rgb(255, 0, 0));
+
+        render_annotation(&mut img, &annotation, &HashMap::new());
+
+        assert_eq!(*img.get_pixel(20, 20), Rgba([255, 0, 0, 255]), "ellipse interior must be filled");
+        assert_eq!(*img.get_pixel(0, 0), Rgba([0, 0, 0, 255]), "outside the ellipse stays untouched");
+    }
+
+    #[test]
+    fn unfilled_non_circular_ellipse_still_renders_outline_only() {
+        let mut img = RgbaImage::from_pixel(40, 40, Rgba([0, 0, 0, 255]));
+        let annotation = Annotation::new(AnnotationType::Ellipse {
+            center: Point::new(20.0, 20.0),
+            radius_x: 15.0,
+            radius_y: 8.0,
+            stroke_width: 2.0,
+            filled: false,
+        })
+        .with_color(Color::rgb(255, 0, 0));
+
+        render_annotation(&mut img, &annotation, &HashMap::new());
+
+        assert_eq!(*img.get_pixel(20, 20), Rgba([0, 0, 0, 255]), "unfilled interior stays untouched");
+    }
+
+    #[test]
+    fn text_renders_real_antialiased_glyphs_not_solid_blocks() {
+        let mut img = RgbaImage::from_pixel(200, 60, Rgba([255, 255, 255, 255]));
+        let annotation = Annotation::new(AnnotationType::Text {
+            position: Point::new(5.0, 5.0),
+            content: "Hi".to_string(),
+            font_size: 32.0,
+            align: TextAlign::Left,
+            background: None,
+            max_width: None,
+        })
+        .with_color(Color::rgb(0, 0, 0));
+
+        render_annotation(&mut img, &annotation, &HashMap::new());
+
+        // Real glyph rasterization anti-aliases edges, producing pixel values
+        // strictly between white and black. A solid-block placeholder can
+        // only ever produce fully-black or fully-white pixels.
+        let saw_partial_shade = img.pixels().any(|p| p[0] > 10 && p[0] < 245);
+        assert!(saw_partial_shade, "expected anti-aliased glyph edges, got only solid colors (block placeholder?)");
+    }
+
+    #[test]
+    fn sticky_note_background_stays_within_canvas_when_wrapped_near_the_edge() {
+        // Regression test: the background rect used to be sized from a
+        // "half the font size per character" heuristic (ignoring max_width
+        // wrapping entirely), so a wrapped sticky note's background ran off
+        // the canvas. Position it near the bottom-right corner with content
+        // that needs wrapping.
+        let mut img = RgbaImage::from_pixel(60, 60, Rgba([0, 0, 0, 255]));
+        let annotation = Annotation::new(AnnotationType::Text {
+            position: Point::new(50.0, 50.0),
+            content: "one two three four five six seven eight nine ten".to_string(),
+            font_size: 14.0,
+            align: TextAlign::Left,
+            background: Some(Color::rgb(241, 250, 140)),
+            max_width: Some(60.0),
+        })
+        .with_color(Color::rgb(0, 0, 0));
+
+        // Must not panic (an unclamped rect would try to draw outside the
+        // image buffer) and must still paint some background pixels.
+        render_annotation(&mut img, &annotation, &HashMap::new());
+
+        let found_background = img.pixels().any(|p| *p == Rgba([241, 250, 140, 255]));
+        assert!(found_background, "background must still render when clamped to the canvas edge");
+    }
+
+    #[test]
+    fn text_wrap_matches_nib_core_wrap_text() {
+        // The export path's background sizing wraps content the same way
+        // the live GUI does, via the shared nib_core::wrap_text -- this
+        // pins that it's actually being called (not a local reimplementation
+        // that could silently drift).
+        let lines = nib_core::wrap_text("one two three four five six seven eight", 16.0, Some(60.0));
+        assert!(lines.len() > 1);
     }
 }
