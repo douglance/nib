@@ -19,6 +19,8 @@
 pub mod annotation_json;
 pub mod args;
 pub mod commands;
+pub mod sessions;
 
 pub use args::*;
 pub use commands::*;
+pub use sessions::*;
