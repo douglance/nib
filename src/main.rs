@@ -26,7 +26,11 @@ async fn run() -> Result<()> {
     // interleaved with log lines.
     let is_quiet_mode = matches!(
         &cli.command,
-        Command::Feedback(_) | Command::AwaitSubmit(_) | Command::Generate(_) | Command::Judge(_)
+        Command::Feedback(_)
+            | Command::AwaitSubmit(_)
+            | Command::Generate(_)
+            | Command::Judge(_)
+            | Command::Sessions
     );
 
     if is_mcp_server || is_quiet_mode {
@@ -106,7 +110,7 @@ async fn run() -> Result<()> {
         // Utilities
         Command::Validate(args) => cli::run_validate(&args),
         Command::List(args) => cli::run_list(&args),
-        Command::Sessions => cli::run_sessions(),
+        Command::Sessions => cli::run_sessions(&cli.format),
         #[cfg(feature = "mcp")]
         Command::McpServer(args) => cli::run_mcp_server(&args).await,
         #[cfg(not(feature = "mcp"))]

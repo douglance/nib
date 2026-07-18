@@ -3,11 +3,7 @@
 use super::args::*;
 use crate::capture::{generate_tiles, screen, TiledCapture};
 use crate::core::TileConfig;
-use crate::collab::{
-    log::SessionManager,
-    session::Session,
-    types::ClientType,
-};
+use crate::collab::{session::Session, types::ClientType};
 use crate::core::{qml, NibImage, Result, TileBounds, TileId};
 use crate::{annotations_file_path, AnnotationsFile, AnnotationGeometry};
 #[cfg(feature = "gui")]
@@ -125,68 +121,6 @@ fn generate_tiled_dirname() -> PathBuf {
     let now = chrono::Local::now();
     let dirname = format!("nib_tiled_{}", now.format("%Y%m%d_%H%M%S"));
     storage::captures_dir().join(dirname)
-}
-
-/// Execute the sessions command (list active sessions)
-pub fn run_sessions() -> Result<()> {
-    tracing::info!("Running sessions");
-
-    let manager = SessionManager::new(SessionManager::default_dir())
-        .map_err(|e| crate::core::NibError::Other(e.to_string()))?;
-
-    let sessions = manager
-        .list_sessions()
-        .map_err(|e| crate::core::NibError::Other(e.to_string()))?;
-
-    if sessions.is_empty() {
-        println!("No active collaboration sessions.");
-        println!("\nStart a session with: nib gui <image.png>");
-        return Ok(());
-    }
-
-    println!("Active collaboration sessions:");
-    println!("{}", "─".repeat(70));
-
-    for session in &sessions {
-        let created = DateTime::<Local>::from(session.created_at);
-        let modified = DateTime::<Local>::from(session.last_modified);
-
-        let path = &session.image_path;
-        let filename = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
-
-        let client_count = session.connected_clients.len();
-        let client_info = if client_count == 0 {
-            "no clients".to_string()
-        } else {
-            let types: Vec<_> = session
-                .connected_clients
-                .iter()
-                .map(|c| format!("{}", c.client_type))
-                .collect();
-            format!("{} client(s): {}", client_count, types.join(", "))
-        };
-
-        println!("  {} │ {}", filename, session.session_id);
-        println!(
-            "    Created: {} │ Modified: {}",
-            created.format("%Y-%m-%d %H:%M"),
-            modified.format("%H:%M:%S")
-        );
-        println!("    Operations: {} │ {}", session.operation_count, client_info);
-        println!("    Path: {}", path.display());
-        println!();
-    }
-
-    println!("{}", "─".repeat(70));
-    println!(
-        "Session storage: {}",
-        SessionManager::default_dir().display()
-    );
-
-    Ok(())
 }
 
 /// Execute the validate command
@@ -2981,4 +2915,3 @@ mod tests {
         );
     }
 }
-
