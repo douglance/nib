@@ -573,10 +573,22 @@ const DISPLAY_MARGIN: f32 = 24.0;
 #[cfg(target_os = "macos")]
 fn force_frontmost_application() {
     use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSApplication, NSApplicationActivationOptions, NSRunningApplication};
+    use objc2_app_kit::{
+        NSApplication, NSApplicationActivationOptions, NSRunningApplication,
+        NSFloatingWindowLevel,
+    };
 
     let main_thread = MainThreadMarker::new().expect("nib GUI must launch on the main thread");
-    NSApplication::sharedApplication(main_thread).activate();
+    let application = NSApplication::sharedApplication(main_thread);
+    // GPUI 0.2.2 maps `WindowKind::Floating` to `NSNormalWindowLevel` on macOS.
+    // Override the native level so the blocking review surface is not buried
+    // beneath the terminal that launched it.
+    for window in application.windows().iter() {
+        window.setLevel(NSFloatingWindowLevel);
+        window.orderFrontRegardless();
+        window.makeKeyAndOrderFront(None);
+    }
+    application.activate();
     NSRunningApplication::currentApplication()
         .activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
 }
