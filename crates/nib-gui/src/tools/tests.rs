@@ -1414,6 +1414,80 @@ mod text_tool_tests {
     }
 
     #[test]
+    fn test_text_tool_horizontal_drag_sets_invisible_wrap_width() {
+        let mut tool = TextTool::new();
+        let ctx = make_test_context();
+
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(100.0, 100.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        tool.handle_event(
+            ToolEvent::MouseMove {
+                position: Point::new(260.0, 135.0),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        tool.handle_event(
+            ToolEvent::MouseUp {
+                position: Point::new(260.0, 135.0),
+                button: MouseButton::Left,
+            },
+            &ctx,
+        );
+        tool.handle_event(
+            ToolEvent::KeyDown {
+                key: "T".to_string(),
+                key_char: Some('T'),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+
+        let result = tool.confirm_text(&ctx);
+        match result {
+            ToolResult::Batch(results) => match &results[0] {
+                ToolResult::Created(annotation) => match &annotation.annotation_type {
+                    AnnotationType::Text { max_width, background, .. } => {
+                        assert_eq!(*max_width, Some(160.0));
+                        assert_eq!(*background, None, "the wrap box is layout-only");
+                    }
+                    other => panic!("expected Text, got {other:?}"),
+                },
+                other => panic!("expected Created, got {other:?}"),
+            },
+            other => panic!("expected Batch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_text_tool_short_drag_keeps_auto_width() {
+        let mut tool = TextTool::new();
+        let ctx = make_test_context();
+        tool.handle_event(
+            ToolEvent::MouseDown {
+                position: Point::new(100.0, 100.0),
+                button: MouseButton::Left,
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        tool.handle_event(
+            ToolEvent::MouseMove {
+                position: Point::new(120.0, 100.0),
+                modifiers: no_modifiers(),
+            },
+            &ctx,
+        );
+        assert_eq!(tool.max_width(), None);
+    }
+
+    #[test]
     fn test_sticky_note_creation_carries_background_and_max_width() {
         let mut tool = TextTool::new();
         let ctx = make_test_context();

@@ -427,9 +427,13 @@ impl AnnotationType {
                 max_width,
                 ..
             } => {
-                // Approximate text bounds
-                let width = max_width.unwrap_or(content.len() as f64 * font_size * 0.6);
-                let height = *font_size * 1.2;
+                let lines = crate::wrap_text(content, *font_size, *max_width);
+                let width = max_width.unwrap_or_else(|| {
+                    lines.iter().map(|line| line.chars().count()).max().unwrap_or(0) as f64
+                        * font_size
+                        * 0.6
+                });
+                let height = lines.len().max(1) as f64 * font_size * 1.2;
                 Region::new(position.x, position.y, width, height)
             }
             AnnotationType::Number {
@@ -744,5 +748,20 @@ mod image_annotation_tests {
             opacity: 1.0,
         };
         assert_eq!(image.type_name(), "image");
+    }
+
+    #[test]
+    fn fixed_width_text_bounds_include_wrapped_line_height() {
+        let text = AnnotationType::Text {
+            position: Point::new(10.0, 20.0),
+            content: "one two three four five six".to_string(),
+            font_size: 16.0,
+            align: TextAlign::Left,
+            background: None,
+            max_width: Some(60.0),
+        };
+        let bounds = text.bounds();
+        assert_eq!(bounds.width, 60.0);
+        assert!(bounds.height > 16.0 * 1.2, "wrapped text must span multiple lines");
     }
 }

@@ -45,11 +45,12 @@ nib feedback image.png \
 
 **Owner-based filtering:** Annotations passed via `-a` are tagged `owner: "claude"` and excluded from the response. Only the human's new annotations are returned.
 
-**Response format:** the human's decision plus their new annotations. `decision` is
-`"approve"` (⇧⌘A), `"reject"` (⇧⌘R), or `"comment"` (plain send, ⌘↵). Approve/reject
-send even with zero annotations and close the GUI.
+**Response format:** the human's decision, optional typed `comment`, and their new
+annotations. `decision` is `"approve"` (⇧⌘A), `"reject"` (⇧⌘R), or `"comment"`
+(⌘↵). Press Enter from the canvas to focus the response field, type immediately,
+then press ⌘↵ to send. Every response sends once and closes the GUI.
 ```json
-{"decision": "comment", "annotations": [{"id": "a1", "type": "rectangle", "at": [150, 200, 300, 100], "owner": "human"}]}
+{"decision": "comment", "comment": "Tighten this spacing", "annotations": [{"id": "a1", "type": "rectangle", "at": [150, 200, 300, 100], "owner": "human"}]}
 ```
 
 **Timeout response:**
@@ -86,7 +87,7 @@ Every toolbar command has a shortcut, shown as a badge on its button.
 | Crop tool | `C` |
 | Eraser tool | `X` |
 | Sticky note tool | `K` |
-| Image tool (paste from clipboard) | `I` |
+| Image tool (clipboard or file picker) | `I` |
 | Style picker (open/close) | `S` |
 | Undo | `⌘Z` |
 | Redo | `⇧⌘Z` |
@@ -99,8 +100,9 @@ Every toolbar command has a shortcut, shown as a badge on its button.
 | Zoom out | `⌘-` |
 | Fit to view | `⌘0` |
 | 100% zoom | `⌘1` |
-| Send | `⌘↵` |
-| Send and quit | `⇧⌘↵` |
+| Focus response field | `↵` |
+| Send comment and close | `⌘↵` |
+| Return to canvas | `Esc` |
 | Approve | `⇧⌘A` |
 | Reject | `⇧⌘R` |
 
@@ -122,8 +124,13 @@ row appears (left/center/right/top/middle/bottom), applied as one undo step.
 
 - **Sticky notes** (`K`): click places a colored note; typing wraps at the
   note's max width; click-away confirms.
-- **Images** (`I`): pastes the clipboard image at the click point (scaled to
-  ≤400px on the long side); resize with the selection handles.
+- **Text** (`T`): click for auto-width text, or drag horizontally to set an
+  invisible fixed wrap width like tldraw; the width is layout-only and renders
+  no box or background.
+- **Images** (`I`): clicking pastes a valid clipboard image; with no image on
+  the clipboard, the native multi-file picker opens. Finder drag-and-drop uses
+  the same insertion path. Images scale to ≤400px on the long side and resize
+  with the selection handles.
 - **Snapping**: dragging snaps to edges/centers of the canvas and other
   annotations, with guide lines shown; hold `⌘` while dragging to bypass.
 - **Grouping**: `⌘G` groups the selection (flat, no nesting); clicking any
