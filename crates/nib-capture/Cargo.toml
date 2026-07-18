@@ -1,6 +1,6 @@
 [package]
 name = "nib-capture"
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 rust-version.workspace = true
 description = "Screen and region capture for Nib"
