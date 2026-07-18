@@ -100,15 +100,17 @@ nib feedback /tmp/nib_shot.png \
 
 ### Step 4: Parse Response
 
-Human draws annotations, then makes a decision: **Approve** (⇧⌘A), **Reject** (⇧⌘R), or plain send = **comment** (⌘Enter). You get back the decision plus their new annotations:
+Human draws annotations, then makes a decision: **Approve** (⇧⌘A), **Reject**
+(⇧⌘R), or **comment** (Enter focuses the compact response field; ⌘Enter sends).
+The GUI returns one payload and closes:
 
 ```json
-{"decision": "approve", "annotations": [{"id": "a1", "type": "arrow", "at": [150, 200, 300, 100], "owner": "human"}]}
+{"decision": "comment", "comment": "Move this closer", "annotations": [{"id": "a1", "type": "arrow", "at": [150, 200, 300, 100], "owner": "human"}]}
 ```
 
 - `"approve"` — accepted as-is; proceed. Annotations may be empty.
 - `"reject"` — not acceptable; act on the annotations, rework, re-ask with a fresh one-shot call.
-- `"comment"` — feedback without a verdict; treat the annotations as change requests.
+- `"comment"` — feedback without a verdict; act on the optional typed comment and annotations.
 
 Timeout returns `{"event": "timeout"}` (exit code 0, not an error).
 
@@ -135,7 +137,8 @@ All types accept optional `"color"` (hex). Use blue `#3b82f6` for your annotatio
 
 The GUI editor the human sees is a full annotation workspace: style panel
 (stroke width/style, fill, arrowheads, font size, blur intensity, opacity),
-undo/redo, duplicate, eraser, z-order, sticky notes, clipboard image paste,
+undo/redo, duplicate, eraser, z-order, sticky notes, fixed-width text drag,
+clipboard/file-picker/drag-and-drop image insertion,
 snapping with guides, alignment, and grouping — every command has a keyboard
 shortcut (see [full command reference](references/REFERENCE.md)).
 

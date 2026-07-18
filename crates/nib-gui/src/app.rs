@@ -4,11 +4,12 @@
 
 use gpui::{
     canvas, div, img, point, px, rgb, rgba, size, svg, App, AppContext, Application, AssetSource,
-    Bounds, Context, Div, ExternalPaths, FocusHandle, Focusable, InteractiveElement, IntoElement,
+    Bounds, ClipboardItem, Context, Div, ElementInputHandler, Entity, EntityInputHandler,
+    ExternalPaths, FocusHandle, Focusable, InteractiveElement, IntoElement,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
-    PathBuilder, Point, Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size,
+    PathBuilder, PathPromptOptions, Pixels, Point, Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size,
     StatefulInteractiveElement, Styled, StyledImage, Task, Window, WindowBounds, WindowKind,
-    WindowOptions,
+    WindowBackgroundAppearance, WindowOptions, UTF16Selection,
 };
 use gpui::prelude::FluentBuilder;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,6 +17,7 @@ use std::time::{Duration, Instant};
 use std::borrow::Cow;
 use std::fs;
 use std::path::PathBuf;
+use std::ops::Range;
 use std::time::SystemTime;
 
 /// Embedded SVG icons (compile-time included for portable binary)
@@ -221,8 +223,317 @@ pub struct TextInputState {
     pub screen_y: f32,
     /// Current text content being typed
     pub content: String,
+    /// Optional invisible wrap width, chosen by dragging with the Text tool.
+    pub max_width: Option<f64>,
     /// If editing an existing annotation, its ID
     pub editing_annotation_id: Option<AnnotationId>,
+}
+
+/// Compact, keyboard-first response field shown at the bottom of the review window.
+struct ResponseComposer {
+    focus_handle: FocusHandle,
+    content: String,
+    selected_range: Range<usize>,
+    selection_reversed: bool,
+    marked_range: Option<Range<usize>>,
+}
+
+impl ResponseComposer {
+    fn new(cx: &mut Context<Self>) -> Self {
+        Self {
+            focus_handle: cx.focus_handle(),
+            content: String::new(),
+            selected_range: 0..0,
+            selection_reversed: false,
+            marked_range: None,
+        }
+    }
+
+    fn cursor_offset(&self) -> usize {
+        if self.selection_reversed {
+            self.selected_range.start
+        } else {
+            self.selected_range.end
+        }
+    }
+
+    fn previous_boundary(&self, offset: usize) -> usize {
+        self.content[..offset].char_indices().next_back().map_or(0, |(ix, _)| ix)
+    }
+
+    fn next_boundary(&self, offset: usize) -> usize {
+        self.content[offset..]
+            .char_indices()
+            .nth(1)
+            .map_or(self.content.len(), |(ix, _)| offset + ix)
+    }
+
+    fn replace_selected(&mut self, replacement: &str, cx: &mut Context<Self>) {
+        let replacement = replacement.replace(['\r', '\n'], " ");
+        let range = self.marked_range.take().unwrap_or_else(|| self.selected_range.clone());
+        self.content.replace_range(range.clone(), &replacement);
+        let cursor = range.start + replacement.len();
+        self.selected_range = cursor..cursor;
+        self.selection_reversed = false;
+        cx.notify();
+    }
+
+    fn handle_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        let key = event.keystroke.key.as_str();
+        let platform = event.keystroke.modifiers.platform;
+
+        match (platform, key) {
+            (true, "a") => {
+                self.selected_range = 0..self.content.len();
+                self.selection_reversed = false;
+                cx.notify();
+            }
+            (true, "c") => {
+                if !self.selected_range.is_empty() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(
+                        self.content[self.selected_range.clone()].to_string(),
+                    ));
+                }
+            }
+            (true, "x") => {
+                if !self.selected_range.is_empty() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(
+                        self.content[self.selected_range.clone()].to_string(),
+                    ));
+                    self.replace_selected("", cx);
+                }
+            }
+            (true, "v") => {
+                if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                    self.replace_selected(&text, cx);
+                }
+            }
+            (false, "backspace") => {
+                if self.selected_range.is_empty() {
+                    let cursor = self.cursor_offset();
+                    self.selected_range = self.previous_boundary(cursor)..cursor;
+                }
+                self.replace_selected("", cx);
+            }
+            (false, "delete") => {
+                if self.selected_range.is_empty() {
+                    let cursor = self.cursor_offset();
+                    self.selected_range = cursor..self.next_boundary(cursor);
+                }
+                self.replace_selected("", cx);
+            }
+            (false, "left") => {
+                let cursor = if self.selected_range.is_empty() {
+                    self.previous_boundary(self.cursor_offset())
+                } else {
+                    self.selected_range.start
+                };
+                self.selected_range = cursor..cursor;
+                cx.notify();
+            }
+            (false, "right") => {
+                let cursor = if self.selected_range.is_empty() {
+                    self.next_boundary(self.cursor_offset())
+                } else {
+                    self.selected_range.end
+                };
+                self.selected_range = cursor..cursor;
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
+    fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
+        self.content[..range.start].encode_utf16().count()
+            ..self.content[..range.end].encode_utf16().count()
+    }
+
+    fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
+        let mut utf8_offset = 0;
+        let mut utf16_offset = 0;
+        let mut start = self.content.len();
+        let mut end = self.content.len();
+
+        for ch in self.content.chars() {
+            if utf16_offset >= range.start && start == self.content.len() {
+                start = utf8_offset;
+            }
+            if utf16_offset >= range.end {
+                end = utf8_offset;
+                break;
+            }
+            utf8_offset += ch.len_utf8();
+            utf16_offset += ch.len_utf16();
+        }
+        if range.start == utf16_offset {
+            start = utf8_offset;
+        }
+        if range.end >= utf16_offset {
+            end = utf8_offset;
+        }
+        start..end
+    }
+}
+
+impl EntityInputHandler for ResponseComposer {
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        actual_range: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let range = self.range_from_utf16(&range);
+        actual_range.replace(self.range_to_utf16(&range));
+        Some(self.content[range].to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: self.range_to_utf16(&self.selected_range),
+            reversed: self.selection_reversed,
+        })
+    }
+
+    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
+        self.marked_range.as_ref().map(|range| self.range_to_utf16(range))
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        self.marked_range = None;
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(range) = range {
+            self.selected_range = self.range_from_utf16(&range);
+        }
+        self.replace_selected(text, cx);
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        new_selected_range: Option<Range<usize>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = range
+            .as_ref()
+            .map(|range| self.range_from_utf16(range))
+            .unwrap_or_else(|| self.selected_range.clone());
+        self.content.replace_range(target.clone(), text);
+        let inserted = target.start..target.start + text.len();
+        self.marked_range = (!text.is_empty()).then_some(inserted.clone());
+        self.selected_range = new_selected_range
+            .as_ref()
+            .map(|range| {
+                let absolute = (inserted.start + range.start)..(inserted.start + range.end);
+                self.range_from_utf16(&absolute)
+            })
+            .unwrap_or(inserted.end..inserted.end);
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _range: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        Some(element_bounds)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _point: Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        Some(self.range_to_utf16(&(self.cursor_offset()..self.cursor_offset())).start)
+    }
+}
+
+impl Render for ResponseComposer {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let focus = self.focus_handle.clone();
+        let is_focused = focus.is_focused(window);
+        let content = self.content.clone();
+        let display_text = if content.is_empty() {
+            "Press Enter to reply".to_string()
+        } else {
+            content
+        };
+        let text_color = if self.content.is_empty() {
+            rgba(0xffffff66)
+        } else {
+            rgb(0xffffff)
+        };
+
+        div()
+            .id("response-composer")
+            .relative()
+            .h(px(44.0))
+            .w_full()
+            .px_4()
+            .flex()
+            .items_center()
+            .bg(rgba(0x181818b8))
+            .border_1()
+            .border_color(if is_focused { rgba(0x90caf9cc) } else { rgba(0xffffff24) })
+            .rounded_md()
+            .track_focus(&self.focus_handle)
+            .capture_key_down(cx.listener(Self::handle_key_down))
+            .on_click(cx.listener(|this, _event, window, _cx| {
+                this.focus_handle.focus(window);
+            }))
+            .child(
+                canvas(
+                    move |_, _, _| (),
+                    move |bounds, _, window, cx| {
+                        window.handle_input(
+                            &focus,
+                            ElementInputHandler::new(bounds, entity.clone()),
+                            cx,
+                        );
+                    },
+                )
+                .absolute()
+                .size_full(),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_color(text_color)
+                    .text_size(px(14.0))
+                    .overflow_hidden()
+                    .child(display_text),
+            )
+            .when(is_focused && !self.content.is_empty(), |this| {
+                this.child(div().w(px(1.5)).h(px(18.0)).bg(rgb(0xffffff)))
+            })
+            .child(
+                div()
+                    .ml_3()
+                    .text_color(rgba(0xffffff55))
+                    .text_size(px(11.0))
+                    .child("Cmd+Enter send · Esc canvas"),
+            )
+    }
 }
 
 /// Toast message for GUI display
@@ -255,6 +566,29 @@ pub struct NibApp {
     file_path: Option<PathBuf>,
 }
 
+const DEFAULT_WINDOW_WIDTH: f32 = 1200.0;
+const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
+const DISPLAY_MARGIN: f32 = 24.0;
+
+fn centered_window_bounds(
+    display_bounds: Option<Bounds<Pixels>>,
+    desired_size: Size<Pixels>,
+) -> Bounds<Pixels> {
+    let Some(display_bounds) = display_bounds else {
+        return Bounds::new(Point::default(), desired_size);
+    };
+
+    let available_size = size(
+        (display_bounds.size.width - px(DISPLAY_MARGIN * 2.0)).max(px(1.0)),
+        (display_bounds.size.height - px(DISPLAY_MARGIN * 2.0)).max(px(1.0)),
+    );
+    let window_size = desired_size.min(&available_size);
+    let center = display_bounds.center();
+    let half = window_size / 2.0;
+
+    Bounds::new(point(center.x - half.width, center.y - half.height), window_size)
+}
+
 impl NibApp {
     /// Create a new NibApp instance without a file
     pub fn new() -> Self {
@@ -285,21 +619,41 @@ impl NibApp {
         Application::new()
             .with_assets(Assets { base: assets_base })
             .run(move |cx: &mut App| {
-                let window_size: Size<gpui::Pixels> = size(px(1200.), px(800.));
+                let window_size: Size<Pixels> =
+                    size(px(DEFAULT_WINDOW_WIDTH), px(DEFAULT_WINDOW_HEIGHT));
+                let primary_display = cx.primary_display();
+                let window_bounds = centered_window_bounds(
+                    primary_display.as_ref().map(|display| display.bounds()),
+                    window_size,
+                );
+
+                // nib is a short, human-blocking review surface. Bring it to the
+                // foreground instead of leaving the caller hunting for its window.
+                cx.activate(true);
 
                 let options = WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(Bounds {
-                        origin: Point::default(),
-                        size: window_size,
-                    })),
-                    kind: WindowKind::PopUp, // Float on top of all windows
+                    window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    display_id: primary_display.as_ref().map(|display| display.id()),
+                    focus: true,
+                    // PopUp maps to NSNonactivatingPanel on macOS and therefore
+                    // cannot take keyboard focus. Floating stays above ordinary
+                    // windows while remaining a real activatable window.
+                    kind: WindowKind::Floating,
+                    window_background: WindowBackgroundAppearance::Blurred,
                     ..Default::default()
                 };
 
-                cx.open_window(options, |_window, cx| {
-                    cx.new(|cx| EditorView::new(file_path.clone(), cx))
+                cx.open_window(options, |window, cx| {
+                    let view = cx.new(|cx| {
+                        let view = EditorView::new(file_path.clone(), cx);
+                        view.focus_handle.focus(window);
+                        view
+                    });
+                    window.activate_window();
+                    view
                 })
                 .expect("Failed to open window");
+                cx.activate(true);
 
                 // Quit the app when the window is closed
                 cx.on_window_closed(|_cx| {
@@ -353,6 +707,8 @@ pub struct EditorView {
     canvas: Canvas,
     /// Focus handle for keyboard input
     focus_handle: FocusHandle,
+    /// Compact keyboard-first response field for one-shot feedback.
+    response_composer: Entity<ResponseComposer>,
     /// Text input state for creating/editing text annotations
     /// NOTE: Content is synced from TextTool after key events. The TextTool is the source
     /// of truth for content; this is kept for screen-space rendering coordinates.
@@ -462,8 +818,9 @@ impl EditorView {
         let canvas_width = 1200.0_f32;
         let canvas_height = 756.0_f32; // 800 - 44
 
-        // Create focus handle for keyboard input
+        // Create focus handles for canvas shortcuts and the response composer.
         let focus_handle = cx.focus_handle();
+        let response_composer = cx.new(ResponseComposer::new);
 
         // Create canvas with image dimensions
         let mut canvas = Canvas::new(image_width, image_height);
@@ -485,6 +842,7 @@ impl EditorView {
             canvas_height,
             canvas,
             focus_handle,
+            response_composer,
             text_input_state: None,
             tool_manager: ToolManager::with_all_tools(),
             nib_file,
@@ -631,7 +989,7 @@ impl EditorView {
                 div()
                     .px_4()
                     .py_2()
-                    .bg(rgba(0x000000dd))
+                    .bg(rgba(0x181818b8))
                     .rounded_lg()
                     .border_1()
                     .border_color(rgba(0xffffff33))
@@ -645,11 +1003,10 @@ impl EditorView {
     }
 
     /// Send annotations to Claude with an explicit decision (writes signal file).
-    /// "approve"/"reject" are terminal — a decision always sends (even with an empty
-    /// delta) and the process exits once the send succeeds. "comment" preserves the
-    /// original Send behavior: skip sending (and only exit) if there's nothing new.
+    /// Every feedback action is one-shot: send the decision, optional typed comment,
+    /// and annotation delta, then exit once delivery succeeds.
     fn send_decision(&mut self, decision: &str, cx: &mut Context<Self>) {
-        let is_terminal_decision = decision != "comment";
+        let comment = self.response_composer.read(cx).content.trim().to_string();
 
         // Compute delta: only human annotations not yet sent
         // Filter out Claude's own annotations (owner == "claude")
@@ -659,19 +1016,14 @@ impl EditorView {
             .filter(|a| !self.sent_annotation_ids.contains(&a.id.0) && a.owner != "claude")
             .collect();
 
-        if delta_annotations.is_empty() && !is_terminal_decision {
-            self.add_toast("No new annotations to send".to_string(), cx);
-            // Still clear question and check quit even if no new annotations
-            self.claude_question = None;
-            if self.quit_requested {
-                std::process::exit(0);
-            }
+        if decision == "comment" && delta_annotations.is_empty() && comment.is_empty() {
+            self.add_toast("Type a response or add an annotation".to_string(), cx);
             return;
         }
 
         // Build JSON payload for delta annotations
         let items = Self::annotation_items_to_json(&delta_annotations);
-        let payload = Self::build_send_payload(decision, items);
+        let payload = Self::build_send_payload(decision, (!comment.is_empty()).then_some(comment.as_str()), items);
 
         // Send via collab session (required)
         match &self.collab_session {
@@ -686,10 +1038,8 @@ impl EditorView {
                         // Clear question after sending
                         self.claude_question = None;
 
-                        // A decision is terminal: exit once sent, regardless of quit_requested.
-                        if is_terminal_decision || self.quit_requested {
-                            std::process::exit(0);
-                        }
+                        // Feedback is deliberately one-shot: one payload, then close.
+                        std::process::exit(0);
                     }
                     Err(e) => {
                         tracing::error!("Collab send failed: {}", e);
@@ -801,10 +1151,10 @@ impl EditorView {
                         .max_w(px(600.))
                         .px_6()
                         .py_4()
-                        .bg(rgba(0x1a365dff)) // Dark blue background
+                        .bg(rgba(0x181818c4))
                         .rounded_lg()
-                        .border_2()
-                        .border_color(rgba(0x3182ceff)) // Blue border
+                        .border_1()
+                        .border_color(rgba(0xffffff2a))
                         .shadow_lg()
                         .child(
                             div()
@@ -813,10 +1163,10 @@ impl EditorView {
                                 .gap_2()
                                 .child(
                                     div()
-                                        .text_color(rgba(0x90cdf4ff)) // Light blue header
+                                        .text_color(rgba(0xffffff99))
                                         .text_size(px(12.))
                                         .font_weight(gpui::FontWeight::BOLD)
-                                        .child("Claude asks:"),
+                                        .child("Review request"),
                                 )
                                 .child(
                                     div()
@@ -826,9 +1176,9 @@ impl EditorView {
                                 )
                                 .child(
                                     div()
-                                        .text_color(rgba(0x90cdf4aa)) // Muted hint
+                                        .text_color(rgba(0xffffff66))
                                         .text_size(px(11.))
-                                        .child("Press Cmd+Enter to send response"),
+                                        .child("Enter to reply · ⇧⌘A approve · ⇧⌘R reject"),
                                 ),
                         ),
                 )
@@ -897,8 +1247,16 @@ impl EditorView {
     }
 
     /// Build the one-shot feedback payload: an explicit human decision plus the annotation delta.
-    fn build_send_payload(decision: &str, items: Vec<serde_json::Value>) -> String {
-        serde_json::json!({ "decision": decision, "annotations": items }).to_string()
+    fn build_send_payload(
+        decision: &str,
+        comment: Option<&str>,
+        items: Vec<serde_json::Value>,
+    ) -> String {
+        let mut payload = serde_json::json!({ "decision": decision, "annotations": items });
+        if let Some(comment) = comment.filter(|comment| !comment.is_empty()) {
+            payload["comment"] = serde_json::json!(comment);
+        }
+        payload.to_string()
     }
 
     /// Calculate the scale factor and offset for rendering annotations
@@ -986,6 +1344,57 @@ impl EditorView {
                     .text_size(px(font_size))
                     .child(content_clone)
             )
+    }
+
+    fn render_wrapped_text_with_outline(
+        content: String,
+        x: f32,
+        y: f32,
+        font_size: f32,
+        max_width: f32,
+        text_color: gpui::Hsla,
+    ) -> impl IntoElement {
+        let lines = nib_core::wrap_text(&content, font_size as f64, Some(max_width as f64));
+        let outline_offset = (font_size * 0.08).max(1.5);
+        let outline_color = rgba(0x000000cc);
+        let offsets = [
+            (-outline_offset, -outline_offset),
+            (0.0, -outline_offset),
+            (outline_offset, -outline_offset),
+            (-outline_offset, 0.0),
+            (outline_offset, 0.0),
+            (-outline_offset, outline_offset),
+            (0.0, outline_offset),
+            (outline_offset, outline_offset),
+        ];
+        div()
+            .absolute()
+            .left(px(x))
+            .top(px(y))
+            .w(px(max_width))
+            .flex()
+            .flex_col()
+            .children(lines.into_iter().map(move |line| {
+                let main_line = line.clone();
+                div()
+                    .relative()
+                    .h(px(font_size * 1.2))
+                    .children(offsets.iter().map(move |(dx, dy)| {
+                        div()
+                            .absolute()
+                            .left(px(*dx))
+                            .top(px(*dy))
+                            .text_color(outline_color)
+                            .text_size(px(font_size))
+                            .child(line.clone())
+                    }))
+                    .child(
+                        div()
+                            .text_color(text_color)
+                            .text_size(px(font_size))
+                            .child(main_line),
+                    )
+            }))
     }
 
     /// Render a sticky note: an opaque rounded background rect sized to the
@@ -1317,10 +1726,19 @@ impl EditorView {
                         // Adjust for font height (text is drawn with baseline at position)
                         let (scale, _, _) = self.calculate_scale_and_offset();
                         let adjusted_screen_y = screen_y + (self.style_state.font_size as f32 * scale);
+                        let max_width = editing_annotation_id.and_then(|id| {
+                            self.annotations.iter().find(|annotation| annotation.id == id).and_then(|annotation| {
+                                match &annotation.annotation_type {
+                                    AnnotationType::Text { max_width, .. } => *max_width,
+                                    _ => None,
+                                }
+                            })
+                        });
                         self.text_input_state = Some(TextInputState {
                             screen_x,
                             screen_y: adjusted_screen_y,
                             content: initial_content,
+                            max_width,
                             editing_annotation_id,
                         });
                     }
@@ -1952,8 +2370,11 @@ impl EditorView {
         let screen_y: f32 = mouse_pos.y.into();
         let (img_x, img_y) = self.screen_to_image_coords(screen_x, screen_y);
 
-        let (pairs, skipped) =
-            images_from_dropped_paths(paths.paths(), NibPoint::new(img_x, img_y));
+        self.insert_image_paths(paths.paths(), NibPoint::new(img_x, img_y), cx);
+    }
+
+    fn insert_image_paths(&mut self, paths: &[PathBuf], base: NibPoint, cx: &mut Context<Self>) {
+        let (pairs, skipped) = images_from_dropped_paths(paths, base);
 
         if !pairs.is_empty() {
             let results = pairs
@@ -1972,6 +2393,36 @@ impl EditorView {
         if skipped > 0 {
             self.add_toast(format!("Skipped {skipped} non-image file(s)"), cx);
         }
+    }
+
+    /// Open the native picker when Image is clicked without a clipboard image.
+    fn prompt_for_image_files(&mut self, base: NibPoint, cx: &mut Context<Self>) {
+        let prompt = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Insert image".into()),
+        });
+        cx.spawn(async move |editor, cx| {
+            match prompt.await {
+                Ok(Ok(Some(paths))) => {
+                    editor.update(cx, |this, cx| this.insert_image_paths(&paths, base, cx))?;
+                }
+                Ok(Ok(None)) => {}
+                Ok(Err(error)) => {
+                    editor.update(cx, |this, cx| {
+                        this.add_toast(format!("Image picker failed: {error}"), cx)
+                    })?;
+                }
+                Err(error) => {
+                    editor.update(cx, |this, cx| {
+                        this.add_toast(format!("Image picker closed: {error}"), cx)
+                    })?;
+                }
+            }
+            anyhow::Ok(())
+        })
+        .detach();
     }
 
     /// Handle mouse down event on canvas
@@ -2018,7 +2469,16 @@ impl EditorView {
             );
             self.tool_manager.handle_event(tool_event, &ctx)
         };
+        let open_image_picker = self.active_tool == ToolId::Image && matches!(result, ToolResult::Ignored);
         self.process_tool_result(result, cx);
+        if open_image_picker {
+            self.prompt_for_image_files(NibPoint::new(img_x, img_y), cx);
+        }
+        if let Some(ref mut state) = self.text_input_state {
+            if let Some(text_tool) = self.tool_manager.get_tool_as::<TextTool>(ToolId::Text) {
+                state.max_width = text_tool.max_width().or(state.max_width);
+            }
+        }
     }
 
     /// Handle mouse move event on canvas
@@ -2050,6 +2510,11 @@ impl EditorView {
             self.tool_manager.handle_event(tool_event, &ctx)
         };
         self.process_tool_result(result, cx);
+        if let Some(ref mut state) = self.text_input_state {
+            if let Some(text_tool) = self.tool_manager.get_tool_as::<TextTool>(ToolId::Text) {
+                state.max_width = text_tool.max_width().or(state.max_width);
+            }
+        }
     }
 
     /// Handle mouse up event on canvas
@@ -2145,7 +2610,7 @@ impl EditorView {
         // Outer wrapper for centering at bottom
         div()
             .absolute()
-            .bottom_4()
+            .bottom(px(76.0))
             .left_0()
             .right_0()
             .flex()
@@ -2156,7 +2621,7 @@ impl EditorView {
                     .flex()
                     .flex_row()
                     .h(px(64.))
-                    .bg(rgba(0x2d2d2dee)) // Semi-transparent background
+                    .bg(rgba(0x181818b8))
                     .rounded_xl()
                     .border_1()
                     .border_color(rgba(0x00000044))
@@ -2522,14 +2987,25 @@ impl EditorView {
                         .into_any_element()
                     }
                     // Ordinary text: outlined for legibility over an arbitrary image
-                    None => Self::render_text_with_outline(
-                        content.clone(),
-                        sx,
-                        sy,
-                        scaled_font_size,
-                        border_color.into(),
-                    )
-                    .into_any_element(),
+                    None => match max_width {
+                        Some(max_width) => Self::render_wrapped_text_with_outline(
+                            content.clone(),
+                            sx,
+                            sy,
+                            scaled_font_size,
+                            *max_width as f32 * scale,
+                            border_color.into(),
+                        )
+                        .into_any_element(),
+                        None => Self::render_text_with_outline(
+                            content.clone(),
+                            sx,
+                            sy,
+                            scaled_font_size,
+                            border_color.into(),
+                        )
+                        .into_any_element(),
+                    },
                 }
             }
             AnnotationType::Number { position, value, radius } => {
@@ -2881,7 +3357,7 @@ impl EditorView {
 
     /// Render the canvas area with image and annotations
     fn render_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let background_color = rgb(0x1e1e1e);
+        let background_color = rgba(0x12121255);
         let text_color = rgb(0xcccccc);
 
         let mut canvas = div()
@@ -2891,9 +3367,6 @@ impl EditorView {
             .relative()
             .overflow_hidden()
             .track_focus(&self.focus_handle)
-            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                this.handle_key_down(event, window, cx);
-            }))
             .on_mouse_down(MouseButton::Left, cx.listener(|this, event, window, cx| {
                 // Grab focus so keyboard shortcuts work
                 this.focus_handle.focus(window);
@@ -2993,8 +3466,40 @@ impl EditorView {
     }
 
     /// Handle keyboard input
-    fn handle_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
+        let response_focused = self.response_composer.read(cx).focus_handle.is_focused(window);
+
+        // Decision shortcuts remain available from either focus target.
+        if keystroke.modifiers.platform && keystroke.modifiers.shift && keystroke.key.as_str() == "a" {
+            self.approve_to_claude(cx);
+            return;
+        }
+        if keystroke.modifiers.platform && keystroke.modifiers.shift && keystroke.key.as_str() == "r" {
+            self.reject_to_claude(cx);
+            return;
+        }
+
+        if response_focused {
+            if keystroke.modifiers.platform && keystroke.key.as_str() == "enter" {
+                self.send_to_claude(cx);
+            } else if keystroke.key.as_str() == "escape" {
+                self.focus_handle.focus(window);
+            }
+            // Text editing is owned by ResponseComposer while it has focus.
+            return;
+        }
+
+        // Plain Enter moves directly from canvas shortcuts into the response field.
+        if keystroke.key.as_str() == "enter"
+            && !keystroke.modifiers.platform
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+            && self.text_input_state.is_none()
+        {
+            self.response_composer.read(cx).focus_handle.focus(window);
+            return;
+        }
 
         // Handle Shift+Cmd+Enter to send to Claude and quit
         if keystroke.modifiers.shift && keystroke.modifiers.platform && keystroke.key.as_str() == "enter" {
@@ -3005,18 +3510,6 @@ impl EditorView {
         // Handle Cmd+Enter to send to Claude
         if keystroke.modifiers.platform && keystroke.key.as_str() == "enter" {
             self.send_to_claude(cx);
-            return;
-        }
-
-        // Handle Cmd+Shift+A to approve
-        if keystroke.modifiers.platform && keystroke.modifiers.shift && keystroke.key.as_str() == "a" {
-            self.approve_to_claude(cx);
-            return;
-        }
-
-        // Handle Cmd+Shift+R to reject
-        if keystroke.modifiers.platform && keystroke.modifiers.shift && keystroke.key.as_str() == "r" {
-            self.reject_to_claude(cx);
             return;
         }
 
@@ -3224,20 +3717,27 @@ impl EditorView {
             (outline_offset, outline_offset),
         ];
 
-        let content = input_state.content.clone();
+        let lines = nib_core::wrap_text(
+            &input_state.content,
+            font_size as f64,
+            input_state.max_width,
+        );
+        let scaled_max_width = input_state.max_width.map(|width| width as f32 * scale);
 
-        div()
+        let mut editor = div()
             .absolute()
             .left(px(canvas_x))
             .top(px(text_y))
             .flex()
-            .flex_row()
-            .items_center()
-            // Container for text with outline
-            .child(
+            .flex_col();
+        if let Some(width) = scaled_max_width {
+            editor = editor.w(px(width));
+        }
+
+        editor
+            .children(lines.into_iter().map(|content| {
                 div()
                     .relative()
-                    // Shadow layers
                     .children(offsets.iter().map(|(dx, dy)| {
                         div()
                             .absolute()
@@ -3247,16 +3747,14 @@ impl EditorView {
                             .text_size(px(scaled_font_size))
                             .child(content.clone())
                     }))
-                    // Main text
                     .child(
                         div()
                             .text_color(text_color)
                             .text_size(px(scaled_font_size))
                             .child(content.clone())
                     )
-            )
+            }))
             .child(
-                // Blinking cursor - thin vertical bar after text
                 div()
                     .w(px(2.))
                     .h(px(scaled_font_size))
@@ -3280,7 +3778,7 @@ mod feedback_payload_tests {
     #[test]
     fn decision_field_is_exact_for_each_path() {
         for decision in ["approve", "reject", "comment"] {
-            let payload = EditorView::build_send_payload(decision, vec![]);
+            let payload = EditorView::build_send_payload(decision, None, vec![]);
             let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
             assert_eq!(parsed["decision"], decision);
         }
@@ -3288,7 +3786,7 @@ mod feedback_payload_tests {
 
     #[test]
     fn approve_with_zero_annotations_yields_empty_annotations_array() {
-        let payload = EditorView::build_send_payload("approve", vec![]);
+        let payload = EditorView::build_send_payload("approve", None, vec![]);
         let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(
             parsed,
@@ -3307,10 +3805,48 @@ mod feedback_payload_tests {
         assert_eq!(items[0]["at"], serde_json::json!([1.0, 2.0]));
         assert_eq!(items[0]["content"], "5");
 
-        let payload = EditorView::build_send_payload("comment", items);
+        let payload = EditorView::build_send_payload("comment", None, items);
         let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(parsed["decision"], "comment");
         assert_eq!(parsed["annotations"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn typed_comment_is_optional_and_preserved() {
+        let payload = EditorView::build_send_payload("comment", Some("ship the tighter spacing"), vec![]);
+        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(parsed["comment"], "ship the tighter spacing");
+
+        let payload = EditorView::build_send_payload("approve", None, vec![]);
+        let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
+        assert!(parsed.get("comment").is_none());
+    }
+}
+
+#[cfg(test)]
+mod window_layout_tests {
+    use super::*;
+
+    #[test]
+    fn window_is_centered_inside_offset_primary_display() {
+        let display = Bounds::new(point(px(1440.0), px(120.0)), size(px(1728.0), px(1117.0)));
+        let bounds = centered_window_bounds(
+            Some(display),
+            size(px(DEFAULT_WINDOW_WIDTH), px(DEFAULT_WINDOW_HEIGHT)),
+        );
+        assert_eq!(bounds.size, size(px(1200.0), px(800.0)));
+        assert_eq!(bounds.center(), display.center());
+    }
+
+    #[test]
+    fn window_clamps_to_small_display_with_margin() {
+        let display = Bounds::new(point(px(0.0), px(0.0)), size(px(800.0), px(600.0)));
+        let bounds = centered_window_bounds(
+            Some(display),
+            size(px(DEFAULT_WINDOW_WIDTH), px(DEFAULT_WINDOW_HEIGHT)),
+        );
+        assert_eq!(bounds.size, size(px(752.0), px(552.0)));
+        assert_eq!(bounds.center(), display.center());
     }
 }
 
@@ -3478,9 +4014,19 @@ impl Render for EditorView {
             .id("editor-container")
             .size_full()
             .relative()
+            .bg(rgba(0x10101066))
+            .capture_key_down(cx.listener(Self::handle_key_down))
             .child(self.render_canvas(cx))
             .child(self.render_toolbar(cx)) // Toolbar floats over canvas
             .child(self.render_toasts()) // Toasts in top-right corner
             .child(self.render_claude_question()) // Claude question banner at top center
+            .child(
+                div()
+                    .absolute()
+                    .left(px(180.0))
+                    .right(px(180.0))
+                    .bottom(px(18.0))
+                    .child(self.response_composer.clone()),
+            )
     }
 }
