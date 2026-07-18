@@ -1,6 +1,6 @@
 [package]
 name = "nib-storage"
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 rust-version.workspace = true
 description = "File I/O, SQLite index, and export for Nib"

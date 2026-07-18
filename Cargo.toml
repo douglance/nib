@@ -80,7 +80,7 @@ insta = { version = "1.41", features = ["yaml"] }
 
 [package]
 name = "nib"
-version = "0.2.2"
+version = "0.2.3"
 edition.workspace = true
 rust-version.workspace = true
 description = "Fast, native screenshot annotation tool with semantic visual communication"
