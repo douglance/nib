@@ -97,8 +97,8 @@ impl Tool for EraserTool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::Modifiers;
+    use super::*;
     use nib_core::{Annotation, AnnotationStyle, AnnotationType, Color, Point, Region};
 
     fn ctx(annotations: &[Annotation]) -> ToolContext<'_> {

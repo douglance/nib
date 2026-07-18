@@ -258,10 +258,7 @@ pub enum CollabMessage {
     Error { message: String },
 
     /// Display a message/question to the user in the GUI
-    ShowMessage {
-        message: String,
-        source: String,
-    },
+    ShowMessage { message: String, source: String },
 
     /// Add multiple annotations at once (for batch Claude annotations)
     AddAnnotations {
@@ -320,10 +317,7 @@ impl Hash for CollabOperation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AnnotationOp {
     /// Add a new annotation
-    Add {
-        id: u64,
-        data: AnnotationData,
-    },
+    Add { id: u64, data: AnnotationData },
 
     /// Remove an annotation
     Remove { id: u64 },

@@ -93,10 +93,17 @@ impl TextTool {
 
         if let Some(id) = editing_id {
             // Return update result with content - EditorView handles the actual update
-            ToolResult::Batch(vec![ToolResult::UpdatedText(id, content), ToolResult::ExitMode])
+            ToolResult::Batch(vec![
+                ToolResult::UpdatedText(id, content),
+                ToolResult::ExitMode,
+            ])
         } else {
             let (background, max_width, color) = match sticky_style {
-                Some(style) => (Some(style.background), Some(style.max_width), style.text_color),
+                Some(style) => (
+                    Some(style.background),
+                    Some(style.max_width),
+                    style.text_color,
+                ),
                 None => (None, dragged_max_width, ctx.effective_color()),
             };
             let annotation = Annotation::new(AnnotationType::Text {
@@ -170,34 +177,35 @@ impl Tool for TextTool {
                     ToolResult::Ignored
                 }
             }
-            ToolEvent::MouseUp { button: MouseButton::Left, .. } if self.state.active => {
+            ToolEvent::MouseUp {
+                button: MouseButton::Left,
+                ..
+            } if self.state.active => {
                 self.drag_start = None;
                 ToolResult::Handled
             }
-            ToolEvent::KeyDown { key, key_char, .. } if self.state.active => {
-                match key.as_str() {
-                    "enter" | "return" => self.confirm_text(ctx),
-                    "escape" => {
-                        self.state.reset();
-                        ToolResult::ExitMode
-                    }
-                    "backspace" => {
-                        self.state.backspace();
+            ToolEvent::KeyDown { key, key_char, .. } if self.state.active => match key.as_str() {
+                "enter" | "return" => self.confirm_text(ctx),
+                "escape" => {
+                    self.state.reset();
+                    ToolResult::ExitMode
+                }
+                "backspace" => {
+                    self.state.backspace();
+                    ToolResult::Handled
+                }
+                _ => {
+                    if let Some(ch) = key_char {
+                        self.state.content.push(ch);
                         ToolResult::Handled
-                    }
-                    _ => {
-                        if let Some(ch) = key_char {
-                            self.state.content.push(ch);
-                            ToolResult::Handled
-                        } else if key.len() == 1 {
-                            self.state.content.push_str(&key);
-                            ToolResult::Handled
-                        } else {
-                            ToolResult::Ignored
-                        }
+                    } else if key.len() == 1 {
+                        self.state.content.push_str(&key);
+                        ToolResult::Handled
+                    } else {
+                        ToolResult::Ignored
                     }
                 }
-            }
+            },
             ToolEvent::Deactivated => {
                 if self.state.active && !self.state.content.is_empty() {
                     return self.confirm_text(ctx);

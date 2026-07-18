@@ -1,7 +1,7 @@
 //! Annotation tool toolbar
 
-use nib_core::Color;
 use crate::tools::ToolId;
+use nib_core::Color;
 
 /// Type alias for backward compatibility during migration
 /// Use ToolId directly for new code

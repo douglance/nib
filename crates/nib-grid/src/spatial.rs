@@ -28,9 +28,9 @@ pub fn build_grid_index(
     let spacing = config.spacing as f64;
 
     // Determine bounds (full image or specified region)
-    let bounds = region.cloned().unwrap_or_else(|| {
-        TileBounds::from_corners(0.0, 0.0, width as f64, height as f64)
-    });
+    let bounds = region
+        .cloned()
+        .unwrap_or_else(|| TileBounds::from_corners(0.0, 0.0, width as f64, height as f64));
 
     // Generate vertical lines (x-axis)
     let start_x = (bounds.min_x / spacing).floor() * spacing;
@@ -44,12 +44,8 @@ pub fn build_grid_index(
             let line = GridLine::vertical(x, bounds.min_y, bounds.max_y, is_major);
 
             // Thin bounding box for R-tree (1px wide around the line)
-            let line_bounds = TileBounds::from_corners(
-                x - 0.5,
-                bounds.min_y,
-                x + 0.5,
-                bounds.max_y,
-            );
+            let line_bounds =
+                TileBounds::from_corners(x - 0.5, bounds.min_y, x + 0.5, bounds.max_y);
 
             entries.push(GridEntry {
                 line,
@@ -73,12 +69,8 @@ pub fn build_grid_index(
             let line = GridLine::horizontal(y, bounds.min_x, bounds.max_x, is_major);
 
             // Thin bounding box for R-tree (1px tall around the line)
-            let line_bounds = TileBounds::from_corners(
-                bounds.min_x,
-                y - 0.5,
-                bounds.max_x,
-                y + 0.5,
-            );
+            let line_bounds =
+                TileBounds::from_corners(bounds.min_x, y - 0.5, bounds.max_x, y + 0.5);
 
             entries.push(GridEntry {
                 line,
@@ -99,10 +91,8 @@ pub fn build_grid_index(
 /// For a 1920x1080 image with 10px spacing, we have ~300 lines total.
 /// But if we query a 100x100 region, we only get ~20 lines back.
 pub fn lines_in_region<'a>(index: &'a RTree<GridEntry>, region: &TileBounds) -> Vec<&'a GridEntry> {
-    let envelope = rstar::AABB::from_corners(
-        [region.min_x, region.min_y],
-        [region.max_x, region.max_y],
-    );
+    let envelope =
+        rstar::AABB::from_corners([region.min_x, region.min_y], [region.max_x, region.max_y]);
 
     index.locate_in_envelope_intersecting(&envelope).collect()
 }

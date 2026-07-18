@@ -163,7 +163,8 @@ impl<'a> ToolContext<'a> {
     /// for every annotation until z-order is used) still resolve most-recently-created
     /// first, same as before z_index was rendering-significant.
     pub fn annotation_at(&self, point: Point) -> Option<&'a Annotation> {
-        let mut candidates: Vec<&Annotation> = self.annotations.iter().filter(|a| a.visible).collect();
+        let mut candidates: Vec<&Annotation> =
+            self.annotations.iter().filter(|a| a.visible).collect();
         candidates.sort_by_key(|a| a.z_index);
         candidates.into_iter().rev().find(|a| {
             let bounds = a.annotation_type.bounds();

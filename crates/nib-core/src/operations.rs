@@ -6,14 +6,10 @@ use super::types::*;
 #[derive(Debug, Clone)]
 pub enum Operation {
     /// Add an annotation
-    AddAnnotation {
-        annotation: Annotation,
-    },
+    AddAnnotation { annotation: Annotation },
 
     /// Remove an annotation
-    RemoveAnnotation {
-        annotation: Annotation,
-    },
+    RemoveAnnotation { annotation: Annotation },
 
     /// Modify an annotation (stores before state)
     ModifyAnnotation {
@@ -55,7 +51,11 @@ impl Operation {
                 before: after.clone(),
                 after: before.clone(),
             },
-            Operation::MoveAnnotation { id, delta_x, delta_y } => Operation::MoveAnnotation {
+            Operation::MoveAnnotation {
+                id,
+                delta_x,
+                delta_y,
+            } => Operation::MoveAnnotation {
                 id: *id,
                 delta_x: -*delta_x,
                 delta_y: -*delta_y,

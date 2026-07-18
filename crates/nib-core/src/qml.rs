@@ -222,10 +222,7 @@ impl<R: Read> QmlParser<R> {
         let start = self.parse_point(start_str)?;
 
         // End coordinates may be followed by label/severity
-        let end_str = end_part
-            .split(['-', '!'])
-            .next()
-            .unwrap_or(end_part);
+        let end_str = end_part.split(['-', '!']).next().unwrap_or(end_part);
         let end = self.parse_point(end_str)?;
 
         let remaining_start = end_str.len();
@@ -352,10 +349,7 @@ impl<R: Read> QmlParser<R> {
         let end_part = &params[arrow_sep + sep_len..];
 
         let start = self.parse_point(start_str)?;
-        let end_str = end_part
-            .split(['-', '!'])
-            .next()
-            .unwrap_or(end_part);
+        let end_str = end_part.split(['-', '!']).next().unwrap_or(end_part);
         let end = self.parse_point(end_str)?;
 
         let remaining_start = end_str.len();
@@ -373,10 +367,7 @@ impl<R: Read> QmlParser<R> {
 
     fn parse_ellipse<'a>(&self, params: &'a str) -> QmlResult<(AnnotationType, &'a str)> {
         // Format: cx,cy,rx,ry or cx,cy,r (circle)
-        let coords: Vec<&str> = params
-            .split([',', '-', '!'])
-            .take(4)
-            .collect();
+        let coords: Vec<&str> = params.split([',', '-', '!']).take(4).collect();
 
         if coords.len() < 3 {
             return Err(self.parse_error("Ellipse requires at least cx,cy,r"));

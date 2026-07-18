@@ -74,10 +74,7 @@ pub enum AnnotationInput {
     },
 
     /// Blur annotation (obscures a region)
-    Blur {
-        at: [f64; 2],
-        size: [f64; 2],
-    },
+    Blur { at: [f64; 2], size: [f64; 2] },
 }
 
 impl AnnotationInput {
@@ -96,7 +93,12 @@ impl AnnotationInput {
                 (type_data, color.clone())
             }
 
-            AnnotationInput::Rectangle { at, size, color, filled } => {
+            AnnotationInput::Rectangle {
+                at,
+                size,
+                color,
+                filled,
+            } => {
                 let type_data = AnnotationTypeData::Box {
                     x: at[0],
                     y: at[1],
@@ -144,7 +146,12 @@ impl AnnotationInput {
                 (type_data, color.clone())
             }
 
-            AnnotationInput::Ellipse { center, radius, color, filled } => {
+            AnnotationInput::Ellipse {
+                center,
+                radius,
+                color,
+                filled,
+            } => {
                 let type_data = AnnotationTypeData::Ellipse {
                     center_x: center[0],
                     center_y: center[1],
@@ -246,7 +253,12 @@ mod tests {
         assert_eq!(annotations.len(), 1);
 
         match &annotations[0] {
-            AnnotationInput::Rectangle { at, size, color, filled } => {
+            AnnotationInput::Rectangle {
+                at,
+                size,
+                color,
+                filled,
+            } => {
                 assert_eq!(at, &[50.0, 50.0]);
                 assert_eq!(size, &[100.0, 80.0]);
                 assert_eq!(color.as_deref(), Some("#00ff00"));
@@ -309,7 +321,13 @@ mod tests {
 
         let data = input.to_annotation_data();
         match data.annotation_type {
-            AnnotationTypeData::Arrow { start_x, start_y, end_x, end_y, .. } => {
+            AnnotationTypeData::Arrow {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                ..
+            } => {
                 assert_eq!(start_x, 10.0);
                 assert_eq!(start_y, 20.0);
                 assert_eq!(end_x, 100.0);
@@ -351,7 +369,12 @@ mod tests {
         assert_eq!(annotations.len(), 1);
 
         match &annotations[0] {
-            AnnotationInput::Ellipse { center, radius, color, filled } => {
+            AnnotationInput::Ellipse {
+                center,
+                radius,
+                color,
+                filled,
+            } => {
                 assert_eq!(center, &[100.0, 100.0]);
                 assert_eq!(radius, &[50.0, 30.0]);
                 assert!(color.is_none());

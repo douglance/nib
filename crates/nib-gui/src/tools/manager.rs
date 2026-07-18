@@ -69,15 +69,16 @@ impl ToolManager {
     pub fn set_active_tool(&mut self, id: ToolId, ctx: &ToolContext) -> Option<ToolResult> {
         if id != self.active_tool_id {
             // Deactivate old tool and capture any result
-            let deactivation_result = if let Some(old_tool) = self.tools.get_mut(&self.active_tool_id) {
-                let result = old_tool.handle_event(ToolEvent::Deactivated, ctx);
-                match result {
-                    ToolResult::Ignored | ToolResult::Handled => None,
-                    other => Some(other),
-                }
-            } else {
-                None
-            };
+            let deactivation_result =
+                if let Some(old_tool) = self.tools.get_mut(&self.active_tool_id) {
+                    let result = old_tool.handle_event(ToolEvent::Deactivated, ctx);
+                    match result {
+                        ToolResult::Ignored | ToolResult::Handled => None,
+                        other => Some(other),
+                    }
+                } else {
+                    None
+                };
 
             self.active_tool_id = id;
 

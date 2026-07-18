@@ -285,7 +285,8 @@ impl CollabServer {
                 // Update last_seen for client
                 {
                     let mut state = self.state.write();
-                    if let Some(client) = state.clients.iter_mut().find(|c| c.client_id == client_id)
+                    if let Some(client) =
+                        state.clients.iter_mut().find(|c| c.client_id == client_id)
                     {
                         client.touch();
                     }
@@ -307,10 +308,9 @@ impl CollabServer {
 
             CollabMessage::ShowMessage { message, source } => {
                 // Broadcast to all clients (especially GUI)
-                let _ = self.broadcast_tx.send(CollabMessage::ShowMessage {
-                    message,
-                    source,
-                });
+                let _ = self
+                    .broadcast_tx
+                    .send(CollabMessage::ShowMessage { message, source });
                 None
             }
 
@@ -319,8 +319,7 @@ impl CollabServer {
                 client_id: _,
             } => {
                 // Generate IDs and create operations for each annotation
-                static NEXT_ID: std::sync::atomic::AtomicU64 =
-                    std::sync::atomic::AtomicU64::new(1);
+                static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
                 for data in annotations {
                     let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -329,10 +328,7 @@ impl CollabServer {
                         state.clock.increment()
                     };
 
-                    let op = CollabOperation::new(
-                        timestamp,
-                        AnnotationOp::Add { id, data },
-                    );
+                    let op = CollabOperation::new(timestamp, AnnotationOp::Add { id, data });
 
                     // Persist to log
                     {
@@ -353,7 +349,9 @@ impl CollabServer {
 
             CollabMessage::RequestQuit { client_id } => {
                 // Broadcast quit request to all clients (GUI will handle it)
-                let _ = self.broadcast_tx.send(CollabMessage::RequestQuit { client_id });
+                let _ = self
+                    .broadcast_tx
+                    .send(CollabMessage::RequestQuit { client_id });
                 None
             }
 
@@ -496,7 +494,8 @@ pub async fn start_socket_server(
 
     // Remove existing socket file
     if socket_path.exists() {
-        std::fs::remove_file(socket_path).map_err(|e| format!("Failed to remove old socket: {}", e))?;
+        std::fs::remove_file(socket_path)
+            .map_err(|e| format!("Failed to remove old socket: {}", e))?;
     }
 
     let name = socket_path
@@ -549,10 +548,7 @@ async fn handle_client(
         while let Ok(msg) = broadcast_rx.recv().await {
             if let Ok(json) = serde_json::to_string(&msg) {
                 let mut w = writer_clone.lock().await;
-                if w.write_all(format!("{}\n", json).as_bytes())
-                    .await
-                    .is_err()
-                {
+                if w.write_all(format!("{}\n", json).as_bytes()).await.is_err() {
                     break;
                 }
                 // Flush immediately so CLI receives the message
@@ -570,8 +566,8 @@ async fn handle_client(
         match reader.read_line(&mut line).await {
             Ok(0) => break, // EOF
             Ok(_) => {
-                let msg: CollabMessage = serde_json::from_str(&line)
-                    .map_err(|e| format!("Invalid message: {}", e))?;
+                let msg: CollabMessage =
+                    serde_json::from_str(&line).map_err(|e| format!("Invalid message: {}", e))?;
 
                 if let Some(response) = server.process_message(msg) {
                     use tokio::io::AsyncWriteExt;

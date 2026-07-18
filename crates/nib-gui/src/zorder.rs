@@ -76,12 +76,28 @@ impl EditorView {
             b.touch();
         }
 
-        let after_a = self.annotations.iter().find(|a| a.id == id_a).cloned().unwrap();
-        let after_b = self.annotations.iter().find(|a| a.id == id_b).cloned().unwrap();
+        let after_a = self
+            .annotations
+            .iter()
+            .find(|a| a.id == id_a)
+            .cloned()
+            .unwrap();
+        let after_b = self
+            .annotations
+            .iter()
+            .find(|a| a.id == id_b)
+            .cloned()
+            .unwrap();
 
         self.record_edit(Edit::Batch(vec![
-            Edit::Replaced { before: before_a, after: after_a },
-            Edit::Replaced { before: before_b, after: after_b },
+            Edit::Replaced {
+                before: before_a,
+                after: after_a,
+            },
+            Edit::Replaced {
+                before: before_b,
+                after: after_b,
+            },
         ]));
         self.save_annotations(cx);
         cx.notify();
@@ -164,14 +180,26 @@ mod tests {
         for (id, z) in swap {
             annotations.iter_mut().find(|x| x.id == id).unwrap().z_index = z;
         }
-        assert_eq!(annotations.iter().find(|x| x.id == a.id).unwrap().z_index, 1);
-        assert_eq!(annotations.iter().find(|x| x.id == b.id).unwrap().z_index, 0);
+        assert_eq!(
+            annotations.iter().find(|x| x.id == a.id).unwrap().z_index,
+            1
+        );
+        assert_eq!(
+            annotations.iter().find(|x| x.id == b.id).unwrap().z_index,
+            0
+        );
 
         let swap_back = reorder(&annotations, a.id, Direction::Backward).unwrap();
         for (id, z) in swap_back {
             annotations.iter_mut().find(|x| x.id == id).unwrap().z_index = z;
         }
-        assert_eq!(annotations.iter().find(|x| x.id == a.id).unwrap().z_index, 0);
-        assert_eq!(annotations.iter().find(|x| x.id == b.id).unwrap().z_index, 1);
+        assert_eq!(
+            annotations.iter().find(|x| x.id == a.id).unwrap().z_index,
+            0
+        );
+        assert_eq!(
+            annotations.iter().find(|x| x.id == b.id).unwrap().z_index,
+            1
+        );
     }
 }

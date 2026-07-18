@@ -47,14 +47,14 @@ pub mod storage;
 
 // Re-export serialization types from nib-serde for use without gui feature
 pub use nib_serde::{
-    annotations_file_path, deserialize_annotation, serialize_annotation,
-    AnnotationGeometry, AnnotationsFile, SerializedAnnotation,
+    annotations_file_path, deserialize_annotation, serialize_annotation, AnnotationGeometry,
+    AnnotationsFile, SerializedAnnotation,
 };
 
 /// Re-export commonly used types
 pub mod prelude {
     pub use crate::core::{
         Annotation, AnnotationId, AnnotationType, ArrowHead, BlurIntensity, Color, ImageSource,
-        Point, NibError, NibImage, Region, Result, Severity, StrokeStyle, TextAlign,
+        NibError, NibImage, Point, Region, Result, Severity, StrokeStyle, TextAlign,
     };
 }

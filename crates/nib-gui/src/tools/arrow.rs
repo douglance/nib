@@ -4,7 +4,9 @@ use std::any::Any;
 
 use nib_core::{Annotation, AnnotationType};
 
-use super::{DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult};
+use super::{
+    DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult,
+};
 
 /// Tool for drawing arrow annotations
 pub struct ArrowTool {

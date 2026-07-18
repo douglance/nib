@@ -4,8 +4,8 @@
 //! QML metadata is embedded in PNG tEXt chunks with keyword "QML".
 
 use crate::StorageResult;
-use nib_core::{qml, Annotation, ImageSource, NibImage, StorageError};
 use image::ImageReader;
+use nib_core::{qml, Annotation, ImageSource, NibImage, StorageError};
 use std::io::Write;
 use std::path::Path;
 
@@ -246,8 +246,8 @@ pub fn load_qml_file(path: impl AsRef<Path>) -> StorageResult<Vec<Annotation>> {
 
 /// Save annotations to a standalone .qml text file
 pub fn save_qml_file(annotations: &[Annotation], path: impl AsRef<Path>) -> StorageResult<()> {
-    let qml_string =
-        qml::serialize_qml_string(annotations).map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+    let qml_string = qml::serialize_qml_string(annotations)
+        .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
     std::fs::write(path.as_ref(), qml_string)?;
     Ok(())
 }
@@ -269,7 +269,8 @@ mod tests {
             0x90, 0x77, 0x53, 0xde, // IHDR CRC
             0x00, 0x00, 0x00, 0x0c, // IDAT length
             0x49, 0x44, 0x41, 0x54, // IDAT type
-            0x08, 0xd7, 0x63, 0xf8, 0xff, 0xff, 0xff, 0x00, 0x05, 0xfe, 0x02, 0xfe, // compressed data
+            0x08, 0xd7, 0x63, 0xf8, 0xff, 0xff, 0xff, 0x00, 0x05, 0xfe, 0x02,
+            0xfe, // compressed data
             0xa3, 0x6e, 0x57, 0xcd, // IDAT CRC
             0x00, 0x00, 0x00, 0x00, // IEND length
             0x49, 0x45, 0x4e, 0x44, // IEND type

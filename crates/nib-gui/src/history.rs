@@ -25,7 +25,10 @@ pub enum Edit {
     Removed(Annotation),
     /// An annotation was mutated in place (move/resize/text/style edit);
     /// undo restores `before`, redo restores `after`.
-    Replaced { before: Annotation, after: Annotation },
+    Replaced {
+        before: Annotation,
+        after: Annotation,
+    },
     /// Multiple edits applied/undone/redone together as one unit.
     Batch(Vec<Edit>),
 }
@@ -196,7 +199,10 @@ impl EditorView {
             .copied()
             .filter(|id| self.annotations.iter().any(|a| a.id == *id))
             .collect();
-        if let Some(select_tool) = self.tool_manager.get_tool_as_mut::<SelectTool>(ToolId::Select) {
+        if let Some(select_tool) = self
+            .tool_manager
+            .get_tool_as_mut::<SelectTool>(ToolId::Select)
+        {
             select_tool.set_selection(existing);
         }
     }
@@ -210,7 +216,12 @@ impl EditorView {
             return;
         }
 
-        let mut next_z = self.annotations.iter().map(|a| a.z_index).max().unwrap_or(0);
+        let mut next_z = self
+            .annotations
+            .iter()
+            .map(|a| a.z_index)
+            .max()
+            .unwrap_or(0);
         let mut clones = Vec::new();
         for annotation in self.annotations.iter().filter(|a| ids.contains(&a.id)) {
             let mut clone = annotation.clone();
@@ -280,7 +291,10 @@ mod tests {
         let mut after = before.clone();
         after.color = Color::rgb(0, 255, 0);
         let mut annotations = vec![after.clone()];
-        let edit = Edit::Replaced { before: before.clone(), after };
+        let edit = Edit::Replaced {
+            before: before.clone(),
+            after,
+        };
         let mut history = History::new(10);
 
         history.record(edit);
@@ -346,12 +360,18 @@ mod tests {
         for _ in 0..n {
             history.undo(&mut annotations);
         }
-        assert_eq!(annotations, initial, "undo x N must restore the initial state");
+        assert_eq!(
+            annotations, initial,
+            "undo x N must restore the initial state"
+        );
 
         for _ in 0..n {
             history.redo(&mut annotations);
         }
-        assert_eq!(annotations, final_state, "redo x N must restore the final state");
+        assert_eq!(
+            annotations, final_state,
+            "redo x N must restore the final state"
+        );
     }
 
     #[test]
@@ -406,6 +426,10 @@ mod tests {
         history.undo(&mut annotations);
         history.undo(&mut annotations);
         assert!(!history.can_undo());
-        assert_eq!(annotations.len(), 1, "the evicted edit's annotation stays put");
+        assert_eq!(
+            annotations.len(),
+            1,
+            "the evicted edit's annotation stays put"
+        );
     }
 }

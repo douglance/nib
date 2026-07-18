@@ -102,7 +102,11 @@ impl SelectTool {
     /// about it; move/duplicate/delete/align all just operate on whatever ends
     /// up selected).
     fn group_expand(id: AnnotationId, ctx: &ToolContext) -> Vec<AnnotationId> {
-        let group_id = ctx.annotations.iter().find(|a| a.id == id).and_then(|a| a.group_id);
+        let group_id = ctx
+            .annotations
+            .iter()
+            .find(|a| a.id == id)
+            .and_then(|a| a.group_id);
         match group_id {
             Some(gid) => ctx
                 .annotations
@@ -119,7 +123,12 @@ impl SelectTool {
         let boxes: Vec<Region> = self
             .selected_ids
             .iter()
-            .filter_map(|id| ctx.annotations.iter().find(|a| a.id == *id).map(|a| a.bounds()))
+            .filter_map(|id| {
+                ctx.annotations
+                    .iter()
+                    .find(|a| a.id == *id)
+                    .map(|a| a.bounds())
+            })
             .collect();
         layout::union(&boxes)
     }
@@ -130,10 +139,18 @@ impl SelectTool {
     /// if nothing is selected, or if nothing is within snap distance.
     fn snapped_move_delta(&self, ctx: &ToolContext, dx: f64, dy: f64) -> layout::SnapResult {
         if self.snap_bypass {
-            return layout::SnapResult { dx, dy, guides: Vec::new() };
+            return layout::SnapResult {
+                dx,
+                dy,
+                guides: Vec::new(),
+            };
         }
         let Some(moving) = self.selection_bounds(ctx) else {
-            return layout::SnapResult { dx, dy, guides: Vec::new() };
+            return layout::SnapResult {
+                dx,
+                dy,
+                guides: Vec::new(),
+            };
         };
         let others: Vec<Region> = ctx
             .annotations
@@ -330,9 +347,9 @@ impl Tool for SelectTool {
 
                     // Check for double-click on the same annotation
                     let is_double_click = self.last_click_id == Some(clicked_id)
-                        && self
-                            .last_click_time
-                            .map_or(false, |t| now.duration_since(t).as_millis() < DOUBLE_CLICK_THRESHOLD_MS);
+                        && self.last_click_time.is_some_and(|t| {
+                            now.duration_since(t).as_millis() < DOUBLE_CLICK_THRESHOLD_MS
+                        });
 
                     // Update click tracking for next potential double-click
                     self.last_click_time = Some(now);
@@ -403,7 +420,10 @@ impl Tool for SelectTool {
                     ToolResult::Handled
                 }
             }
-            ToolEvent::MouseMove { position, modifiers } => {
+            ToolEvent::MouseMove {
+                position,
+                modifiers,
+            } => {
                 // If resize drag is active, update the drag position
                 if self.drag.is_resizing() {
                     self.drag.update(position);
@@ -445,13 +465,17 @@ impl Tool for SelectTool {
                 }
                 ToolResult::Ignored
             }
-            ToolEvent::MouseUp { position, button: MouseButton::Left } => {
+            ToolEvent::MouseUp {
+                position,
+                button: MouseButton::Left,
+            } => {
                 // If resize drag is active, commit the resize
                 if self.drag.is_resizing() {
                     self.drag.update(position);
 
                     // Get resize info and calculate final bounds
-                    if let Some((annotation_id, handle, original_bounds)) = self.drag.resize_info() {
+                    if let Some((annotation_id, handle, original_bounds)) = self.drag.resize_info()
+                    {
                         if let Some((delta_x, delta_y)) = self.drag.delta() {
                             // Only emit resize if there was actual movement
                             if delta_x.abs() > 0.5 || delta_y.abs() > 0.5 {
@@ -589,7 +613,11 @@ impl Tool for SelectTool {
                 // No delta yet, show original bounds
                 let bounds = vec![*original_bounds];
                 let handles = Some(self.generate_handles(original_bounds));
-                return ToolPreview::Selection { bounds, handles, guides: Vec::new() };
+                return ToolPreview::Selection {
+                    bounds,
+                    handles,
+                    guides: Vec::new(),
+                };
             }
         }
 
@@ -612,23 +640,20 @@ impl Tool for SelectTool {
             .selected_ids
             .iter()
             .filter_map(|&id| {
-                ctx.annotations
-                    .iter()
-                    .find(|a| a.id == id)
-                    .map(|a| {
-                        let base_bounds = a.bounds();
-                        // Apply drag delta if we're moving
-                        if let Some((delta_x, delta_y)) = drag_delta {
-                            Region::new(
-                                base_bounds.x + delta_x,
-                                base_bounds.y + delta_y,
-                                base_bounds.width,
-                                base_bounds.height,
-                            )
-                        } else {
-                            base_bounds
-                        }
-                    })
+                ctx.annotations.iter().find(|a| a.id == id).map(|a| {
+                    let base_bounds = a.bounds();
+                    // Apply drag delta if we're moving
+                    if let Some((delta_x, delta_y)) = drag_delta {
+                        Region::new(
+                            base_bounds.x + delta_x,
+                            base_bounds.y + delta_y,
+                            base_bounds.width,
+                            base_bounds.height,
+                        )
+                    } else {
+                        base_bounds
+                    }
+                })
             })
             .collect();
 
@@ -643,7 +668,11 @@ impl Tool for SelectTool {
             None
         };
 
-        ToolPreview::Selection { bounds, handles, guides }
+        ToolPreview::Selection {
+            bounds,
+            handles,
+            guides,
+        }
     }
 
     fn reset(&mut self) {

@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use nib_core::{
-    Annotation, AnnotationType, ArrowHead, AssetRef, BlurIntensity, Color,
-    Point as NibPoint, Region, StrokeStyle, TextAlign,
+    Annotation, AnnotationType, ArrowHead, AssetRef, BlurIntensity, Color, Point as NibPoint,
+    Region, StrokeStyle, TextAlign,
 };
 use serde::{Deserialize, Serialize};
 
@@ -167,29 +167,55 @@ fn serialize_style(annotation: &Annotation) -> SerializedStyle {
     style.group_id = annotation.group_id;
 
     match &annotation.annotation_type {
-        AnnotationType::Box { stroke_width, stroke_style, filled, corner_radius, .. } => {
+        AnnotationType::Box {
+            stroke_width,
+            stroke_style,
+            filled,
+            corner_radius,
+            ..
+        } => {
             style.stroke_width = Some(*stroke_width);
             style.stroke_style = Some(stroke_style_to_str(*stroke_style));
             style.filled = Some(*filled);
             style.corner_radius = Some(*corner_radius);
         }
-        AnnotationType::Arrow { head, stroke_width, .. } => {
+        AnnotationType::Arrow {
+            head, stroke_width, ..
+        } => {
             style.stroke_width = Some(*stroke_width);
             style.head = Some(arrow_head_to_str(*head));
         }
-        AnnotationType::Line { stroke_width, stroke_style, .. } => {
+        AnnotationType::Line {
+            stroke_width,
+            stroke_style,
+            ..
+        } => {
             style.stroke_width = Some(*stroke_width);
             style.stroke_style = Some(stroke_style_to_str(*stroke_style));
         }
-        AnnotationType::Ellipse { stroke_width, filled, .. } => {
+        AnnotationType::Ellipse {
+            stroke_width,
+            filled,
+            ..
+        } => {
             style.stroke_width = Some(*stroke_width);
             style.filled = Some(*filled);
         }
-        AnnotationType::Path { stroke_width, stroke_style, .. } => {
+        AnnotationType::Path {
+            stroke_width,
+            stroke_style,
+            ..
+        } => {
             style.stroke_width = Some(*stroke_width);
             style.stroke_style = Some(stroke_style_to_str(*stroke_style));
         }
-        AnnotationType::Text { font_size, align, background, max_width, .. } => {
+        AnnotationType::Text {
+            font_size,
+            align,
+            background,
+            max_width,
+            ..
+        } => {
             style.font_size = Some(*font_size);
             style.align = Some(text_align_to_str(*align));
             style.background = background.as_ref().map(color_to_hex);
@@ -314,7 +340,12 @@ pub fn serialize_annotation(annotation: &Annotation) -> SerializedAnnotation {
                 end_y: end.y,
             },
         ),
-        AnnotationType::Ellipse { center, radius_x, radius_y, .. } => (
+        AnnotationType::Ellipse {
+            center,
+            radius_x,
+            radius_y,
+            ..
+        } => (
             "ellipse".to_string(),
             AnnotationGeometry::Ellipse {
                 center_x: center.x,
@@ -341,7 +372,9 @@ pub fn serialize_annotation(annotation: &Annotation) -> SerializedAnnotation {
                 height: region.height,
             },
         ),
-        AnnotationType::Text { position, content, .. } => (
+        AnnotationType::Text {
+            position, content, ..
+        } => (
             "text".to_string(),
             AnnotationGeometry::Point {
                 x: position.x,
@@ -350,7 +383,9 @@ pub fn serialize_annotation(annotation: &Annotation) -> SerializedAnnotation {
                 content: Some(content.clone()),
             },
         ),
-        AnnotationType::Number { position, value, .. } => (
+        AnnotationType::Number {
+            position, value, ..
+        } => (
             "number".to_string(),
             AnnotationGeometry::Point {
                 x: position.x,
@@ -400,82 +435,150 @@ pub fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annot
     let style = &serialized.style;
 
     let annotation_type = match (serialized.annotation_type.as_str(), &serialized.geometry) {
-        ("rectangle", AnnotationGeometry::Rectangle { x, y, width, height }) => {
-            AnnotationType::Box {
-                region: Region::new(*x, *y, *width, *height),
-                stroke_width: style.stroke_width.unwrap_or(2.0),
-                stroke_style: style.stroke_style.as_deref().map(stroke_style_from_str).unwrap_or(StrokeStyle::Solid),
-                filled: style.filled.unwrap_or(false),
-                corner_radius: style.corner_radius.unwrap_or(0.0),
-            }
-        }
-        ("arrow", AnnotationGeometry::Line { start_x, start_y, end_x, end_y }) => {
-            AnnotationType::Arrow {
-                start: NibPoint::new(*start_x, *start_y),
-                end: NibPoint::new(*end_x, *end_y),
-                head: style.head.as_deref().map(arrow_head_from_str).unwrap_or(ArrowHead::End),
-                stroke_width: style.stroke_width.unwrap_or(2.0),
-            }
-        }
-        ("line", AnnotationGeometry::Line { start_x, start_y, end_x, end_y }) => {
-            AnnotationType::Line {
-                start: NibPoint::new(*start_x, *start_y),
-                end: NibPoint::new(*end_x, *end_y),
-                stroke_width: style.stroke_width.unwrap_or(2.0),
-                stroke_style: style.stroke_style.as_deref().map(stroke_style_from_str).unwrap_or(StrokeStyle::Solid),
-            }
-        }
-        ("ellipse", AnnotationGeometry::Ellipse { center_x, center_y, radius_x, radius_y }) => {
-            AnnotationType::Ellipse {
-                center: NibPoint::new(*center_x, *center_y),
-                radius_x: *radius_x,
-                radius_y: *radius_y,
-                stroke_width: style.stroke_width.unwrap_or(2.0),
-                filled: style.filled.unwrap_or(false),
-            }
-        }
-        ("highlight", AnnotationGeometry::Rectangle { x, y, width, height }) => {
-            AnnotationType::Highlight {
-                region: Region::new(*x, *y, *width, *height),
-                corner_radius: style.corner_radius.unwrap_or(0.0),
-            }
-        }
-        ("blur", AnnotationGeometry::Rectangle { x, y, width, height }) => {
-            AnnotationType::Blur {
-                region: Region::new(*x, *y, *width, *height),
-                intensity: style.intensity.as_deref().map(blur_intensity_from_str).unwrap_or(BlurIntensity::Medium),
-            }
-        }
-        ("text", AnnotationGeometry::Point { x, y, content, .. }) => {
-            AnnotationType::Text {
-                position: NibPoint::new(*x, *y),
-                content: content.clone().unwrap_or_else(|| "Text".to_string()),
-                font_size: style.font_size.unwrap_or(16.0),
-                align: style.align.as_deref().map(text_align_from_str).unwrap_or(TextAlign::Left),
-                background: style.background.as_deref().map(hex_to_color),
-                max_width: style.max_width,
-            }
-        }
-        ("number", AnnotationGeometry::Point { x, y, value, .. }) => {
-            AnnotationType::Number {
-                position: NibPoint::new(*x, *y),
-                value: value.unwrap_or(1),
-                radius: 14.0,
-            }
-        }
-        ("crop", AnnotationGeometry::Rectangle { x, y, width, height }) => {
-            AnnotationType::Crop {
-                region: Region::new(*x, *y, *width, *height),
-            }
-        }
-        ("path", AnnotationGeometry::Path { points }) => {
-            AnnotationType::Path {
-                points: points.iter().map(|(x, y)| NibPoint::new(*x, *y)).collect(),
-                stroke_width: style.stroke_width.unwrap_or(2.0),
-                stroke_style: style.stroke_style.as_deref().map(stroke_style_from_str).unwrap_or(StrokeStyle::Solid),
-            }
-        }
-        ("image", AnnotationGeometry::Rectangle { x, y, width, height }) => {
+        (
+            "rectangle",
+            AnnotationGeometry::Rectangle {
+                x,
+                y,
+                width,
+                height,
+            },
+        ) => AnnotationType::Box {
+            region: Region::new(*x, *y, *width, *height),
+            stroke_width: style.stroke_width.unwrap_or(2.0),
+            stroke_style: style
+                .stroke_style
+                .as_deref()
+                .map(stroke_style_from_str)
+                .unwrap_or(StrokeStyle::Solid),
+            filled: style.filled.unwrap_or(false),
+            corner_radius: style.corner_radius.unwrap_or(0.0),
+        },
+        (
+            "arrow",
+            AnnotationGeometry::Line {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+            },
+        ) => AnnotationType::Arrow {
+            start: NibPoint::new(*start_x, *start_y),
+            end: NibPoint::new(*end_x, *end_y),
+            head: style
+                .head
+                .as_deref()
+                .map(arrow_head_from_str)
+                .unwrap_or(ArrowHead::End),
+            stroke_width: style.stroke_width.unwrap_or(2.0),
+        },
+        (
+            "line",
+            AnnotationGeometry::Line {
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+            },
+        ) => AnnotationType::Line {
+            start: NibPoint::new(*start_x, *start_y),
+            end: NibPoint::new(*end_x, *end_y),
+            stroke_width: style.stroke_width.unwrap_or(2.0),
+            stroke_style: style
+                .stroke_style
+                .as_deref()
+                .map(stroke_style_from_str)
+                .unwrap_or(StrokeStyle::Solid),
+        },
+        (
+            "ellipse",
+            AnnotationGeometry::Ellipse {
+                center_x,
+                center_y,
+                radius_x,
+                radius_y,
+            },
+        ) => AnnotationType::Ellipse {
+            center: NibPoint::new(*center_x, *center_y),
+            radius_x: *radius_x,
+            radius_y: *radius_y,
+            stroke_width: style.stroke_width.unwrap_or(2.0),
+            filled: style.filled.unwrap_or(false),
+        },
+        (
+            "highlight",
+            AnnotationGeometry::Rectangle {
+                x,
+                y,
+                width,
+                height,
+            },
+        ) => AnnotationType::Highlight {
+            region: Region::new(*x, *y, *width, *height),
+            corner_radius: style.corner_radius.unwrap_or(0.0),
+        },
+        (
+            "blur",
+            AnnotationGeometry::Rectangle {
+                x,
+                y,
+                width,
+                height,
+            },
+        ) => AnnotationType::Blur {
+            region: Region::new(*x, *y, *width, *height),
+            intensity: style
+                .intensity
+                .as_deref()
+                .map(blur_intensity_from_str)
+                .unwrap_or(BlurIntensity::Medium),
+        },
+        ("text", AnnotationGeometry::Point { x, y, content, .. }) => AnnotationType::Text {
+            position: NibPoint::new(*x, *y),
+            content: content.clone().unwrap_or_else(|| "Text".to_string()),
+            font_size: style.font_size.unwrap_or(16.0),
+            align: style
+                .align
+                .as_deref()
+                .map(text_align_from_str)
+                .unwrap_or(TextAlign::Left),
+            background: style.background.as_deref().map(hex_to_color),
+            max_width: style.max_width,
+        },
+        ("number", AnnotationGeometry::Point { x, y, value, .. }) => AnnotationType::Number {
+            position: NibPoint::new(*x, *y),
+            value: value.unwrap_or(1),
+            radius: 14.0,
+        },
+        (
+            "crop",
+            AnnotationGeometry::Rectangle {
+                x,
+                y,
+                width,
+                height,
+            },
+        ) => AnnotationType::Crop {
+            region: Region::new(*x, *y, *width, *height),
+        },
+        ("path", AnnotationGeometry::Path { points }) => AnnotationType::Path {
+            points: points.iter().map(|(x, y)| NibPoint::new(*x, *y)).collect(),
+            stroke_width: style.stroke_width.unwrap_or(2.0),
+            stroke_style: style
+                .stroke_style
+                .as_deref()
+                .map(stroke_style_from_str)
+                .unwrap_or(StrokeStyle::Solid),
+        },
+        (
+            "image",
+            AnnotationGeometry::Rectangle {
+                x,
+                y,
+                width,
+                height,
+            },
+        ) => {
             // asset_base64 (if present) is deliberately not decoded here -- see
             // its doc comment. Callers that need the bytes read it separately
             // via `serialized.style.asset_base64`.
@@ -502,7 +605,8 @@ pub fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annot
 /// Get the sidecar annotations file path for an image
 pub fn annotations_file_path(image_path: &Path) -> PathBuf {
     let mut path = image_path.to_path_buf();
-    let file_name = path.file_name()
+    let file_name = path
+        .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "image".to_string());
     path.set_file_name(format!("{}.annotations.json", file_name));
@@ -563,7 +667,13 @@ mod tests {
 
         let restored = round_trip(original);
         match restored.annotation_type {
-            AnnotationType::Box { stroke_width, stroke_style, filled, corner_radius, .. } => {
+            AnnotationType::Box {
+                stroke_width,
+                stroke_style,
+                filled,
+                corner_radius,
+                ..
+            } => {
                 assert_eq!(stroke_width, 8.0);
                 assert_eq!(stroke_style, StrokeStyle::Dashed);
                 assert!(filled);
@@ -571,7 +681,10 @@ mod tests {
             }
             other => panic!("expected Box, got {other:?}"),
         }
-        assert_eq!(restored.color.a, 128, "opacity (alpha) must survive the round trip");
+        assert_eq!(
+            restored.color.a, 128,
+            "opacity (alpha) must survive the round trip"
+        );
     }
 
     #[test]
@@ -586,7 +699,9 @@ mod tests {
 
         let restored = round_trip(original);
         match restored.annotation_type {
-            AnnotationType::Arrow { head, stroke_width, .. } => {
+            AnnotationType::Arrow {
+                head, stroke_width, ..
+            } => {
                 assert_eq!(head, ArrowHead::Both);
                 assert_eq!(stroke_width, 8.0);
             }
@@ -606,7 +721,11 @@ mod tests {
 
         let restored = round_trip(original);
         match restored.annotation_type {
-            AnnotationType::Line { stroke_width, stroke_style, .. } => {
+            AnnotationType::Line {
+                stroke_width,
+                stroke_style,
+                ..
+            } => {
                 assert_eq!(stroke_width, 4.0);
                 assert_eq!(stroke_style, StrokeStyle::Dotted);
             }
@@ -627,7 +746,11 @@ mod tests {
 
         let restored = round_trip(original);
         match restored.annotation_type {
-            AnnotationType::Ellipse { stroke_width, filled, .. } => {
+            AnnotationType::Ellipse {
+                stroke_width,
+                filled,
+                ..
+            } => {
                 assert_eq!(stroke_width, 8.0);
                 assert!(filled);
             }
@@ -646,7 +769,11 @@ mod tests {
 
         let restored = round_trip(original);
         match restored.annotation_type {
-            AnnotationType::Path { stroke_width, stroke_style, .. } => {
+            AnnotationType::Path {
+                stroke_width,
+                stroke_style,
+                ..
+            } => {
                 assert_eq!(stroke_width, 8.0);
                 assert_eq!(stroke_style, StrokeStyle::Dashed);
             }
@@ -668,7 +795,13 @@ mod tests {
 
         let restored = round_trip(original);
         match restored.annotation_type {
-            AnnotationType::Text { font_size, align, background, max_width, .. } => {
+            AnnotationType::Text {
+                font_size,
+                align,
+                background,
+                max_width,
+                ..
+            } => {
                 assert_eq!(font_size, 24.0);
                 assert_eq!(align, TextAlign::Center);
                 assert_eq!(background, Some(Color::rgb(1, 2, 3)));
@@ -729,7 +862,13 @@ mod tests {
         let parsed: SerializedAnnotation = serde_json::from_str(json).expect("parse old fixture");
         let annotation = deserialize_annotation(&parsed).expect("deserialize");
         match annotation.annotation_type {
-            AnnotationType::Box { stroke_width, stroke_style, filled, corner_radius, .. } => {
+            AnnotationType::Box {
+                stroke_width,
+                stroke_style,
+                filled,
+                corner_radius,
+                ..
+            } => {
                 assert_eq!(stroke_width, 2.0);
                 assert_eq!(stroke_style, StrokeStyle::Solid);
                 assert!(!filled);
@@ -757,7 +896,11 @@ mod tests {
         let parsed: SerializedAnnotation = serde_json::from_str(json).expect("parse old fixture");
         let annotation = deserialize_annotation(&parsed).expect("deserialize");
         match annotation.annotation_type {
-            AnnotationType::Text { background, max_width, .. } => {
+            AnnotationType::Text {
+                background,
+                max_width,
+                ..
+            } => {
                 assert_eq!(background, None);
                 assert_eq!(max_width, None);
             }
@@ -792,7 +935,11 @@ mod tests {
 
         let restored = deserialize_annotation(&parsed).expect("deserialize annotation");
         match restored.annotation_type {
-            AnnotationType::Image { region, asset, opacity } => {
+            AnnotationType::Image {
+                region,
+                asset,
+                opacity,
+            } => {
                 assert_eq!(region, Region::new(1.0, 2.0, 300.0, 200.0));
                 assert_eq!(asset.0, "deadbeef1234");
                 assert_eq!(opacity, 0.6);

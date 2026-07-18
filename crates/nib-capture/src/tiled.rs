@@ -3,12 +3,12 @@
 //! This module handles generating tile pyramids from source images.
 //! Tiles are organized in a hierarchical structure similar to web map tiles.
 
+use chrono::Utc;
+use image::{imageops::FilterType, RgbaImage};
 use nib_core::{
     calculate_zoom_levels, tile_global_bounds, TileBounds, TileConfig, TileEntry, TileError,
     TileId, TileResult, TiledCaptureManifest, TiledImageSource, TiledOcrConfig, ZoomLevel,
 };
-use chrono::Utc;
-use image::{imageops::FilterType, RgbaImage};
 use rayon::prelude::*;
 use rstar::RTree;
 use std::fs;
@@ -124,14 +124,13 @@ fn generate_level_tiles(
                 .join(format!("z{}", level.zoom))
                 .join(format!("{}_{}.png", tx, ty));
 
-            tile.save(&tile_path).map_err(|e| {
-                TileError::TileGenerationFailed {
+            tile.save(&tile_path)
+                .map_err(|e| TileError::TileGenerationFailed {
                     zoom: level.zoom,
                     x: *tx,
                     y: *ty,
                     reason: e.to_string(),
-                }
-            })?;
+                })?;
 
             Ok(())
         })?;
@@ -271,14 +270,14 @@ impl TiledCapture {
     /// Load a tile image (with LRU caching)
     pub fn load_tile(&mut self, tile_id: TileId) -> TileResult<&RgbaImage> {
         // Validate tile exists in manifest
-        let level = self
-            .manifest
-            .levels
-            .get(tile_id.zoom as usize)
-            .ok_or(TileError::InvalidZoomLevel(
-                tile_id.zoom,
-                self.manifest.tile_config.max_zoom,
-            ))?;
+        let level =
+            self.manifest
+                .levels
+                .get(tile_id.zoom as usize)
+                .ok_or(TileError::InvalidZoomLevel(
+                    tile_id.zoom,
+                    self.manifest.tile_config.max_zoom,
+                ))?;
 
         if tile_id.x >= level.grid_width || tile_id.y >= level.grid_height {
             return Err(TileError::TileNotFound {
@@ -371,10 +370,8 @@ impl TiledCapture {
 
     /// Find all tiles intersecting a region at a specific zoom level
     pub fn tiles_intersecting(&self, bounds: &TileBounds, zoom: u8) -> Vec<TileEntry> {
-        let envelope = rstar::AABB::from_corners(
-            [bounds.min_x, bounds.min_y],
-            [bounds.max_x, bounds.max_y],
-        );
+        let envelope =
+            rstar::AABB::from_corners([bounds.min_x, bounds.min_y], [bounds.max_x, bounds.max_y]);
 
         self.spatial_index
             .locate_in_envelope_intersecting(&envelope)
@@ -417,9 +414,10 @@ impl TiledCapture {
 
     /// Get path to OCR data for a tile
     pub fn ocr_path(&self, tile_id: TileId) -> std::path::PathBuf {
-        self.root_dir
-            .join("ocr")
-            .join(format!("z{}_{}_{}.json", tile_id.zoom, tile_id.x, tile_id.y))
+        self.root_dir.join("ocr").join(format!(
+            "z{}_{}_{}.json",
+            tile_id.zoom, tile_id.x, tile_id.y
+        ))
     }
 
     /// Extract a region at full resolution by stitching tiles

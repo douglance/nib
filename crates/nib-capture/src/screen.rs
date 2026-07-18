@@ -5,8 +5,8 @@ use nib_core::CaptureError;
 
 /// Capture the primary display
 pub fn capture_primary() -> CaptureResult<nib_core::NibImage> {
-    let screens = screenshots::Screen::all()
-        .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
+    let screens =
+        screenshots::Screen::all().map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 
     let primary = screens
         .into_iter()
@@ -23,8 +23,8 @@ pub fn capture_display(display_id: u32) -> CaptureResult<nib_core::NibImage> {
 
 /// Capture all displays and stitch into single image
 pub fn capture_all() -> CaptureResult<nib_core::NibImage> {
-    let screens = screenshots::Screen::all()
-        .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
+    let screens =
+        screenshots::Screen::all().map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 
     if screens.is_empty() {
         return Err(CaptureError::CaptureFailed("No displays found".to_string()));

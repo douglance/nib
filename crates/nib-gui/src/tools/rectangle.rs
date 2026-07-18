@@ -4,7 +4,9 @@ use std::any::Any;
 
 use nib_core::{Annotation, AnnotationType, Region};
 
-use super::{DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult};
+use super::{
+    DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult,
+};
 
 /// Tool for drawing rectangle annotations
 pub struct RectangleTool {
@@ -71,7 +73,8 @@ impl Tool for RectangleTool {
                     let region = Region::from_points(start, position);
 
                     // Reject degenerate shapes where both dimensions are too small
-                    if region.width < ctx.min_drag_distance && region.height < ctx.min_drag_distance {
+                    if region.width < ctx.min_drag_distance && region.height < ctx.min_drag_distance
+                    {
                         return ToolResult::Ignored;
                     }
 

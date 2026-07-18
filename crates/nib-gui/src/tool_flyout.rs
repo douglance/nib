@@ -4,7 +4,10 @@
 //! within the toolbar width budget. `app.rs` renders only the trigger
 //! button; this module renders the popup body.
 
-use gpui::{div, px, rgba, svg, Context, InteractiveElement, IntoElement, ParentElement, Rgba, StatefulInteractiveElement, Styled};
+use gpui::{
+    div, px, rgba, svg, Context, InteractiveElement, IntoElement, ParentElement, Rgba,
+    StatefulInteractiveElement, Styled,
+};
 
 use crate::app::EditorView;
 use crate::toolbar::Tool;
@@ -67,9 +70,18 @@ impl EditorView {
                     .h(px(48.))
                     .rounded_md()
                     .cursor_pointer()
-                    .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
+                    .bg(if is_active {
+                        button_active_bg
+                    } else {
+                        rgba(0x3d3d3d00)
+                    })
                     .hover(|s| s.bg(button_bg))
-                    .child(svg().path(tool.icon_path()).size(px(24.)).text_color(icon_color))
+                    .child(
+                        svg()
+                            .path(tool.icon_path())
+                            .size(px(24.))
+                            .text_color(icon_color),
+                    )
                     .child(crate::app::render_shortcut_badge(
                         tool.shortcut().to_ascii_uppercase().to_string(),
                         text_color,

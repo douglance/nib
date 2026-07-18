@@ -105,7 +105,12 @@ pub struct Region {
 
 impl Region {
     pub const fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     pub fn from_points(p1: Point, p2: Point) -> Self {
@@ -113,7 +118,12 @@ impl Region {
         let y = p1.y.min(p2.y);
         let width = (p1.x - p2.x).abs();
         let height = (p1.y - p2.y).abs();
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     pub fn contains(&self, point: Point) -> bool {
@@ -183,7 +193,7 @@ impl Severity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AnnotationStyle {
     #[default]
-    Note,   // Neutral labels, identifiers (gray)
+    Note, // Neutral labels, identifiers (gray)
     Info,   // Context, explanations (blue)
     Todo,   // Action needed, "fix this" (yellow/amber)
     Bug,    // Problems, broken things (red)
@@ -362,10 +372,7 @@ pub enum AnnotationType {
     },
 
     /// Freeform highlight (semi-transparent)
-    Highlight {
-        region: Region,
-        corner_radius: f64,
-    },
+    Highlight { region: Region, corner_radius: f64 },
 
     /// Line between two points (no arrow head)
     Line {
@@ -429,7 +436,11 @@ impl AnnotationType {
             } => {
                 let lines = crate::wrap_text(content, *font_size, *max_width);
                 let width = max_width.unwrap_or_else(|| {
-                    lines.iter().map(|line| line.chars().count()).max().unwrap_or(0) as f64
+                    lines
+                        .iter()
+                        .map(|line| line.chars().count())
+                        .max()
+                        .unwrap_or(0) as f64
                         * font_size
                         * 0.6
                 });
@@ -721,12 +732,18 @@ mod image_annotation_tests {
 
     #[test]
     fn asset_ref_from_bytes_is_deterministic() {
-        assert_eq!(AssetRef::from_bytes(b"hello"), AssetRef::from_bytes(b"hello"));
+        assert_eq!(
+            AssetRef::from_bytes(b"hello"),
+            AssetRef::from_bytes(b"hello")
+        );
     }
 
     #[test]
     fn asset_ref_from_bytes_differs_for_different_content() {
-        assert_ne!(AssetRef::from_bytes(b"hello"), AssetRef::from_bytes(b"world"));
+        assert_ne!(
+            AssetRef::from_bytes(b"hello"),
+            AssetRef::from_bytes(b"world")
+        );
     }
 
     #[test]
@@ -762,6 +779,9 @@ mod image_annotation_tests {
         };
         let bounds = text.bounds();
         assert_eq!(bounds.width, 60.0);
-        assert!(bounds.height > 16.0 * 1.2, "wrapped text must span multiple lines");
+        assert!(
+            bounds.height > 16.0 * 1.2,
+            "wrapped text must span multiple lines"
+        );
     }
 }

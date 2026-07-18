@@ -31,18 +31,18 @@ pub use context::*;
 pub use crop::*;
 pub use ellipse::*;
 pub use eraser::*;
-pub use image_tool::*;
 pub use highlight::*;
+pub use image_tool::*;
 pub use line::*;
 pub use manager::*;
 pub use number::*;
 pub use pencil::*;
+pub use r#trait::*;
 pub use rectangle::*;
 pub use select::*;
 pub use state::*;
 pub use sticky::*;
 pub use text::*;
-pub use r#trait::*;
 
 use nib_core::{Annotation, AnnotationId, Color, Point, Region};
 
@@ -181,7 +181,11 @@ pub enum ToolPreview {
     /// Rectangle outline
     Rectangle { region: Region, color: Color },
     /// Line between two points
-    Line { start: Point, end: Point, color: Color },
+    Line {
+        start: Point,
+        end: Point,
+        color: Color,
+    },
     /// Ellipse outline
     Ellipse {
         center: Point,

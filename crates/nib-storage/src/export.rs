@@ -3,17 +3,17 @@
 //! Renders annotations onto the image and exports as PNG/JPEG/WebP.
 
 use crate::StorageResult;
-use nib_core::blur::apply_blur_region;
-use nib_core::{
-    dash_segments, Annotation, AnnotationType, ArrowHead, AssetData, Color, NibImage, Point,
-    Region, StorageError, StrokeStyle,
-};
 use ab_glyph::{FontRef, PxScale};
 use image::{DynamicImage, Rgba, RgbaImage};
 use imageproc::drawing::{
     draw_filled_circle_mut, draw_filled_rect_mut, draw_line_segment_mut, draw_text_mut, text_size,
 };
 use imageproc::rect::Rect;
+use nib_core::blur::apply_blur_region;
+use nib_core::{
+    dash_segments, Annotation, AnnotationType, ArrowHead, AssetData, Color, NibImage, Point,
+    Region, StorageError, StrokeStyle,
+};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -46,17 +46,16 @@ fn clamp_span(pos: i32, size: u32, canvas_dim: u32) -> (i32, u32) {
 }
 
 /// Export format options
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub enum ExportFormat {
+    #[default]
     Png,
-    Jpeg { quality: u8 },
-    WebP { quality: u8 },
-}
-
-impl Default for ExportFormat {
-    fn default() -> Self {
-        Self::Png
-    }
+    Jpeg {
+        quality: u8,
+    },
+    WebP {
+        quality: u8,
+    },
 }
 
 /// Export options
@@ -121,7 +120,12 @@ pub fn export_image(
     let img = if (options.scale - 1.0).abs() > 0.001 {
         let new_width = (img.width() as f64 * options.scale) as u32;
         let new_height = (img.height() as f64 * options.scale) as u32;
-        image::imageops::resize(&img, new_width, new_height, image::imageops::FilterType::Lanczos3)
+        image::imageops::resize(
+            &img,
+            new_width,
+            new_height,
+            image::imageops::FilterType::Lanczos3,
+        )
     } else {
         img
     };
@@ -167,14 +171,29 @@ fn render_annotations(
 }
 
 /// Render a single annotation
-fn render_annotation(img: &mut RgbaImage, annotation: &Annotation, assets: &HashMap<String, AssetData>) {
+fn render_annotation(
+    img: &mut RgbaImage,
+    annotation: &Annotation,
+    assets: &HashMap<String, AssetData>,
+) {
     let color = color_to_rgba(&annotation.color);
 
     match &annotation.annotation_type {
-        AnnotationType::Arrow { start, end, head, stroke_width } => {
+        AnnotationType::Arrow {
+            start,
+            end,
+            head,
+            stroke_width,
+        } => {
             draw_arrow(img, *start, *end, *head, color, *stroke_width as i32);
         }
-        AnnotationType::Box { region, stroke_width, stroke_style, filled, .. } => {
+        AnnotationType::Box {
+            region,
+            stroke_width,
+            stroke_style,
+            filled,
+            ..
+        } => {
             let rect = Rect::at(region.x as i32, region.y as i32)
                 .of_size(region.width as u32, region.height as u32);
 
@@ -185,7 +204,14 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation, assets: &Hash
 
             draw_rect_outline_styled(img, region, *stroke_width, *stroke_style, color);
         }
-        AnnotationType::Text { position, content, font_size, background, max_width, .. } => {
+        AnnotationType::Text {
+            position,
+            content,
+            font_size,
+            background,
+            max_width,
+            ..
+        } => {
             let font = text_font();
             let scale = PxScale::from(*font_size as f32);
             let line_height = *font_size * 1.2;
@@ -215,7 +241,11 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation, assets: &Hash
                 let (rect_x, rect_width) = clamp_span(rect_x, rect_width, img.width());
                 let (rect_y, rect_height) = clamp_span(rect_y, rect_height, img.height());
                 if rect_width > 0 && rect_height > 0 {
-                    draw_filled_rect_mut(img, Rect::at(rect_x, rect_y).of_size(rect_width, rect_height), bg_color);
+                    draw_filled_rect_mut(
+                        img,
+                        Rect::at(rect_x, rect_y).of_size(rect_width, rect_height),
+                        bg_color,
+                    );
                 }
             }
 
@@ -224,7 +254,11 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation, assets: &Hash
                 draw_text_mut(img, color, position.x.round() as i32, y, scale, &font, line);
             }
         }
-        AnnotationType::Number { position, value, radius } => {
+        AnnotationType::Number {
+            position,
+            value,
+            radius,
+        } => {
             // Draw filled circle background
             draw_filled_circle_mut(
                 img,
@@ -260,10 +294,21 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation, assets: &Hash
                 .of_size(region.width as u32, region.height as u32);
             draw_filled_rect_mut(img, rect, highlight_color);
         }
-        AnnotationType::Line { start, end, stroke_width, stroke_style } => {
+        AnnotationType::Line {
+            start,
+            end,
+            stroke_width,
+            stroke_style,
+        } => {
             draw_styled_line(img, *start, *end, *stroke_style, *stroke_width, color);
         }
-        AnnotationType::Ellipse { center, radius_x, radius_y, filled, .. } => {
+        AnnotationType::Ellipse {
+            center,
+            radius_x,
+            radius_y,
+            filled,
+            ..
+        } => {
             // `filled` applies regardless of whether this is a circle
             // (radius_x == radius_y) or a general ellipse -- it used to only
             // be honored for circles, silently rendering non-circular filled
@@ -288,12 +333,20 @@ fn render_annotation(img: &mut RgbaImage, annotation: &Annotation, assets: &Hash
         AnnotationType::Crop { .. } => {
             // Crop regions are not rendered, they're used for export bounds
         }
-        AnnotationType::Path { points, stroke_width, stroke_style } => {
+        AnnotationType::Path {
+            points,
+            stroke_width,
+            stroke_style,
+        } => {
             for pair in points.windows(2) {
                 draw_styled_line(img, pair[0], pair[1], *stroke_style, *stroke_width, color);
             }
         }
-        AnnotationType::Image { region, asset, opacity } => {
+        AnnotationType::Image {
+            region,
+            asset,
+            opacity,
+        } => {
             if let Some(asset_data) = assets.get(&asset.0) {
                 composite_image(img, &asset_data.bytes, region, *opacity);
             }
@@ -331,7 +384,8 @@ fn composite_image(img: &mut RgbaImage, bytes: &[u8], region: &Region, opacity: 
         }
         let dst = img.get_pixel_mut(px as u32, py as u32);
         for c in 0..3 {
-            dst[c] = (pixel[c] as f64 * src_alpha + dst[c] as f64 * (1.0 - src_alpha)).round() as u8;
+            dst[c] =
+                (pixel[c] as f64 * src_alpha + dst[c] as f64 * (1.0 - src_alpha)).round() as u8;
         }
         dst[3] = ((src_alpha + (dst[3] as f64 / 255.0) * (1.0 - src_alpha)) * 255.0).round() as u8;
     }
@@ -351,7 +405,11 @@ fn draw_arrow(
 ) {
     // Draw line (Arrow has no stroke_style field, so this stays solid)
     for offset in 0..stroke_width.max(1) {
-        let dy = if offset == 0 { 0.0 } else { offset as f32 / 2.0 };
+        let dy = if offset == 0 {
+            0.0
+        } else {
+            offset as f32 / 2.0
+        };
         draw_line_segment_mut(
             img,
             (start.x as f32, start.y as f32 + dy),
@@ -394,8 +452,18 @@ fn draw_arrow_wing(
     let ax2 = tip.x - arrow_size * (dir_x * angle.cos() - dir_y * angle.sin());
     let ay2 = tip.y - arrow_size * (dir_y * angle.cos() + dir_x * angle.sin());
 
-    draw_line_segment_mut(img, (tip.x as f32, tip.y as f32), (ax1 as f32, ay1 as f32), color);
-    draw_line_segment_mut(img, (tip.x as f32, tip.y as f32), (ax2 as f32, ay2 as f32), color);
+    draw_line_segment_mut(
+        img,
+        (tip.x as f32, tip.y as f32),
+        (ax1 as f32, ay1 as f32),
+        color,
+    );
+    draw_line_segment_mut(
+        img,
+        (tip.x as f32, tip.y as f32),
+        (ax2 as f32, ay2 as f32),
+        color,
+    );
 }
 
 /// Draw a line honoring `stroke_style` (dashed/dotted segments via the shared
@@ -410,7 +478,11 @@ fn draw_styled_line(
 ) {
     for (seg_start, seg_end) in dash_segments(start, end, stroke_style, stroke_width) {
         for offset in 0..(stroke_width as i32).max(1) {
-            let dy = if offset == 0 { 0.0 } else { offset as f32 / 2.0 };
+            let dy = if offset == 0 {
+                0.0
+            } else {
+                offset as f32 / 2.0
+            };
             draw_line_segment_mut(
                 img,
                 (seg_start.x as f32, seg_start.y as f32 + dy),
@@ -439,7 +511,6 @@ fn draw_rect_outline_styled(
     }
 }
 
-
 fn draw_circle_outline(img: &mut RgbaImage, cx: f64, cy: f64, radius: f64, color: Rgba<u8>) {
     let steps = (radius * 4.0) as i32;
     let step_angle = std::f64::consts::PI * 2.0 / steps as f64;
@@ -457,14 +528,7 @@ fn draw_circle_outline(img: &mut RgbaImage, cx: f64, cy: f64, radius: f64, color
     }
 }
 
-fn draw_ellipse_outline(
-    img: &mut RgbaImage,
-    cx: f64,
-    cy: f64,
-    rx: f64,
-    ry: f64,
-    color: Rgba<u8>,
-) {
+fn draw_ellipse_outline(img: &mut RgbaImage, cx: f64, cy: f64, rx: f64, ry: f64, color: Rgba<u8>) {
     let steps = ((rx.max(ry)) * 4.0) as i32;
     let step_angle = std::f64::consts::PI * 2.0 / steps as f64;
 
@@ -549,7 +613,10 @@ mod image_annotation_export_tests {
         let img = RgbaImage::from_pixel(width, height, Rgba(color));
         let mut bytes = Vec::new();
         DynamicImage::ImageRgba8(img)
-            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
             .unwrap();
         bytes
     }
@@ -566,7 +633,12 @@ mod image_annotation_export_tests {
         let mut assets = HashMap::new();
         assets.insert(
             asset.0.clone(),
-            AssetData { bytes: asset_bytes, format: "png".to_string(), width: 2, height: 2 },
+            AssetData {
+                bytes: asset_bytes,
+                format: "png".to_string(),
+                width: 2,
+                height: 2,
+            },
         );
 
         let annotation = Annotation::new(AnnotationType::Image {
@@ -578,10 +650,18 @@ mod image_annotation_export_tests {
         render_annotation(&mut base, &annotation, &assets);
 
         for (x, y) in [(1, 1), (2, 1), (1, 2), (2, 2)] {
-            assert_eq!(*base.get_pixel(x, y), Rgba([255, 0, 0, 255]), "pixel ({x},{y}) should be red");
+            assert_eq!(
+                *base.get_pixel(x, y),
+                Rgba([255, 0, 0, 255]),
+                "pixel ({x},{y}) should be red"
+            );
         }
         for (x, y) in [(0, 0), (3, 3), (0, 3), (3, 0)] {
-            assert_eq!(*base.get_pixel(x, y), Rgba([0, 0, 0, 255]), "pixel ({x},{y}) outside the region must stay black");
+            assert_eq!(
+                *base.get_pixel(x, y),
+                Rgba([0, 0, 0, 255]),
+                "pixel ({x},{y}) outside the region must stay black"
+            );
         }
     }
 
@@ -593,7 +673,12 @@ mod image_annotation_export_tests {
         let mut assets = HashMap::new();
         assets.insert(
             asset.0.clone(),
-            AssetData { bytes: asset_bytes, format: "png".to_string(), width: 1, height: 1 },
+            AssetData {
+                bytes: asset_bytes,
+                format: "png".to_string(),
+                width: 1,
+                height: 1,
+            },
         );
 
         let annotation = Annotation::new(AnnotationType::Image {
@@ -606,8 +691,14 @@ mod image_annotation_export_tests {
 
         // 50% white over black is ~mid-gray, not full white or unchanged black.
         let pixel = base.get_pixel(0, 0);
-        assert!((110..=145).contains(&pixel[0]), "expected ~50% blend, got {pixel:?}");
-        assert_eq!(pixel[3], 255, "compositing onto an opaque base stays opaque");
+        assert!(
+            (110..=145).contains(&pixel[0]),
+            "expected ~50% blend, got {pixel:?}"
+        );
+        assert_eq!(
+            pixel[3], 255,
+            "compositing onto an opaque base stays opaque"
+        );
     }
 
     #[test]
@@ -621,7 +712,11 @@ mod image_annotation_export_tests {
 
         render_annotation(&mut base, &annotation, &HashMap::new());
 
-        assert_eq!(*base.get_pixel(0, 0), Rgba([9, 9, 9, 255]), "no panic, base image untouched");
+        assert_eq!(
+            *base.get_pixel(0, 0),
+            Rgba([9, 9, 9, 255]),
+            "no panic, base image untouched"
+        );
     }
 }
 
@@ -647,8 +742,16 @@ mod ellipse_and_text_export_tests {
 
         render_annotation(&mut img, &annotation, &HashMap::new());
 
-        assert_eq!(*img.get_pixel(20, 20), Rgba([255, 0, 0, 255]), "ellipse interior must be filled");
-        assert_eq!(*img.get_pixel(0, 0), Rgba([0, 0, 0, 255]), "outside the ellipse stays untouched");
+        assert_eq!(
+            *img.get_pixel(20, 20),
+            Rgba([255, 0, 0, 255]),
+            "ellipse interior must be filled"
+        );
+        assert_eq!(
+            *img.get_pixel(0, 0),
+            Rgba([0, 0, 0, 255]),
+            "outside the ellipse stays untouched"
+        );
     }
 
     #[test]
@@ -665,7 +768,11 @@ mod ellipse_and_text_export_tests {
 
         render_annotation(&mut img, &annotation, &HashMap::new());
 
-        assert_eq!(*img.get_pixel(20, 20), Rgba([0, 0, 0, 255]), "unfilled interior stays untouched");
+        assert_eq!(
+            *img.get_pixel(20, 20),
+            Rgba([0, 0, 0, 255]),
+            "unfilled interior stays untouched"
+        );
     }
 
     #[test]
@@ -687,7 +794,10 @@ mod ellipse_and_text_export_tests {
         // strictly between white and black. A solid-block placeholder can
         // only ever produce fully-black or fully-white pixels.
         let saw_partial_shade = img.pixels().any(|p| p[0] > 10 && p[0] < 245);
-        assert!(saw_partial_shade, "expected anti-aliased glyph edges, got only solid colors (block placeholder?)");
+        assert!(
+            saw_partial_shade,
+            "expected anti-aliased glyph edges, got only solid colors (block placeholder?)"
+        );
     }
 
     #[test]
@@ -713,7 +823,10 @@ mod ellipse_and_text_export_tests {
         render_annotation(&mut img, &annotation, &HashMap::new());
 
         let found_background = img.pixels().any(|p| *p == Rgba([241, 250, 140, 255]));
-        assert!(found_background, "background must still render when clamped to the canvas edge");
+        assert!(
+            found_background,
+            "background must still render when clamped to the canvas edge"
+        );
     }
 
     #[test]
@@ -722,7 +835,8 @@ mod ellipse_and_text_export_tests {
         // the live GUI does, via the shared nib_core::wrap_text -- this
         // pins that it's actually being called (not a local reimplementation
         // that could silently drift).
-        let lines = nib_core::wrap_text("one two three four five six seven eight", 16.0, Some(60.0));
+        let lines =
+            nib_core::wrap_text("one two three four five six seven eight", 16.0, Some(60.0));
         assert!(lines.len() > 1);
     }
 }

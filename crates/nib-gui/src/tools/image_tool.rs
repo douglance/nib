@@ -40,7 +40,11 @@ impl ImageTool {
         }
         let mut clipboard = arboard::Clipboard::new().ok()?;
         let image_data = clipboard.get_image().ok()?;
-        Some((image_data.width as u32, image_data.height as u32, image_data.bytes.into_owned()))
+        Some((
+            image_data.width as u32,
+            image_data.height as u32,
+            image_data.bytes.into_owned(),
+        ))
     }
 
     /// Build the Image annotation + its asset bytes for whatever's on the
@@ -162,8 +166,7 @@ impl Tool for ImageTool {
 /// True if `path`'s extension (case-insensitive) names a raster image format
 /// this tool knows how to decode.
 pub(crate) fn is_image_extension(path: &std::path::Path) -> bool {
-    const IMAGE_EXTENSIONS: &[&str] =
-        &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif"];
+    const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tiff", "tif"];
     path.extension()
         .and_then(|ext| ext.to_str())
         .is_some_and(|ext| IMAGE_EXTENSIONS.contains(&ext.to_lowercase().as_str()))
@@ -205,8 +208,9 @@ pub(crate) fn images_from_dropped_paths(
     let positions = stagger_positions(base_position, image_paths.len());
     let mut pairs = Vec::new();
     for (path, position) in image_paths.into_iter().zip(positions) {
-        let built = load_image_file(path)
-            .and_then(|(width, height, bytes)| build_image_annotation(width, height, bytes, position));
+        let built = load_image_file(path).and_then(|(width, height, bytes)| {
+            build_image_annotation(width, height, bytes, position)
+        });
         match built {
             Some(pair) => pairs.push(pair),
             None => skipped += 1,
@@ -285,9 +289,17 @@ mod tests {
         );
 
         match result {
-            ToolResult::CreatedWithAsset { annotation, asset_hash, asset } => {
+            ToolResult::CreatedWithAsset {
+                annotation,
+                asset_hash,
+                asset,
+            } => {
                 match annotation.annotation_type {
-                    AnnotationType::Image { region, asset: asset_ref, opacity } => {
+                    AnnotationType::Image {
+                        region,
+                        asset: asset_ref,
+                        opacity,
+                    } => {
                         assert_eq!(region.x, 10.0);
                         assert_eq!(region.y, 20.0);
                         assert_eq!(region.width, 2.0);
@@ -310,7 +322,11 @@ mod tests {
     #[test]
     fn large_image_is_scaled_down_preserving_aspect_ratio() {
         assert_eq!(scaled_insert_size(800.0, 400.0), (400.0, 200.0));
-        assert_eq!(scaled_insert_size(200.0, 100.0), (200.0, 100.0), "small images stay untouched");
+        assert_eq!(
+            scaled_insert_size(200.0, 100.0),
+            (200.0, 100.0),
+            "small images stay untouched"
+        );
     }
 
     #[test]

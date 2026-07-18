@@ -16,7 +16,11 @@ use crate::history::Edit;
 /// mutating `annotations` in place and returning one `Replaced` edit per
 /// annotation actually changed. Empty if every matching id already had the
 /// target `group_id` (e.g. ungrouping an already-ungrouped selection).
-pub fn set_group_id(annotations: &mut [Annotation], ids: &[AnnotationId], group_id: Option<u64>) -> Vec<Edit> {
+pub fn set_group_id(
+    annotations: &mut [Annotation],
+    ids: &[AnnotationId],
+    group_id: Option<u64>,
+) -> Vec<Edit> {
     let mut edits = Vec::new();
     for annotation in annotations.iter_mut() {
         if !ids.contains(&annotation.id) || annotation.group_id == group_id {
@@ -25,7 +29,10 @@ pub fn set_group_id(annotations: &mut [Annotation], ids: &[AnnotationId], group_
         let before = annotation.clone();
         annotation.group_id = group_id;
         annotation.touch();
-        edits.push(Edit::Replaced { before, after: annotation.clone() });
+        edits.push(Edit::Replaced {
+            before,
+            after: annotation.clone(),
+        });
     }
     edits
 }
@@ -89,7 +96,10 @@ mod tests {
         assert_eq!(edits.len(), 2);
         assert_eq!(annotations[0].group_id, Some(99));
         assert_eq!(annotations[1].group_id, Some(99));
-        assert_eq!(annotations[2].group_id, None, "annotation not in `ids` must be untouched");
+        assert_eq!(
+            annotations[2].group_id, None,
+            "annotation not in `ids` must be untouched"
+        );
     }
 
     #[test]
@@ -99,7 +109,10 @@ mod tests {
         let mut annotations = vec![a.clone()];
 
         let edits = set_group_id(&mut annotations, &[a.id], Some(5));
-        assert!(edits.is_empty(), "already-grouped-to-5 must produce no edit");
+        assert!(
+            edits.is_empty(),
+            "already-grouped-to-5 must produce no edit"
+        );
     }
 
     #[test]

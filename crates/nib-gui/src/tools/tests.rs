@@ -1,10 +1,10 @@
 //! Unit tests for tool trait implementations
 
+use crate::tools::*;
 use nib_core::{
     Annotation, AnnotationStyle, AnnotationType, ArrowHead, BlurIntensity, Color, Point, Region,
     StrokeStyle,
 };
-use crate::tools::*;
 
 // ============================================================================
 // Test Utilities
@@ -126,7 +126,11 @@ mod tool_id_tests {
         shortcuts.sort();
         let original_len = shortcuts.len();
         shortcuts.dedup();
-        assert_eq!(shortcuts.len(), original_len, "Tool shortcuts must be unique");
+        assert_eq!(
+            shortcuts.len(),
+            original_len,
+            "Tool shortcuts must be unique"
+        );
     }
 }
 
@@ -430,7 +434,12 @@ mod rectangle_tool_tests {
 
         match result {
             ToolResult::Created(annotation) => match annotation.annotation_type {
-                AnnotationType::Box { stroke_width, stroke_style, filled, .. } => {
+                AnnotationType::Box {
+                    stroke_width,
+                    stroke_style,
+                    filled,
+                    ..
+                } => {
                     assert_eq!(stroke_width, 8.0);
                     assert_eq!(stroke_style, StrokeStyle::Dashed);
                     assert!(filled);
@@ -644,7 +653,9 @@ mod arrow_tool_tests {
 
         match result {
             ToolResult::Created(annotation) => match annotation.annotation_type {
-                AnnotationType::Arrow { stroke_width, head, .. } => {
+                AnnotationType::Arrow {
+                    stroke_width, head, ..
+                } => {
                     assert_eq!(stroke_width, 8.0);
                     assert_eq!(head, ArrowHead::Both);
                 }
@@ -787,7 +798,11 @@ mod line_tool_tests {
 
         match result {
             ToolResult::Created(annotation) => match annotation.annotation_type {
-                AnnotationType::Line { stroke_width, stroke_style, .. } => {
+                AnnotationType::Line {
+                    stroke_width,
+                    stroke_style,
+                    ..
+                } => {
                     assert_eq!(stroke_width, 8.0);
                     assert_eq!(stroke_style, StrokeStyle::Dotted);
                 }
@@ -1292,7 +1307,10 @@ mod number_tool_tests {
     #[test]
     fn test_number_tool_is_never_active() {
         let tool = NumberTool::new();
-        assert!(!tool.is_active(), "Number tool should never be in active state");
+        assert!(
+            !tool.is_active(),
+            "Number tool should never be in active state"
+        );
     }
 
     #[test]
@@ -1333,7 +1351,10 @@ mod text_tool_tests {
             &ctx,
         );
 
-        assert!(matches!(result, ToolResult::EnterMode(ToolMode::TextInput { .. })));
+        assert!(matches!(
+            result,
+            ToolResult::EnterMode(ToolMode::TextInput { .. })
+        ));
         assert!(tool.is_active());
     }
 
@@ -1453,7 +1474,11 @@ mod text_tool_tests {
         match result {
             ToolResult::Batch(results) => match &results[0] {
                 ToolResult::Created(annotation) => match &annotation.annotation_type {
-                    AnnotationType::Text { max_width, background, .. } => {
+                    AnnotationType::Text {
+                        max_width,
+                        background,
+                        ..
+                    } => {
                         assert_eq!(*max_width, Some(160.0));
                         assert_eq!(*background, None, "the wrap box is layout-only");
                     }
@@ -1496,7 +1521,11 @@ mod text_tool_tests {
 
         tool.begin_sticky(
             Point::new(50.0, 60.0),
-            StickyStyle { background, text_color, max_width: 200.0 },
+            StickyStyle {
+                background,
+                text_color,
+                max_width: 200.0,
+            },
         );
         tool.handle_event(
             ToolEvent::KeyDown {
@@ -1511,9 +1540,16 @@ mod text_tool_tests {
         match result {
             ToolResult::Batch(results) => match &results[0] {
                 ToolResult::Created(annotation) => {
-                    assert_eq!(annotation.color, text_color, "sticky text uses the contrasting color, not ctx's style color");
+                    assert_eq!(
+                        annotation.color, text_color,
+                        "sticky text uses the contrasting color, not ctx's style color"
+                    );
                     match &annotation.annotation_type {
-                        AnnotationType::Text { background: bg, max_width, .. } => {
+                        AnnotationType::Text {
+                            background: bg,
+                            max_width,
+                            ..
+                        } => {
                             assert_eq!(*bg, Some(background));
                             assert_eq!(*max_width, Some(200.0));
                         }
@@ -1533,7 +1569,11 @@ mod text_tool_tests {
 
         tool.begin_sticky(
             Point::new(0.0, 0.0),
-            StickyStyle { background: Color::RED, text_color: Color::rgb(0, 0, 0), max_width: 200.0 },
+            StickyStyle {
+                background: Color::RED,
+                text_color: Color::rgb(0, 0, 0),
+                max_width: 200.0,
+            },
         );
         let result = tool.confirm_text(&ctx);
         assert!(matches!(result, ToolResult::ExitMode));
@@ -1734,7 +1774,11 @@ mod text_tool_tests {
     fn test_begin_edit_seeds_existing_content_and_id() {
         let mut tool = TextTool::new();
 
-        tool.begin_edit(nib_core::AnnotationId(1), Point::new(50.0, 60.0), "hello".to_string());
+        tool.begin_edit(
+            nib_core::AnnotationId(1),
+            Point::new(50.0, 60.0),
+            "hello".to_string(),
+        );
 
         assert_eq!(tool.text_state().content, "hello");
         assert_eq!(tool.text_state().position, Some(Point::new(50.0, 60.0)));
@@ -1746,7 +1790,11 @@ mod text_tool_tests {
         let mut tool = TextTool::new();
         let ctx = make_test_context();
 
-        tool.begin_edit(nib_core::AnnotationId(1), Point::new(50.0, 60.0), "hello".to_string());
+        tool.begin_edit(
+            nib_core::AnnotationId(1),
+            Point::new(50.0, 60.0),
+            "hello".to_string(),
+        );
 
         let result = tool.handle_event(
             ToolEvent::KeyDown {
@@ -1799,7 +1847,11 @@ mod text_tool_tests {
         let mut tool = TextTool::new();
         let ctx = make_test_context();
 
-        tool.begin_edit(nib_core::AnnotationId(1), Point::new(50.0, 60.0), "old".to_string());
+        tool.begin_edit(
+            nib_core::AnnotationId(1),
+            Point::new(50.0, 60.0),
+            "old".to_string(),
+        );
 
         let result = tool.handle_event(
             ToolEvent::KeyDown {
@@ -2062,10 +2114,17 @@ mod select_tool_tests {
         );
 
         let selected = tool.selected();
-        assert_eq!(selected.len(), 2, "clicking one grouped member must select the whole group");
+        assert_eq!(
+            selected.len(),
+            2,
+            "clicking one grouped member must select the whole group"
+        );
         assert!(selected.contains(&a.id));
         assert!(selected.contains(&b.id));
-        assert!(!selected.contains(&c.id), "ungrouped annotation must not be pulled in");
+        assert!(
+            !selected.contains(&c.id),
+            "ungrouped annotation must not be pulled in"
+        );
     }
 
     #[test]
@@ -2107,7 +2166,10 @@ mod select_tool_tests {
         assert_eq!(tool.selected().len(), 2);
 
         // Shift-clicking any member toggles the whole group off, not just that member.
-        let shift = Modifiers { shift: true, ..Modifiers::default() };
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
         tool.handle_event(
             ToolEvent::MouseDown {
                 position: Point::new(55.0, 55.0),
@@ -2116,7 +2178,10 @@ mod select_tool_tests {
             },
             &ctx,
         );
-        assert!(tool.selected().is_empty(), "shift-click on an already-selected group member must deselect the whole group");
+        assert!(
+            tool.selected().is_empty(),
+            "shift-click on an already-selected group member must deselect the whole group"
+        );
     }
 
     #[test]
@@ -2136,17 +2201,28 @@ mod select_tool_tests {
             &ctx,
         );
         tool.handle_event(
-            ToolEvent::MouseMove { position: Point::new(7.0, 5.0), modifiers: no_modifiers() },
+            ToolEvent::MouseMove {
+                position: Point::new(7.0, 5.0),
+                modifiers: no_modifiers(),
+            },
             &ctx,
         );
         let result = tool.handle_event(
-            ToolEvent::MouseUp { position: Point::new(7.0, 5.0), button: MouseButton::Left },
+            ToolEvent::MouseUp {
+                position: Point::new(7.0, 5.0),
+                button: MouseButton::Left,
+            },
             &ctx,
         );
 
         match result {
-            ToolResult::Moved { delta_x, delta_y, .. } => {
-                assert_eq!(delta_x, 3.0, "must snap so a's right edge (12) lands exactly on b's left edge (13)");
+            ToolResult::Moved {
+                delta_x, delta_y, ..
+            } => {
+                assert_eq!(
+                    delta_x, 3.0,
+                    "must snap so a's right edge (12) lands exactly on b's left edge (13)"
+                );
                 assert_eq!(delta_y, 0.0);
             }
             other => panic!("expected Moved, got {other:?}"),
@@ -2169,19 +2245,33 @@ mod select_tool_tests {
             },
             &ctx,
         );
-        let cmd_held = Modifiers { cmd: true, ..Modifiers::default() };
+        let cmd_held = Modifiers {
+            cmd: true,
+            ..Modifiers::default()
+        };
         tool.handle_event(
-            ToolEvent::MouseMove { position: Point::new(7.0, 5.0), modifiers: cmd_held },
+            ToolEvent::MouseMove {
+                position: Point::new(7.0, 5.0),
+                modifiers: cmd_held,
+            },
             &ctx,
         );
         let result = tool.handle_event(
-            ToolEvent::MouseUp { position: Point::new(7.0, 5.0), button: MouseButton::Left },
+            ToolEvent::MouseUp {
+                position: Point::new(7.0, 5.0),
+                button: MouseButton::Left,
+            },
             &ctx,
         );
 
         match result {
-            ToolResult::Moved { delta_x, delta_y, .. } => {
-                assert_eq!(delta_x, 2.0, "holding cmd through the drag must bypass snapping");
+            ToolResult::Moved {
+                delta_x, delta_y, ..
+            } => {
+                assert_eq!(
+                    delta_x, 2.0,
+                    "holding cmd through the drag must bypass snapping"
+                );
                 assert_eq!(delta_y, 0.0);
             }
             other => panic!("expected Moved, got {other:?}"),
@@ -2287,7 +2377,10 @@ mod tool_manager_tests {
         );
 
         // Should have preview
-        assert!(matches!(manager.preview(&ctx), ToolPreview::Rectangle { .. }));
+        assert!(matches!(
+            manager.preview(&ctx),
+            ToolPreview::Rectangle { .. }
+        ));
     }
 
     #[test]
@@ -2531,7 +2624,10 @@ mod integration_tests {
             },
             &ctx,
         );
-        assert!(matches!(manager.preview(&ctx), ToolPreview::Rectangle { .. }));
+        assert!(matches!(
+            manager.preview(&ctx),
+            ToolPreview::Rectangle { .. }
+        ));
 
         // Complete drag
         let result = manager.handle_event(

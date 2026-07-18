@@ -4,7 +4,9 @@ use std::any::Any;
 
 use nib_core::{Annotation, AnnotationType};
 
-use super::{MouseButton, NumberToolState, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult};
+use super::{
+    MouseButton, NumberToolState, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult,
+};
 
 /// Tool for placing numbered callout annotations
 pub struct NumberTool {

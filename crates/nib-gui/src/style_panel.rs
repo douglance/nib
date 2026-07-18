@@ -4,9 +4,14 @@
 //! `.when(style_picker_open, ...)` call that invokes `EditorView::render_style_flyout`.
 
 use gpui::prelude::FluentBuilder;
-use gpui::{div, px, rgb, rgba, Context, InteractiveElement, IntoElement, ParentElement, Rgba, StatefulInteractiveElement, Styled};
+use gpui::{
+    div, px, rgb, rgba, Context, InteractiveElement, IntoElement, ParentElement, Rgba,
+    StatefulInteractiveElement, Styled,
+};
 
-use nib_core::{AnnotationId, AnnotationStyle, AnnotationType, ArrowHead, BlurIntensity, StrokeStyle};
+use nib_core::{
+    AnnotationId, AnnotationStyle, AnnotationType, ArrowHead, BlurIntensity, StrokeStyle,
+};
 
 use crate::app::EditorView;
 use crate::layout::AlignMode;
@@ -34,9 +39,12 @@ pub fn visible_rows(active_tool: ToolId, selected_kinds: &[&str]) -> RowVisibili
             active_tool,
             ToolId::Rectangle | ToolId::Arrow | ToolId::Ellipse | ToolId::Line | ToolId::Pencil
         ) || has(&["box", "arrow", "ellipse", "line", "path"]),
-        fill: matches!(active_tool, ToolId::Rectangle | ToolId::Ellipse) || has(&["box", "ellipse"]),
-        stroke_style: matches!(active_tool, ToolId::Rectangle | ToolId::Line | ToolId::Pencil)
-            || has(&["box", "line", "path"]),
+        fill: matches!(active_tool, ToolId::Rectangle | ToolId::Ellipse)
+            || has(&["box", "ellipse"]),
+        stroke_style: matches!(
+            active_tool,
+            ToolId::Rectangle | ToolId::Line | ToolId::Pencil
+        ) || has(&["box", "line", "path"]),
         arrow_head: matches!(active_tool, ToolId::Arrow) || has(&["arrow"]),
         font_size: matches!(active_tool, ToolId::Text) || has(&["text"]),
         blur_intensity: matches!(active_tool, ToolId::Blur) || has(&["blur"]),
@@ -78,7 +86,10 @@ impl EditorView {
             let before = ann.clone();
             f(&mut ann.annotation_type);
             ann.touch();
-            edits.push(crate::history::Edit::Replaced { before, after: ann.clone() });
+            edits.push(crate::history::Edit::Replaced {
+                before,
+                after: ann.clone(),
+            });
         }
         self.record_edit(crate::history::Edit::Batch(edits));
         self.save_annotations(cx);
@@ -159,7 +170,10 @@ impl EditorView {
                 let before = ann.clone();
                 ann.color.a = alpha;
                 ann.touch();
-                edits.push(crate::history::Edit::Replaced { before, after: ann.clone() });
+                edits.push(crate::history::Edit::Replaced {
+                    before,
+                    after: ann.clone(),
+                });
             }
             self.record_edit(crate::history::Edit::Batch(edits));
             self.save_annotations(cx);
@@ -210,7 +224,12 @@ impl EditorView {
                 el.child(self.render_font_size_row(button_bg, button_active_bg, text_color, cx))
             })
             .when(rows.blur_intensity, |el| {
-                el.child(self.render_blur_intensity_row(button_bg, button_active_bg, text_color, cx))
+                el.child(self.render_blur_intensity_row(
+                    button_bg,
+                    button_active_bg,
+                    text_color,
+                    cx,
+                ))
             })
             .when(self.selected_annotation_ids().len() >= 2, |el| {
                 el.child(self.render_align_row(button_bg, text_color, cx))
@@ -242,7 +261,13 @@ impl EditorView {
             .flex_row()
             .items_center()
             .gap_1()
-            .child(div().w(px(52.)).text_color(text_color).text_size(px(10.)).child("Align"))
+            .child(
+                div()
+                    .w(px(52.))
+                    .text_color(text_color)
+                    .text_size(px(10.))
+                    .child("Align"),
+            )
             .children(options.into_iter().map(|(label, mode)| {
                 div()
                     .id(label)
@@ -283,9 +308,9 @@ impl EditorView {
                 } else {
                     style.color()
                 };
-                let gpui_style_color = rgb(
-                    style_color.r as u32 * 0x10000 + style_color.g as u32 * 0x100 + style_color.b as u32,
-                );
+                let gpui_style_color = rgb(style_color.r as u32 * 0x10000
+                    + style_color.g as u32 * 0x100
+                    + style_color.b as u32);
 
                 div()
                     .id(style.label())
@@ -297,7 +322,11 @@ impl EditorView {
                     .h(px(48.))
                     .rounded_md()
                     .cursor_pointer()
-                    .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
+                    .bg(if is_active {
+                        button_active_bg
+                    } else {
+                        rgba(0x3d3d3d00)
+                    })
                     .hover(|s| s.bg(button_bg))
                     .child(
                         div()
@@ -306,7 +335,11 @@ impl EditorView {
                             .rounded_full()
                             .bg(gpui_style_color)
                             .border_2()
-                            .border_color(if is_active { rgb(0xffffff) } else { rgba(0xffffff66) }),
+                            .border_color(if is_active {
+                                rgb(0xffffff)
+                            } else {
+                                rgba(0xffffff66)
+                            }),
                     )
                     .child(
                         div()
@@ -467,7 +500,12 @@ impl EditorView {
         let current = self.style_state.opacity;
         render_option_row(
             "Opacity",
-            &[("25%", 0.25_f64), ("50%", 0.5), ("75%", 0.75), ("100%", 1.0)],
+            &[
+                ("25%", 0.25_f64),
+                ("50%", 0.5),
+                ("75%", 0.75),
+                ("100%", 1.0),
+            ],
             current,
             button_bg,
             button_active_bg,
@@ -497,7 +535,13 @@ fn render_option_row<T: Copy + PartialEq + 'static>(
         .flex_row()
         .items_center()
         .gap_1()
-        .child(div().w(px(52.)).text_color(text_color).text_size(px(10.)).child(label))
+        .child(
+            div()
+                .w(px(52.))
+                .text_color(text_color)
+                .text_size(px(10.))
+                .child(label),
+        )
         .children(options.iter().map(|(option_label, value)| {
             let value = *value;
             let is_active = value == current;
@@ -511,7 +555,11 @@ fn render_option_row<T: Copy + PartialEq + 'static>(
                 .px(px(6.))
                 .rounded_md()
                 .cursor_pointer()
-                .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
+                .bg(if is_active {
+                    button_active_bg
+                } else {
+                    rgba(0x3d3d3d00)
+                })
                 .hover(|s| s.bg(button_bg))
                 .text_color(text_color)
                 .text_size(px(10.))

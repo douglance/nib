@@ -184,7 +184,12 @@ impl EditorView {
 
         let bounds: Vec<Region> = ids
             .iter()
-            .filter_map(|id| self.annotations.iter().find(|a| a.id == *id).map(|a| a.bounds()))
+            .filter_map(|id| {
+                self.annotations
+                    .iter()
+                    .find(|a| a.id == *id)
+                    .map(|a| a.bounds())
+            })
             .collect();
         if bounds.len() != ids.len() {
             return;
@@ -202,7 +207,10 @@ impl EditorView {
                 let before = annotation.clone();
                 Self::move_annotation_type(&mut annotation.annotation_type, dx, dy);
                 annotation.touch();
-                edits.push(Edit::Replaced { before, after: annotation.clone() });
+                edits.push(Edit::Replaced {
+                    before,
+                    after: annotation.clone(),
+                });
             }
         }
 
@@ -249,11 +257,14 @@ mod tests {
     #[test]
     fn snap_picks_nearest_candidate_when_multiple_within_threshold() {
         let moving = r(100.0, 100.0, 10.0, 10.0); // x candidates: 100, 105, 110
-        // Two targets within threshold of the right edge (110): 112 (dist 2) and 114 (dist 4).
+                                                  // Two targets within threshold of the right edge (110): 112 (dist 2) and 114 (dist 4).
         let other_a = r(112.0, 150.0, 1.0, 1.0);
         let other_b = r(114.0, 160.0, 1.0, 1.0);
         let result = snap_delta(moving, &[other_a, other_b], (1000.0, 1000.0), 0.0, 0.0, 8.0);
-        assert_eq!(result.dx, 2.0, "must snap to the closer target (112), not the farther (114)");
+        assert_eq!(
+            result.dx, 2.0,
+            "must snap to the closer target (112), not the farther (114)"
+        );
     }
 
     #[test]
@@ -272,7 +283,10 @@ mod tests {
         let moving = r(0.0, 0.0, 10.0, 10.0);
         let result = snap_delta(moving, &[], (100.0, 100.0), 44.0, 0.0, 8.0);
         // proposed center = 0 + 44 + 5 = 49, within 8px of canvas center 50
-        assert_eq!(result.dx, 45.0, "center should land exactly on canvas center (50)");
+        assert_eq!(
+            result.dx, 45.0,
+            "center should land exactly on canvas center (50)"
+        );
         assert!(result.guides.contains(&Guide::Vertical(50.0)));
     }
 
@@ -288,7 +302,12 @@ mod tests {
         ];
         for (other, threshold) in cases {
             let result = snap_delta(moving, &[other], (1000.0, 1000.0), 0.0, 0.0, threshold);
-            assert!(result.dx.abs() <= threshold, "adjustment {} exceeded threshold {}", result.dx, threshold);
+            assert!(
+                result.dx.abs() <= threshold,
+                "adjustment {} exceeded threshold {}",
+                result.dx,
+                threshold
+            );
         }
     }
 
@@ -312,7 +331,11 @@ mod tests {
 
     #[test]
     fn align_left_sets_common_min_x() {
-        let bounds = [r(10.0, 0.0, 5.0, 5.0), r(30.0, 20.0, 8.0, 8.0), r(2.0, 40.0, 3.0, 3.0)];
+        let bounds = [
+            r(10.0, 0.0, 5.0, 5.0),
+            r(30.0, 20.0, 8.0, 8.0),
+            r(2.0, 40.0, 3.0, 3.0),
+        ];
         let aligned = align(&bounds, AlignMode::Left);
         for b in &aligned {
             assert_eq!(b.x, 2.0);

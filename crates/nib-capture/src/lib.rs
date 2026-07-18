@@ -22,8 +22,8 @@ pub type CaptureResult<T> = std::result::Result<T, CaptureError>;
 
 /// Capture the entire screen
 pub fn capture_screen(display_id: u32) -> CaptureResult<NibImage> {
-    let screens = screenshots::Screen::all()
-        .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
+    let screens =
+        screenshots::Screen::all().map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 
     let screen = screens
         .into_iter()
@@ -62,8 +62,8 @@ pub fn capture_screen(display_id: u32) -> CaptureResult<NibImage> {
 
 /// Get list of available displays
 pub fn list_displays() -> CaptureResult<Vec<DisplayInfo>> {
-    let screens = screenshots::Screen::all()
-        .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
+    let screens =
+        screenshots::Screen::all().map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 
     Ok(screens
         .into_iter()

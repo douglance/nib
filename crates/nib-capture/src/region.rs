@@ -72,8 +72,8 @@ impl RegionSelector {
 
 /// Capture a specific region of the screen
 pub fn capture_region(display_id: u32, region: Region) -> CaptureResult<NibImage> {
-    let screens = screenshots::Screen::all()
-        .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
+    let screens =
+        screenshots::Screen::all().map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
 
     let screen = screens
         .into_iter()

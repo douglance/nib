@@ -58,7 +58,10 @@ mod tests {
         assert!(lines.len() > 1, "expected multiple lines, got {lines:?}");
         for line in &lines {
             // char_width = 16*0.6 = 9.6, max_chars = floor(60/9.6) = 6
-            assert!(line.len() <= 6 || !line.contains(' '), "line exceeds wrap width: {line:?}");
+            assert!(
+                line.len() <= 6 || !line.contains(' '),
+                "line exceeds wrap width: {line:?}"
+            );
         }
     }
 

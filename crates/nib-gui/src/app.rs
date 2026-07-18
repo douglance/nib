@@ -2,23 +2,24 @@
 //!
 //! This module provides the main GPUI-based graphical interface for Nib.
 
-use gpui::{
-    canvas, div, img, point, px, rgb, rgba, size, svg, App, AppContext, Application, AssetSource,
-    Bounds, ClipboardItem, Context, Div, ElementInputHandler, Entity, EntityInputHandler,
-    ExternalPaths, FocusHandle, Focusable, InteractiveElement, IntoElement,
-    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
-    PathBuilder, PathPromptOptions, Pixels, Point, Render, Result as GpuiResult, ScrollWheelEvent, SharedString, Size,
-    StatefulInteractiveElement, Styled, StyledImage, Task, Window, WindowBounds, WindowKind,
-    WindowBackgroundAppearance, WindowOptions, UTF16Selection,
-};
 use gpui::prelude::FluentBuilder;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use gpui::{
+    canvas, div, fill, img, point, px, relative, rgb, rgba, size, svg, AnyElement, App, AppContext,
+    Application, AssetSource, Bounds, ClipboardItem, Context, Div, Element, ElementId,
+    ElementInputHandler, Entity, EntityInputHandler, ExternalPaths, FocusHandle, Focusable,
+    FontStyle, GlobalElementId, HighlightStyle, InteractiveElement, IntoElement, KeyDownEvent,
+    LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement,
+    PathBuilder, PathPromptOptions, Pixels, Point, Render, Result as GpuiResult, ScrollHandle,
+    ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement, Style, Styled, StyledImage,
+    StyledText, Task, TextAlign, TextRun, TitlebarOptions, UTF16Selection, UnderlineStyle, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, WrappedLine,
+};
 use std::borrow::Cow;
 use std::fs;
-use std::path::PathBuf;
 use std::ops::Range;
+use std::path::PathBuf;
 use std::time::SystemTime;
+use std::time::{Duration, Instant};
 
 /// Embedded SVG icons (compile-time included for portable binary)
 mod embedded_icons {
@@ -36,6 +37,8 @@ mod embedded_icons {
     pub static ERASER: &[u8] = include_bytes!("../../../assets/icons/eraser.svg");
     pub static STICKY: &[u8] = include_bytes!("../../../assets/icons/sticky.svg");
     pub static IMAGE: &[u8] = include_bytes!("../../../assets/icons/image.svg");
+    pub static UNDO: &[u8] = include_bytes!("../../../assets/icons/undo.svg");
+    pub static REDO: &[u8] = include_bytes!("../../../assets/icons/redo.svg");
 
     pub fn get(path: &str) -> Option<&'static [u8]> {
         match path {
@@ -53,6 +56,8 @@ mod embedded_icons {
             "assets/icons/eraser.svg" => Some(ERASER),
             "assets/icons/sticky.svg" => Some(STICKY),
             "assets/icons/image.svg" => Some(IMAGE),
+            "assets/icons/undo.svg" => Some(UNDO),
+            "assets/icons/redo.svg" => Some(REDO),
             _ => None,
         }
     }
@@ -88,35 +93,37 @@ impl AssetSource for Assets {
     }
 }
 
-use nib_collab::session::Session;
-use nib_collab::types::ClientType;
-use nib_core::blur::apply_blur_region;
-use nib_core::{
-    dash_segments, Annotation, AnnotationId, AnnotationType, ArrowHead, AssetData, Color, Region,
-    StrokeStyle,
-};
-use nib_core::Point as NibPoint;
-use crate::canvas::{Canvas, ZOOM_FACTOR};
+use crate::canvas::{Canvas, FIT_PADDING, ZOOM_FACTOR};
+use crate::history::{Edit, History};
+use crate::tool_flyout;
 use crate::toolbar::Tool;
 use crate::tools::{
     images_from_dropped_paths, Modifiers, MouseButton as ToolMouseButton, StyleState, TextTool,
     ToolContext, ToolEvent, ToolId, ToolManager, ToolMode, ToolPreview, ToolResult,
 };
-use nib_storage::nib_file::NibFile;
-use crate::history::{Edit, History};
-use crate::tool_flyout;
 use crate::zorder;
+use nib_collab::session::Session;
+use nib_collab::types::ClientType;
+use nib_core::blur::apply_blur_region;
+use nib_core::Point as NibPoint;
+use nib_core::{
+    dash_segments, Annotation, AnnotationId, AnnotationType, ArrowHead, AssetData, Color, Region,
+    StrokeStyle,
+};
+use nib_storage::nib_file::NibFile;
 
 // Re-export serialization types from nib-serde
 pub use nib_serde::{
-    AnnotationGeometry, AnnotationsFile, SerializedAnnotation,
-    annotations_file_path, deserialize_annotation, serialize_annotation,
-    color_to_hex, hex_to_color, ANNOTATIONS_FILE_VERSION,
+    annotations_file_path, color_to_hex, deserialize_annotation, hex_to_color,
+    serialize_annotation, AnnotationGeometry, AnnotationsFile, SerializedAnnotation,
+    ANNOTATIONS_FILE_VERSION,
 };
 
 /// Height of the toolbar in pixels (used for coordinate offset)
 /// Mouse events are window-relative, so we subtract this to get canvas-relative coords
 const TOOLBAR_HEIGHT: f32 = 0.0; // Toolbar floats inside canvas, doesn't offset coordinates
+const TITLEBAR_CONTENT_INSET: f32 = 28.0;
+const RESPONSE_COMPOSER_HEIGHT: f32 = 88.0;
 
 /// Cap on remembered undo entries (oldest dropped once exceeded)
 const HISTORY_CAP: usize = 100;
@@ -125,8 +132,7 @@ const HISTORY_CAP: usize = 100;
 /// defined here as the single source both `handle_key_down` and the toolbar badge read from.
 const STYLE_PICKER_SHORTCUT: char = 's';
 
-/// Display labels for the modifier-combo shortcuts, shared between the toolbar button badges
-/// and the `command_shortcuts` list used by `toolbar_shortcut_tests` below.
+/// Display labels used by the shortcut uniqueness tests below.
 const SEND_SHORTCUT_LABEL: &str = "⌘↵";
 const APPROVE_SHORTCUT_LABEL: &str = "⇧⌘A";
 const REJECT_SHORTCUT_LABEL: &str = "⇧⌘R";
@@ -134,9 +140,7 @@ const REJECT_SHORTCUT_LABEL: &str = "⇧⌘R";
 /// Labels for the keyboard-only commands added in Phase 2 (no toolbar badge --
 /// undo/redo/duplicate/z-order don't have toolbar buttons), used only by
 /// `command_shortcuts` below so `toolbar_shortcut_tests` covers them too.
-#[cfg(test)]
 const UNDO_SHORTCUT_LABEL: &str = "⌘Z";
-#[cfg(test)]
 const REDO_SHORTCUT_LABEL: &str = "⇧⌘Z";
 #[cfg(test)]
 const DUPLICATE_SHORTCUT_LABEL: &str = "⌘D";
@@ -158,9 +162,17 @@ const UNGROUP_SHORTCUT_LABEL: &str = "⇧⌘G";
 fn command_shortcuts() -> Vec<(&'static str, String)> {
     let mut shortcuts: Vec<(&'static str, String)> = Tool::all()
         .iter()
-        .map(|tool| (tool.name(), tool.shortcut().to_ascii_uppercase().to_string()))
+        .map(|tool| {
+            (
+                tool.name(),
+                tool.shortcut().to_ascii_uppercase().to_string(),
+            )
+        })
         .collect();
-    shortcuts.push(("Style", STYLE_PICKER_SHORTCUT.to_ascii_uppercase().to_string()));
+    shortcuts.push((
+        "Style",
+        STYLE_PICKER_SHORTCUT.to_ascii_uppercase().to_string(),
+    ));
     shortcuts.push(("Send", SEND_SHORTCUT_LABEL.to_string()));
     shortcuts.push(("Approve", APPROVE_SHORTCUT_LABEL.to_string()));
     shortcuts.push(("Reject", REJECT_SHORTCUT_LABEL.to_string()));
@@ -177,7 +189,10 @@ fn command_shortcuts() -> Vec<(&'static str, String)> {
 /// Renders the small keyboard-shortcut badge shown in a toolbar button's top-right corner.
 /// Shared by tool buttons, the style-picker trigger, and Send/Approve/Reject so every
 /// toolbar command displays its shortcut the same way.
-pub(crate) fn render_shortcut_badge(label: impl Into<SharedString>, text_color: impl Into<gpui::Hsla>) -> impl IntoElement {
+pub(crate) fn render_shortcut_badge(
+    label: impl Into<SharedString>,
+    text_color: impl Into<gpui::Hsla>,
+) -> impl IntoElement {
     div()
         .absolute()
         .top(px(2.))
@@ -196,7 +211,7 @@ pub(crate) fn render_shortcut_badge(label: impl Into<SharedString>, text_color: 
             div()
                 .text_color(text_color)
                 .text_size(px(10.))
-                .child(label.into())
+                .child(label.into()),
         )
 }
 
@@ -229,13 +244,21 @@ pub struct TextInputState {
     pub editing_annotation_id: Option<AnnotationId>,
 }
 
-/// Compact, keyboard-first response field shown at the bottom of the review window.
+/// Keyboard-first response field shown in the review rail.
 struct ResponseComposer {
     focus_handle: FocusHandle,
     content: String,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
+    last_layout: Vec<WrappedLine>,
+    last_bounds: Option<Bounds<Pixels>>,
+    last_line_height: Pixels,
+    last_text_origin: Point<Pixels>,
+    preferred_height: f32,
+    is_selecting: bool,
+    undo_stack: Vec<String>,
+    redo_stack: Vec<String>,
 }
 
 impl ResponseComposer {
@@ -246,6 +269,14 @@ impl ResponseComposer {
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
+            last_layout: Vec::new(),
+            last_bounds: None,
+            last_line_height: px(18.0),
+            last_text_origin: Point::default(),
+            preferred_height: RESPONSE_COMPOSER_HEIGHT,
+            is_selecting: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         }
     }
 
@@ -258,7 +289,10 @@ impl ResponseComposer {
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
-        self.content[..offset].char_indices().next_back().map_or(0, |(ix, _)| ix)
+        self.content[..offset]
+            .char_indices()
+            .next_back()
+            .map_or(0, |(ix, _)| ix)
     }
 
     fn next_boundary(&self, offset: usize) -> usize {
@@ -269,8 +303,13 @@ impl ResponseComposer {
     }
 
     fn replace_selected(&mut self, replacement: &str, cx: &mut Context<Self>) {
-        let replacement = replacement.replace(['\r', '\n'], " ");
-        let range = self.marked_range.take().unwrap_or_else(|| self.selected_range.clone());
+        let replacement = replacement.replace('\r', "");
+        let range = self
+            .marked_range
+            .take()
+            .unwrap_or_else(|| self.selected_range.clone());
+        self.undo_stack.push(self.content.clone());
+        self.redo_stack.clear();
         self.content.replace_range(range.clone(), &replacement);
         let cursor = range.start + replacement.len();
         self.selected_range = cursor..cursor;
@@ -278,70 +317,263 @@ impl ResponseComposer {
         cx.notify();
     }
 
-    fn handle_key_down(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let key = event.keystroke.key.as_str();
         let platform = event.keystroke.modifiers.platform;
+        let shift = event.keystroke.modifiers.shift;
+        let alt = event.keystroke.modifiers.alt;
+
+        let move_or_select = |this: &mut Self, offset: usize, cx: &mut Context<Self>| {
+            if shift {
+                this.select_to(offset, cx);
+            } else {
+                this.move_to(offset, cx);
+            }
+        };
 
         match (platform, key) {
+            (true, "z") if shift => self.redo(cx),
+            (true, "z") => self.undo(cx),
             (true, "a") => {
                 self.selected_range = 0..self.content.len();
                 self.selection_reversed = false;
                 cx.notify();
             }
-            (true, "c") => {
-                if !self.selected_range.is_empty() {
-                    cx.write_to_clipboard(ClipboardItem::new_string(
-                        self.content[self.selected_range.clone()].to_string(),
-                    ));
-                }
+            (true, "c") if !self.selected_range.is_empty() => {
+                cx.write_to_clipboard(ClipboardItem::new_string(
+                    self.content[self.selected_range.clone()].to_string(),
+                ));
             }
-            (true, "x") => {
-                if !self.selected_range.is_empty() {
-                    cx.write_to_clipboard(ClipboardItem::new_string(
-                        self.content[self.selected_range.clone()].to_string(),
-                    ));
-                    self.replace_selected("", cx);
-                }
+            (true, "x") if !self.selected_range.is_empty() => {
+                cx.write_to_clipboard(ClipboardItem::new_string(
+                    self.content[self.selected_range.clone()].to_string(),
+                ));
+                self.replace_selected("", cx);
             }
             (true, "v") => {
                 if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
                     self.replace_selected(&text, cx);
                 }
             }
+            (true, "backspace") => {
+                let cursor = self.cursor_offset();
+                self.selected_range = 0..cursor;
+                self.replace_selected("", cx);
+            }
+            (true, "delete") => {
+                let cursor = self.cursor_offset();
+                self.selected_range = cursor..self.content.len();
+                self.replace_selected("", cx);
+            }
             (false, "backspace") => {
                 if self.selected_range.is_empty() {
                     let cursor = self.cursor_offset();
-                    self.selected_range = self.previous_boundary(cursor)..cursor;
+                    let start = if alt {
+                        self.previous_word_boundary(cursor)
+                    } else {
+                        self.previous_boundary(cursor)
+                    };
+                    self.selected_range = start..cursor;
                 }
                 self.replace_selected("", cx);
             }
             (false, "delete") => {
                 if self.selected_range.is_empty() {
                     let cursor = self.cursor_offset();
-                    self.selected_range = cursor..self.next_boundary(cursor);
+                    let end = if alt {
+                        self.next_word_boundary(cursor)
+                    } else {
+                        self.next_boundary(cursor)
+                    };
+                    self.selected_range = cursor..end;
                 }
                 self.replace_selected("", cx);
             }
             (false, "left") => {
-                let cursor = if self.selected_range.is_empty() {
-                    self.previous_boundary(self.cursor_offset())
+                let cursor = if shift || self.selected_range.is_empty() {
+                    if alt {
+                        self.previous_word_boundary(self.cursor_offset())
+                    } else {
+                        self.previous_boundary(self.cursor_offset())
+                    }
                 } else {
                     self.selected_range.start
                 };
-                self.selected_range = cursor..cursor;
-                cx.notify();
+                move_or_select(self, cursor, cx);
             }
             (false, "right") => {
-                let cursor = if self.selected_range.is_empty() {
-                    self.next_boundary(self.cursor_offset())
+                let cursor = if shift || self.selected_range.is_empty() {
+                    if alt {
+                        self.next_word_boundary(self.cursor_offset())
+                    } else {
+                        self.next_boundary(self.cursor_offset())
+                    }
                 } else {
                     self.selected_range.end
                 };
-                self.selected_range = cursor..cursor;
-                cx.notify();
+                move_or_select(self, cursor, cx);
             }
+            (true, "left") | (true, "home") => move_or_select(self, 0, cx),
+            (true, "right") | (true, "end") => move_or_select(self, self.content.len(), cx),
+            (true, "up") => move_or_select(self, 0, cx),
+            (true, "down") => move_or_select(self, self.content.len(), cx),
+            (false, "home") => move_or_select(self, 0, cx),
+            (false, "end") => move_or_select(self, self.content.len(), cx),
+            (false, "up") => self.move_vertically(-1.0, shift, cx),
+            (false, "down") => self.move_vertically(1.0, shift, cx),
+            (false, "enter") => self.replace_selected("\n", cx),
+            (true, "space") if event.keystroke.modifiers.control => window.show_character_palette(),
             _ => {}
         }
+    }
+
+    fn undo(&mut self, cx: &mut Context<Self>) {
+        if let Some(previous) = self.undo_stack.pop() {
+            self.redo_stack
+                .push(std::mem::replace(&mut self.content, previous));
+            let cursor = self.content.len();
+            self.selected_range = cursor..cursor;
+            self.selection_reversed = false;
+            self.marked_range = None;
+            cx.notify();
+        }
+    }
+
+    fn redo(&mut self, cx: &mut Context<Self>) {
+        if let Some(next) = self.redo_stack.pop() {
+            self.undo_stack
+                .push(std::mem::replace(&mut self.content, next));
+            let cursor = self.content.len();
+            self.selected_range = cursor..cursor;
+            self.selection_reversed = false;
+            self.marked_range = None;
+            cx.notify();
+        }
+    }
+
+    fn previous_word_boundary(&self, offset: usize) -> usize {
+        let prefix = self.content[..offset].trim_end_matches(|ch: char| ch.is_whitespace());
+        prefix
+            .char_indices()
+            .rev()
+            .find(|(_, ch)| ch.is_whitespace())
+            .map_or(0, |(ix, ch)| ix + ch.len_utf8())
+    }
+
+    fn next_word_boundary(&self, offset: usize) -> usize {
+        let mut saw_whitespace = false;
+        for (ix, ch) in self.content[offset..].char_indices() {
+            if ch.is_whitespace() {
+                saw_whitespace = true;
+            } else if saw_whitespace {
+                return offset + ix;
+            }
+        }
+        self.content.len()
+    }
+
+    fn move_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        self.selected_range = offset..offset;
+        self.selection_reversed = false;
+        cx.notify();
+    }
+
+    fn select_to(&mut self, offset: usize, cx: &mut Context<Self>) {
+        if self.selection_reversed {
+            self.selected_range.start = offset;
+        } else {
+            self.selected_range.end = offset;
+        }
+        if self.selected_range.end < self.selected_range.start {
+            self.selection_reversed = !self.selection_reversed;
+            self.selected_range = self.selected_range.end..self.selected_range.start;
+        }
+        cx.notify();
+    }
+
+    fn move_vertically(&mut self, direction: f32, selecting: bool, cx: &mut Context<Self>) {
+        if self.last_layout.is_empty() {
+            return;
+        }
+        let current = wrapped_position_for_index(
+            &self.last_layout,
+            self.cursor_offset(),
+            self.last_line_height,
+        )
+        .unwrap_or_default();
+        let target = point(current.x, current.y + self.last_line_height * direction);
+        let height = wrapped_text_height(&self.last_layout, self.last_line_height);
+        let offset = if target.y < px(0.0) {
+            0
+        } else if target.y >= height {
+            self.content.len()
+        } else {
+            wrapped_index_for_position(
+                &self.last_layout,
+                target,
+                self.last_line_height,
+                self.content.len(),
+            )
+        };
+        if selecting {
+            self.select_to(offset, cx);
+        } else {
+            self.move_to(offset, cx);
+        }
+    }
+
+    fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+        if self.last_layout.is_empty() {
+            return 0;
+        }
+        let local = position - self.last_text_origin;
+        wrapped_index_for_position(
+            &self.last_layout,
+            local,
+            self.last_line_height,
+            self.content.len(),
+        )
+    }
+
+    fn handle_mouse_down(
+        &mut self,
+        event: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_handle.focus(window);
+        self.is_selecting = true;
+        let offset = self.index_for_mouse_position(event.position);
+        if event.modifiers.shift {
+            self.select_to(offset, cx);
+        } else {
+            self.move_to(offset, cx);
+        }
+    }
+
+    fn handle_mouse_move(
+        &mut self,
+        event: &MouseMoveEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_selecting {
+            self.select_to(self.index_for_mouse_position(event.position), cx);
+        }
+    }
+
+    fn handle_mouse_up(
+        &mut self,
+        _event: &MouseUpEvent,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        self.is_selecting = false;
     }
 
     fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
@@ -374,6 +606,10 @@ impl ResponseComposer {
         }
         start..end
     }
+
+    fn offset_to_utf16(&self, offset: usize) -> usize {
+        self.content[..offset].encode_utf16().count()
+    }
 }
 
 impl EntityInputHandler for ResponseComposer {
@@ -401,8 +637,14 @@ impl EntityInputHandler for ResponseComposer {
         })
     }
 
-    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
-        self.marked_range.as_ref().map(|range| self.range_to_utf16(range))
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
+        self.marked_range
+            .as_ref()
+            .map(|range| self.range_to_utf16(range))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -449,97 +691,674 @@ impl EntityInputHandler for ResponseComposer {
 
     fn bounds_for_range(
         &mut self,
-        _range: Range<usize>,
-        element_bounds: Bounds<Pixels>,
+        range: Range<usize>,
+        _element_bounds: Bounds<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        Some(element_bounds)
+        if self.last_layout.is_empty() {
+            return None;
+        }
+        let range = self.range_from_utf16(&range);
+        Some(Bounds::from_corners(
+            self.last_text_origin
+                + wrapped_position_for_index(
+                    &self.last_layout,
+                    range.start,
+                    self.last_line_height,
+                )?,
+            self.last_text_origin
+                + wrapped_position_for_index(&self.last_layout, range.end, self.last_line_height)?
+                + point(px(1.0), self.last_line_height),
+        ))
     }
 
     fn character_index_for_point(
         &mut self,
-        _point: Point<Pixels>,
+        point: Point<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
-        Some(self.range_to_utf16(&(self.cursor_offset()..self.cursor_offset())).start)
+        self.last_bounds?;
+        let local = point - self.last_text_origin;
+        if self.last_layout.is_empty() {
+            return None;
+        }
+        let index = wrapped_index_for_position(
+            &self.last_layout,
+            local,
+            self.last_line_height,
+            self.content.len(),
+        );
+        Some(self.offset_to_utf16(index))
+    }
+}
+
+struct ResponseTextElement {
+    input: Entity<ResponseComposer>,
+}
+
+struct ResponsePrepaintState {
+    lines: Vec<WrappedLine>,
+    line_height: Pixels,
+    cursor: Option<PaintQuad>,
+    selection: Vec<PaintQuad>,
+    text_origin: Point<Pixels>,
+    text_height: Pixels,
+    scroll_y: Pixels,
+    desired_height: f32,
+}
+
+fn response_height_for_text_height(text_height: f32) -> f32 {
+    let _ = text_height;
+    RESPONSE_COMPOSER_HEIGHT
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum MarkdownBlock {
+    Heading(u8, String),
+    Paragraph(String),
+    Bullet(String),
+    Numbered(String, String),
+    Quote(String),
+    Code(String),
+    Rule,
+}
+
+fn parse_markdown_blocks(markdown: &str) -> Vec<MarkdownBlock> {
+    fn flush_paragraph(paragraph: &mut Vec<String>, blocks: &mut Vec<MarkdownBlock>) {
+        if !paragraph.is_empty() {
+            blocks.push(MarkdownBlock::Paragraph(paragraph.join(" ")));
+            paragraph.clear();
+        }
+    }
+
+    let mut blocks = Vec::new();
+    let mut paragraph = Vec::new();
+    let mut code = Vec::new();
+    let mut in_code = false;
+
+    for raw_line in markdown.lines() {
+        let line = raw_line.trim_end();
+        if line.trim_start().starts_with("```") {
+            flush_paragraph(&mut paragraph, &mut blocks);
+            if in_code {
+                blocks.push(MarkdownBlock::Code(code.join("\n")));
+                code.clear();
+            }
+            in_code = !in_code;
+            continue;
+        }
+        if in_code {
+            code.push(line.to_string());
+            continue;
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            flush_paragraph(&mut paragraph, &mut blocks);
+        } else if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            flush_paragraph(&mut paragraph, &mut blocks);
+            blocks.push(MarkdownBlock::Rule);
+        } else if let Some(content) = trimmed.strip_prefix("### ") {
+            flush_paragraph(&mut paragraph, &mut blocks);
+            blocks.push(MarkdownBlock::Heading(3, content.to_string()));
+        } else if let Some(content) = trimmed.strip_prefix("## ") {
+            flush_paragraph(&mut paragraph, &mut blocks);
+            blocks.push(MarkdownBlock::Heading(2, content.to_string()));
+        } else if let Some(content) = trimmed.strip_prefix("# ") {
+            flush_paragraph(&mut paragraph, &mut blocks);
+            blocks.push(MarkdownBlock::Heading(1, content.to_string()));
+        } else if let Some(content) = trimmed.strip_prefix("> ") {
+            flush_paragraph(&mut paragraph, &mut blocks);
+            blocks.push(MarkdownBlock::Quote(content.to_string()));
+        } else if let Some(content) = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| trimmed.strip_prefix("+ "))
+        {
+            flush_paragraph(&mut paragraph, &mut blocks);
+            blocks.push(MarkdownBlock::Bullet(content.to_string()));
+        } else if let Some((marker, content)) = trimmed.split_once(". ") {
+            if marker.chars().all(|ch| ch.is_ascii_digit()) && !marker.is_empty() {
+                flush_paragraph(&mut paragraph, &mut blocks);
+                blocks.push(MarkdownBlock::Numbered(
+                    format!("{marker}."),
+                    content.to_string(),
+                ));
+            } else {
+                paragraph.push(trimmed.to_string());
+            }
+        } else {
+            paragraph.push(trimmed.to_string());
+        }
+    }
+
+    if in_code && !code.is_empty() {
+        blocks.push(MarkdownBlock::Code(code.join("\n")));
+    }
+    flush_paragraph(&mut paragraph, &mut blocks);
+    blocks
+}
+
+fn styled_markdown_text(source: &str) -> StyledText {
+    let mut text = String::new();
+    let mut highlights = Vec::new();
+    let mut remaining = source;
+
+    while !remaining.is_empty() {
+        if let Some(rest) = remaining.strip_prefix("**") {
+            if let Some(end) = rest.find("**") {
+                let start = text.len();
+                text.push_str(&rest[..end]);
+                highlights.push((start..text.len(), gpui::FontWeight::BOLD.into()));
+                remaining = &rest[end + 2..];
+                continue;
+            }
+        }
+        if let Some(rest) = remaining.strip_prefix('`') {
+            if let Some(end) = rest.find('`') {
+                let start = text.len();
+                text.push_str(&rest[..end]);
+                highlights.push((
+                    start..text.len(),
+                    HighlightStyle {
+                        color: Some(rgba(0xcce7ff).into()),
+                        background_color: Some(rgba(0xffffff18).into()),
+                        ..Default::default()
+                    },
+                ));
+                remaining = &rest[end + 1..];
+                continue;
+            }
+        }
+        if let Some(rest) = remaining.strip_prefix('[') {
+            if let Some(label_end) = rest.find("](") {
+                if let Some(url_end) = rest[label_end + 2..].find(')') {
+                    let start = text.len();
+                    text.push_str(&rest[..label_end]);
+                    highlights.push((
+                        start..text.len(),
+                        HighlightStyle {
+                            color: Some(rgba(0x9bd5ff).into()),
+                            underline: Some(UnderlineStyle {
+                                color: Some(rgba(0x9bd5ff).into()),
+                                thickness: px(1.0),
+                                wavy: false,
+                            }),
+                            ..Default::default()
+                        },
+                    ));
+                    remaining = &rest[label_end + 2 + url_end + 1..];
+                    continue;
+                }
+            }
+        }
+        if let Some(rest) = remaining.strip_prefix('*') {
+            if let Some(end) = rest.find('*') {
+                let start = text.len();
+                text.push_str(&rest[..end]);
+                highlights.push((start..text.len(), FontStyle::Italic.into()));
+                remaining = &rest[end + 1..];
+                continue;
+            }
+        }
+
+        let char_len = remaining.chars().next().map_or(0, char::len_utf8);
+        text.push_str(&remaining[..char_len]);
+        remaining = &remaining[char_len..];
+    }
+
+    StyledText::new(text).with_highlights(highlights)
+}
+
+fn render_markdown_block(block: MarkdownBlock) -> AnyElement {
+    match block {
+        MarkdownBlock::Heading(level, text) => div()
+            .w_full()
+            .min_w(px(0.0))
+            .whitespace_normal()
+            .mt(if level == 1 { px(2.0) } else { px(4.0) })
+            .text_color(rgb(0xffffff))
+            .text_size(px(match level {
+                1 => 18.0,
+                2 => 16.0,
+                _ => 14.0,
+            }))
+            .line_height(px(match level {
+                1 => 23.0,
+                2 => 21.0,
+                _ => 19.0,
+            }))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .child(styled_markdown_text(&text))
+            .into_any_element(),
+        MarkdownBlock::Paragraph(text) => div()
+            .w_full()
+            .min_w(px(0.0))
+            .text_color(rgb(0xf2f2f2))
+            .text_size(px(13.0))
+            .line_height(px(19.0))
+            .whitespace_normal()
+            .child(styled_markdown_text(&text))
+            .into_any_element(),
+        MarkdownBlock::Bullet(text) => div()
+            .w_full()
+            .min_w(px(0.0))
+            .flex()
+            .gap_2()
+            .text_color(rgb(0xf2f2f2))
+            .text_size(px(13.0))
+            .line_height(px(19.0))
+            .child(
+                div()
+                    .w(px(12.0))
+                    .flex_shrink_0()
+                    .text_color(rgba(0xffffff99))
+                    .child("•"),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .whitespace_normal()
+                    .child(styled_markdown_text(&text)),
+            )
+            .into_any_element(),
+        MarkdownBlock::Numbered(marker, text) => div()
+            .w_full()
+            .min_w(px(0.0))
+            .flex()
+            .gap_2()
+            .text_color(rgb(0xf2f2f2))
+            .text_size(px(13.0))
+            .line_height(px(19.0))
+            .child(
+                div()
+                    .w(px(20.0))
+                    .flex_shrink_0()
+                    .text_color(rgba(0xffffff99))
+                    .child(marker),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .whitespace_normal()
+                    .child(styled_markdown_text(&text)),
+            )
+            .into_any_element(),
+        MarkdownBlock::Quote(text) => div()
+            .w_full()
+            .min_w(px(0.0))
+            .p_2()
+            .bg(rgba(0xffffff0c))
+            .border_1()
+            .border_color(rgba(0xffffff20))
+            .rounded(px(4.0))
+            .text_color(rgba(0xffffffcc))
+            .text_size(px(13.0))
+            .line_height(px(19.0))
+            .whitespace_normal()
+            .italic()
+            .child(styled_markdown_text(&text))
+            .into_any_element(),
+        MarkdownBlock::Code(text) => div()
+            .w_full()
+            .min_w(px(0.0))
+            .p_2()
+            .bg(rgba(0x00000055))
+            .border_1()
+            .border_color(rgba(0xffffff20))
+            .rounded(px(4.0))
+            .font_family("Menlo")
+            .text_color(rgb(0xd9edff))
+            .text_size(px(11.0))
+            .line_height(px(17.0))
+            .whitespace_normal()
+            .child(text)
+            .into_any_element(),
+        MarkdownBlock::Rule => div()
+            .h(px(1.0))
+            .w_full()
+            .bg(rgba(0xffffff28))
+            .into_any_element(),
+    }
+}
+
+fn wrapped_text_height(lines: &[WrappedLine], line_height: Pixels) -> Pixels {
+    lines.iter().fold(px(0.0), |height, line| {
+        height + line.size(line_height).height
+    })
+}
+
+fn wrapped_position_for_index(
+    lines: &[WrappedLine],
+    index: usize,
+    line_height: Pixels,
+) -> Option<Point<Pixels>> {
+    let mut line_start = 0;
+    let mut y = px(0.0);
+    for line in lines {
+        let line_end = line_start + line.len();
+        if index <= line_end {
+            return line
+                .position_for_index(index.saturating_sub(line_start), line_height)
+                .map(|position| position + point(px(0.0), y));
+        }
+        line_start = line_end + 1;
+        y += line.size(line_height).height;
+    }
+    None
+}
+
+fn wrapped_index_for_position(
+    lines: &[WrappedLine],
+    position: Point<Pixels>,
+    line_height: Pixels,
+    content_len: usize,
+) -> usize {
+    let mut line_start = 0;
+    let mut y = px(0.0);
+    for line in lines {
+        let height = line.size(line_height).height;
+        if position.y < y + height {
+            let local = point(position.x, (position.y - y).max(px(0.0)));
+            let offset = line
+                .closest_index_for_position(local, line_height)
+                .unwrap_or_else(|offset| offset);
+            return (line_start + offset).min(content_len);
+        }
+        y += height;
+        line_start += line.len() + 1;
+    }
+    content_len
+}
+
+impl IntoElement for ResponseTextElement {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for ResponseTextElement {
+    type RequestLayoutState = ();
+    type PrepaintState = ResponsePrepaintState;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = relative(1.).into();
+        style.size.height = px((self.input.read(cx).preferred_height - 16.0).max(18.0)).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let input = self.input.read(cx);
+        let content = input.content.clone();
+        let selected_range = input.selected_range.clone();
+        let cursor = input.cursor_offset();
+        let style = window.text_style();
+        let (display_text, color) = if content.is_empty() {
+            ("Type a response...".to_string(), rgba(0xffffffaa).into())
+        } else {
+            (content, style.color)
+        };
+        let run = TextRun {
+            len: display_text.len(),
+            font: style.font(),
+            color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        let runs = if let Some(marked) = input.marked_range.as_ref() {
+            vec![
+                TextRun {
+                    len: marked.start,
+                    ..run.clone()
+                },
+                TextRun {
+                    len: marked.end - marked.start,
+                    underline: Some(UnderlineStyle {
+                        color: Some(run.color),
+                        thickness: px(1.0),
+                        wavy: false,
+                    }),
+                    ..run.clone()
+                },
+                TextRun {
+                    len: display_text.len() - marked.end,
+                    ..run
+                },
+            ]
+            .into_iter()
+            .filter(|run| run.len > 0)
+            .collect()
+        } else {
+            vec![run]
+        };
+        let font_size = style.font_size.to_pixels(window.rem_size());
+        let line_height = px(18.0);
+        let lines: Vec<WrappedLine> = window
+            .text_system()
+            .shape_text(
+                display_text.into(),
+                font_size,
+                &runs,
+                Some(bounds.size.width),
+                None,
+            )
+            .map(|lines| lines.into_iter().collect())
+            .unwrap_or_default();
+        let cursor_position =
+            wrapped_position_for_index(&lines, cursor, line_height).unwrap_or_default();
+        let text_height = wrapped_text_height(&lines, line_height);
+        let desired_height = response_height_for_text_height(f32::from(text_height));
+        let scroll_y = (cursor_position.y + line_height - bounds.size.height).max(px(0.0));
+        let text_origin = bounds.origin - point(px(0.0), scroll_y);
+        let (selection, cursor) = if selected_range.is_empty() {
+            (
+                Vec::new(),
+                Some(fill(
+                    Bounds::new(text_origin + cursor_position, size(px(1.5), line_height)),
+                    rgb(0xffffff),
+                )),
+            )
+        } else {
+            let start = wrapped_position_for_index(&lines, selected_range.start, line_height)
+                .unwrap_or_default();
+            let end = wrapped_position_for_index(&lines, selected_range.end, line_height)
+                .unwrap_or(start);
+            let mut quads = Vec::new();
+            if start.y == end.y {
+                quads.push(fill(
+                    Bounds::from_corners(
+                        text_origin + start,
+                        text_origin + end + point(px(0.0), line_height),
+                    ),
+                    rgba(0x4d90fe55),
+                ));
+            } else {
+                quads.push(fill(
+                    Bounds::new(
+                        text_origin + start,
+                        size(bounds.size.width - start.x, line_height),
+                    ),
+                    rgba(0x4d90fe55),
+                ));
+                let mut y = start.y + line_height;
+                while y < end.y {
+                    quads.push(fill(
+                        Bounds::new(
+                            text_origin + point(px(0.0), y),
+                            size(bounds.size.width, line_height),
+                        ),
+                        rgba(0x4d90fe55),
+                    ));
+                    y += line_height;
+                }
+                quads.push(fill(
+                    Bounds::new(
+                        text_origin + point(px(0.0), end.y),
+                        size(end.x, line_height),
+                    ),
+                    rgba(0x4d90fe55),
+                ));
+            }
+            (quads, None)
+        };
+        ResponsePrepaintState {
+            lines,
+            line_height,
+            cursor,
+            selection,
+            text_origin,
+            text_height,
+            scroll_y,
+            desired_height,
+        }
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&gpui::InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let focus = self.input.read(cx).focus_handle.clone();
+        window.handle_input(
+            &focus,
+            ElementInputHandler::new(bounds, self.input.clone()),
+            cx,
+        );
+        for selection in prepaint.selection.drain(..) {
+            window.paint_quad(selection);
+        }
+        let mut line_origin = prepaint.text_origin;
+        for line in &prepaint.lines {
+            line.paint(
+                line_origin,
+                prepaint.line_height,
+                TextAlign::Left,
+                Some(bounds),
+                window,
+                cx,
+            )
+            .unwrap();
+            line_origin.y += line.size(prepaint.line_height).height;
+        }
+        let viewport_height = f32::from(bounds.size.height);
+        let content_height = f32::from(prepaint.text_height);
+        if content_height > viewport_height + 0.5 {
+            let track_width = 2.0;
+            let thumb_height =
+                (viewport_height * viewport_height / content_height).clamp(16.0, viewport_height);
+            let max_scroll = content_height - viewport_height;
+            let thumb_offset = (f32::from(prepaint.scroll_y).min(max_scroll) / max_scroll)
+                * (viewport_height - thumb_height);
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(bounds.right() - px(track_width), bounds.top()),
+                    size(px(track_width), bounds.size.height),
+                ),
+                rgba(0xffffff18),
+            ));
+            window.paint_quad(fill(
+                Bounds::new(
+                    point(
+                        bounds.right() - px(track_width),
+                        bounds.top() + px(thumb_offset),
+                    ),
+                    size(px(track_width), px(thumb_height)),
+                ),
+                rgba(0xffffff88),
+            ));
+        }
+        if focus.is_focused(window) {
+            if let Some(cursor) = prepaint.cursor.take() {
+                window.paint_quad(cursor);
+            }
+        }
+        self.input.update(cx, |input, _cx| {
+            input.last_layout = prepaint.lines.clone();
+            input.last_bounds = Some(bounds);
+            input.last_line_height = prepaint.line_height;
+            input.last_text_origin = prepaint.text_origin;
+            if (input.preferred_height - prepaint.desired_height).abs() > 0.5 {
+                input.preferred_height = prepaint.desired_height;
+                _cx.notify();
+            }
+        });
     }
 }
 
 impl Render for ResponseComposer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let entity = cx.entity();
-        let focus = self.focus_handle.clone();
-        let is_focused = focus.is_focused(window);
-        let content = self.content.clone();
-        let display_text = if content.is_empty() {
-            "Press Enter to reply".to_string()
-        } else {
-            content
-        };
-        let text_color = if self.content.is_empty() {
-            rgba(0xffffff66)
-        } else {
-            rgb(0xffffff)
-        };
+        let is_focused = self.focus_handle.is_focused(window);
 
         div()
             .id("response-composer")
             .relative()
-            .h(px(44.0))
+            .h(px(self.preferred_height))
             .w_full()
-            .px_4()
+            .px_3()
             .flex()
-            .items_center()
-            .bg(rgba(0x181818b8))
+            .items_start()
+            .bg(rgba(0x08080858))
             .border_1()
-            .border_color(if is_focused { rgba(0x90caf9cc) } else { rgba(0xffffff24) })
+            .border_color(if is_focused {
+                rgba(0x90caf9ee)
+            } else {
+                rgba(0xffffff66)
+            })
             .rounded_md()
+            .cursor_text()
+            .overflow_hidden()
             .track_focus(&self.focus_handle)
             .capture_key_down(cx.listener(Self::handle_key_down))
-            .on_click(cx.listener(|this, _event, window, _cx| {
-                this.focus_handle.focus(window);
-            }))
-            .child(
-                canvas(
-                    move |_, _, _| (),
-                    move |bounds, _, window, cx| {
-                        window.handle_input(
-                            &focus,
-                            ElementInputHandler::new(bounds, entity.clone()),
-                            cx,
-                        );
-                    },
-                )
-                .absolute()
-                .size_full(),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .text_color(text_color)
-                    .text_size(px(14.0))
-                    .overflow_hidden()
-                    .child(display_text),
-            )
-            .when(is_focused && !self.content.is_empty(), |this| {
-                this.child(div().w(px(1.5)).h(px(18.0)).bg(rgb(0xffffff)))
-            })
-            .child(
-                div()
-                    .ml_3()
-                    .text_color(rgba(0xffffff55))
-                    .text_size(px(11.0))
-                    .child("Cmd+Enter send · Esc canvas"),
-            )
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::handle_mouse_down))
+            .on_mouse_move(cx.listener(Self::handle_mouse_move))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::handle_mouse_up))
+            .text_color(rgb(0xffffff))
+            .text_size(px(13.0))
+            .line_height(px(18.0))
+            .py_2()
+            .child(ResponseTextElement { input: entity })
     }
 }
 
 /// Toast message for GUI display
 #[derive(Clone)]
 struct Toast {
-    id: u64,
     message: String,
     created_at: Instant,
     duration: Duration,
@@ -547,9 +1366,7 @@ struct Toast {
 
 impl Toast {
     fn new(message: String) -> Self {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
         Self {
-            id: COUNTER.fetch_add(1, Ordering::Relaxed),
             message,
             created_at: Instant::now(),
             duration: Duration::from_secs(4),
@@ -566,16 +1383,47 @@ pub struct NibApp {
     file_path: Option<PathBuf>,
 }
 
-const DEFAULT_WINDOW_WIDTH: f32 = 1200.0;
-const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
+const DEFAULT_WINDOW_WIDTH: f32 = 1400.0;
+const DEFAULT_WINDOW_HEIGHT: f32 = 720.0;
 const DISPLAY_MARGIN: f32 = 24.0;
+const REVIEW_RAIL_WIDTH: f32 = 320.0;
+const TOOLBAR_SAFE_AREA: f32 = 80.0;
+const DEFAULT_ACTIVE_TOOL: Tool = Tool::Select;
+
+fn app_background() -> gpui::Rgba {
+    // Keep the tint light enough for GPUI's native blurred backdrop to remain visible.
+    rgba(0x10101088)
+}
+
+fn canvas_viewport_width(window_width: f32, review_rail_visible: bool) -> f32 {
+    if review_rail_visible {
+        (window_width - REVIEW_RAIL_WIDTH).max(1.0)
+    } else {
+        window_width.max(1.0)
+    }
+}
+
+fn local_selection_handle_position(
+    handle_x: f32,
+    handle_y: f32,
+    selection_x: f32,
+    selection_y: f32,
+    handle_size: f32,
+) -> (f32, f32) {
+    (
+        handle_x - selection_x - handle_size / 2.0,
+        handle_y - selection_y - handle_size / 2.0,
+    )
+}
 
 #[cfg(target_os = "macos")]
 fn force_frontmost_application() {
     use objc2::MainThreadMarker;
     use objc2_app_kit::{
-        NSApplication, NSApplicationActivationOptions, NSRunningApplication,
-        NSFloatingWindowLevel,
+        NSApplication, NSApplicationActivationOptions, NSAutoresizingMaskOptions,
+        NSFloatingWindowLevel, NSRunningApplication, NSVisualEffectBlendingMode,
+        NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode,
+        NSWindowSharingType,
     };
 
     let main_thread = MainThreadMarker::new().expect("nib GUI must launch on the main thread");
@@ -584,7 +1432,29 @@ fn force_frontmost_application() {
     // Override the native level so the blocking review surface is not buried
     // beneath the terminal that launched it.
     for window in application.windows().iter() {
+        if let Some(content_view) = window.contentView() {
+            let frame = content_view.bounds();
+            let blur_view =
+                NSVisualEffectView::initWithFrame(main_thread.alloc::<NSVisualEffectView>(), frame);
+            blur_view.setMaterial(NSVisualEffectMaterial::HUDWindow);
+            blur_view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+            blur_view.setState(NSVisualEffectState::Active);
+            blur_view.setAutoresizingMask(
+                NSAutoresizingMaskOptions::ViewWidthSizable
+                    | NSAutoresizingMaskOptions::ViewHeightSizable,
+            );
+            content_view.setAutoresizingMask(
+                NSAutoresizingMaskOptions::ViewWidthSizable
+                    | NSAutoresizingMaskOptions::ViewHeightSizable,
+            );
+            content_view.addSubview_positioned_relativeTo(
+                &blur_view,
+                NSWindowOrderingMode::Below,
+                None,
+            );
+        }
         window.setLevel(NSFloatingWindowLevel);
+        window.setSharingType(NSWindowSharingType::ReadOnly);
         window.orderFrontRegardless();
         window.makeKeyAndOrderFront(None);
     }
@@ -612,7 +1482,40 @@ fn centered_window_bounds(
     let center = display_bounds.center();
     let half = window_size / 2.0;
 
-    Bounds::new(point(center.x - half.width, center.y - half.height), window_size)
+    Bounds::new(
+        point(center.x - half.width, center.y - half.height),
+        window_size,
+    )
+}
+
+fn initial_window_size(
+    display_bounds: Option<Bounds<Pixels>>,
+    image_dimensions: Option<(u32, u32)>,
+) -> Size<Pixels> {
+    let max_size = display_bounds.map_or(
+        size(px(DEFAULT_WINDOW_WIDTH), px(DEFAULT_WINDOW_HEIGHT)),
+        |bounds| {
+            size(
+                (bounds.size.width - px(DISPLAY_MARGIN * 2.0)).min(px(DEFAULT_WINDOW_WIDTH)),
+                (bounds.size.height - px(DISPLAY_MARGIN * 2.0)).min(px(DEFAULT_WINDOW_HEIGHT)),
+            )
+        },
+    );
+    let Some((image_width, image_height)) =
+        image_dimensions.filter(|(width, height)| *width > 0 && *height > 0)
+    else {
+        return max_size;
+    };
+    let aspect = image_width as f32 / image_height as f32;
+    let horizontal_chrome = REVIEW_RAIL_WIDTH + FIT_PADDING as f32 * 2.0;
+    let vertical_chrome = TOOLBAR_SAFE_AREA + FIT_PADDING as f32 * 2.0;
+    let max_inner_height = (f32::from(max_size.height) - vertical_chrome).max(1.0);
+    let width_limited_height = ((f32::from(max_size.width) - horizontal_chrome) / aspect).max(1.0);
+    let inner_height = max_inner_height.min(width_limited_height);
+    size(
+        px(inner_height * aspect + horizontal_chrome),
+        px(inner_height + vertical_chrome),
+    )
 }
 
 impl NibApp {
@@ -645,9 +1548,14 @@ impl NibApp {
         Application::new()
             .with_assets(Assets { base: assets_base })
             .run(move |cx: &mut App| {
-                let window_size: Size<Pixels> =
-                    size(px(DEFAULT_WINDOW_WIDTH), px(DEFAULT_WINDOW_HEIGHT));
                 let primary_display = cx.primary_display();
+                let image_dimensions = file_path
+                    .as_ref()
+                    .and_then(|path| image::image_dimensions(path).ok());
+                let window_size = initial_window_size(
+                    primary_display.as_ref().map(|display| display.bounds()),
+                    image_dimensions,
+                );
                 let window_bounds = centered_window_bounds(
                     primary_display.as_ref().map(|display| display.bounds()),
                     window_size,
@@ -661,24 +1569,32 @@ impl NibApp {
                     window_bounds: Some(WindowBounds::Windowed(window_bounds)),
                     display_id: primary_display.as_ref().map(|display| display.id()),
                     focus: true,
+                    titlebar: Some(TitlebarOptions {
+                        title: None,
+                        appears_transparent: true,
+                        traffic_light_position: None,
+                    }),
                     // PopUp maps to NSNonactivatingPanel on macOS and therefore
                     // cannot take keyboard focus. Floating stays above ordinary
                     // windows while remaining a real activatable window.
                     kind: WindowKind::Floating,
-                    window_background: WindowBackgroundAppearance::Blurred,
+                    // The stronger AppKit HUD material is installed explicitly behind
+                    // GPUI content after creation; avoid a second blur layer here.
+                    window_background: WindowBackgroundAppearance::Transparent,
                     ..Default::default()
                 };
 
-                let window_handle = cx.open_window(options, |window, cx| {
-                    let view = cx.new(|cx| {
-                        let view = EditorView::new(file_path.clone(), cx);
-                        view.focus_handle.focus(window);
+                let window_handle = cx
+                    .open_window(options, |window, cx| {
+                        let view = cx.new(|cx| {
+                            let view = EditorView::new(file_path.clone(), cx);
+                            view.focus_handle.focus(window);
+                            view
+                        });
+                        window.activate_window();
                         view
-                    });
-                    window.activate_window();
-                    view
-                })
-                .expect("Failed to open window");
+                    })
+                    .expect("Failed to open window");
                 // Defer native activation until the window exists in AppKit's
                 // event loop; activating during construction is ignored.
                 cx.defer(move |cx| {
@@ -692,7 +1608,8 @@ impl NibApp {
                 // Quit the app when the window is closed
                 cx.on_window_closed(|_cx| {
                     std::process::exit(0);
-                }).detach();
+                })
+                .detach();
             });
 
         Ok(())
@@ -743,6 +1660,8 @@ pub struct EditorView {
     focus_handle: FocusHandle,
     /// Compact keyboard-first response field for one-shot feedback.
     response_composer: Entity<ResponseComposer>,
+    /// Scroll state for the full-height Markdown review request.
+    review_scroll_handle: ScrollHandle,
     /// Text input state for creating/editing text annotations
     /// NOTE: Content is synced from TextTool after key events. The TextTool is the source
     /// of truth for content; this is kept for screen-space rendering coordinates.
@@ -808,7 +1727,10 @@ impl EditorView {
 
                                 // Write image data to temp file
                                 if let Err(e) = std::fs::write(&temp_path, &image_data) {
-                                    tracing::error!("Failed to write extracted image to temp file: {}", e);
+                                    tracing::error!(
+                                        "Failed to write extracted image to temp file: {}",
+                                        e
+                                    );
                                     (file_path.clone(), None, None, 1920, 1080)
                                 } else {
                                     (
@@ -848,13 +1770,15 @@ impl EditorView {
             (file_path.clone(), None, None, width, height)
         };
 
-        // Estimate canvas size (window 1200x800 minus toolbar ~44px)
-        let canvas_width = 1200.0_f32;
-        let canvas_height = 756.0_f32; // 800 - 44
+        // Estimate the initial canvas size. Feedback sessions reserve a right rail;
+        // standalone image windows expand into that space on their first render.
+        let canvas_width = DEFAULT_WINDOW_WIDTH - REVIEW_RAIL_WIDTH;
+        let canvas_height = DEFAULT_WINDOW_HEIGHT;
 
         // Create focus handles for canvas shortcuts and the response composer.
         let focus_handle = cx.focus_handle();
         let response_composer = cx.new(ResponseComposer::new);
+        let review_scroll_handle = ScrollHandle::new();
 
         // Create canvas with image dimensions
         let mut canvas = Canvas::new(image_width, image_height);
@@ -863,7 +1787,7 @@ impl EditorView {
         let mut view = Self {
             file_path: actual_file_path,
             annotations: Vec::new(),
-            active_tool: Tool::Rectangle,
+            active_tool: DEFAULT_ACTIVE_TOOL,
             style_state: StyleState::default(),
             history: History::new(HISTORY_CAP),
             asset_cache: std::collections::HashMap::new(),
@@ -877,6 +1801,7 @@ impl EditorView {
             canvas,
             focus_handle,
             response_composer,
+            review_scroll_handle,
             text_input_state: None,
             tool_manager: ToolManager::with_all_tools(),
             nib_file,
@@ -974,7 +1899,6 @@ impl EditorView {
         }
     }
 
-
     /// Update the stored modification time of the sidecar file
     fn update_sidecar_modified_time(&mut self) {
         if let Some(ref path) = self.file_path {
@@ -1057,7 +1981,11 @@ impl EditorView {
 
         // Build JSON payload for delta annotations
         let items = Self::annotation_items_to_json(&delta_annotations);
-        let payload = Self::build_send_payload(decision, (!comment.is_empty()).then_some(comment.as_str()), items);
+        let payload = Self::build_send_payload(
+            decision,
+            (!comment.is_empty()).then_some(comment.as_str()),
+            items,
+        );
 
         // Send via collab session (required)
         match &self.collab_session {
@@ -1067,7 +1995,10 @@ impl EditorView {
                         for a in &delta_annotations {
                             self.sent_annotation_ids.insert(a.id.0);
                         }
-                        self.add_toast(format!("Sent {} annotation(s)", delta_annotations.len()), cx);
+                        self.add_toast(
+                            format!("Sent {} annotation(s)", delta_annotations.len()),
+                            cx,
+                        );
 
                         // Clear question after sending
                         self.claude_question = None;
@@ -1111,8 +2042,8 @@ impl EditorView {
 
     /// Process incoming collab messages (non-blocking)
     fn process_collab_messages(&mut self, cx: &mut Context<Self>) {
-        use nib_collab::types::CollabMessage;
         use nib_collab::operation::data_to_annotation;
+        use nib_collab::types::CollabMessage;
 
         // Collect messages first to avoid borrow conflict
         let messages: Vec<CollabMessage> = {
@@ -1170,55 +2101,180 @@ impl EditorView {
         }
     }
 
-    /// Render Claude question/message banner at top center
-    fn render_claude_question(&self) -> impl IntoElement {
-        if let Some(ref question) = self.claude_question {
-            div()
-                .absolute()
-                .top_4()
-                .left_0()
-                .right_0()
-                .flex()
-                .justify_center()
-                .child(
-                    div()
-                        .max_w(px(600.))
-                        .px_6()
-                        .py_4()
-                        .bg(rgba(0x181818c4))
-                        .rounded_lg()
-                        .border_1()
-                        .border_color(rgba(0xffffff2a))
-                        .shadow_lg()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_color(rgba(0xffffff99))
-                                        .text_size(px(12.))
-                                        .font_weight(gpui::FontWeight::BOLD)
-                                        .child("Review request"),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(rgb(0xffffff))
-                                        .text_size(px(16.))
-                                        .child(question.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .text_color(rgba(0xffffff66))
-                                        .text_size(px(11.))
-                                        .child("Enter to reply · ⇧⌘A approve · ⇧⌘R reject"),
-                                ),
-                        ),
-                )
+    fn render_review_scrollbar(&self) -> impl IntoElement {
+        let bounds = self.review_scroll_handle.bounds();
+        let viewport_height = f32::from(bounds.size.height).max(1.0);
+        let max_scroll = f32::from(self.review_scroll_handle.max_offset().height).max(0.0);
+        let scroll_offset =
+            (-f32::from(self.review_scroll_handle.offset().y)).clamp(0.0, max_scroll);
+        let content_height = viewport_height + max_scroll;
+        let track_height = (viewport_height - 8.0).max(1.0);
+        let thumb_height = if max_scroll > 0.5 {
+            (track_height * viewport_height / content_height).clamp(24.0, track_height)
         } else {
-            div()
-        }
+            track_height
+        };
+        let thumb_offset = if max_scroll > 0.5 {
+            (scroll_offset / max_scroll) * (track_height - thumb_height)
+        } else {
+            0.0
+        };
+
+        div()
+            .id("review-scrollbar-track")
+            .absolute()
+            .top(px(4.0))
+            .right(px(3.0))
+            .bottom(px(4.0))
+            .w(px(4.0))
+            .rounded_full()
+            .bg(rgba(0xffffff18))
+            .when(max_scroll > 0.5, |track| {
+                track.child(
+                    div()
+                        .absolute()
+                        .top(px(thumb_offset))
+                        .left(px(0.0))
+                        .w_full()
+                        .h(px(thumb_height))
+                        .rounded_full()
+                        .bg(rgba(0xffffff99)),
+                )
+            })
+    }
+
+    /// Render the review request, response composer, and decisions beside the image.
+    fn render_review_rail(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let question = self
+            .claude_question
+            .clone()
+            .unwrap_or_else(|| "Review this image".to_string());
+        let question_blocks = parse_markdown_blocks(&question);
+
+        div()
+            .id("review-rail")
+            .h_full()
+            .w(px(REVIEW_RAIL_WIDTH))
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
+            .p_3()
+            .gap_3()
+            .child(
+                div()
+                    .id("review-request-shell")
+                    .relative()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .bg(rgba(0x08080858))
+                    .border_1()
+                    .border_color(rgba(0xffffff24))
+                    .rounded_md()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .id("review-request-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .scrollbar_width(px(8.0))
+                            .track_scroll(&self.review_scroll_handle)
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .p_3()
+                            .pr_4()
+                            .children(question_blocks.into_iter().map(render_markdown_block)),
+                    )
+                    .child(self.render_review_scrollbar()),
+            )
+            .child(self.response_composer.clone())
+            .child(
+                div()
+                    .text_color(rgb(0xe8e8e8))
+                    .text_size(px(10.0))
+                    .child("Enter focuses · ⌘Enter comments"),
+            )
+            .child(
+                div()
+                    .id("review-actions-card")
+                    .flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id("rail-approve-button")
+                            .relative()
+                            .flex_1()
+                            .h(px(56.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(0x17451a))
+                            .cursor_pointer()
+                            .bg(rgb(0x2e7d32))
+                            .hover(|s| s.bg(rgb(0x388e3c)))
+                            .text_color(rgb(0xffffff))
+                            .text_size(px(13.0))
+                            .child(render_shortcut_badge(
+                                APPROVE_SHORTCUT_LABEL,
+                                rgba(0xffffffaa),
+                            ))
+                            .child("Approve")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.approve_to_claude(cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("rail-reject-button")
+                            .relative()
+                            .flex_1()
+                            .h(px(56.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(0x661010))
+                            .cursor_pointer()
+                            .bg(rgb(0xc62828))
+                            .hover(|s| s.bg(rgb(0xd32f2f)))
+                            .text_color(rgb(0xffffff))
+                            .text_size(px(13.0))
+                            .child(render_shortcut_badge(
+                                REJECT_SHORTCUT_LABEL,
+                                rgba(0xffffffaa),
+                            ))
+                            .child("Reject")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.reject_to_claude(cx);
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id("rail-comment-button")
+                            .relative()
+                            .flex_1()
+                            .h(px(56.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(rgb(0x262626))
+                            .cursor_pointer()
+                            .bg(rgb(0x4a4a4a))
+                            .hover(|s| s.bg(rgb(0x5a5a5a)))
+                            .text_color(rgb(0xffffff))
+                            .text_size(px(13.0))
+                            .child(render_shortcut_badge(SEND_SHORTCUT_LABEL, rgba(0xffffffaa)))
+                            .child("Comment")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.send_to_claude(cx);
+                            })),
+                    ),
+            )
     }
 
     /// Convert annotations to minimal JSON items for agent consumption
@@ -1232,37 +2288,62 @@ impl EditorView {
                     AnnotationType::Arrow { start, end, .. } => {
                         ("arrow", json!([start.x, start.y, end.x, end.y]), None)
                     }
-                    AnnotationType::Box { region, .. } => {
-                        ("rectangle", json!([region.x, region.y, region.width, region.height]), None)
-                    }
-                    AnnotationType::Text { position, content, .. } => {
-                        ("text", json!([position.x, position.y]), Some(content.clone()))
-                    }
-                    AnnotationType::Number { position, value, .. } => {
-                        ("number", json!([position.x, position.y]), Some(value.to_string()))
-                    }
-                    AnnotationType::Highlight { region, .. } => {
-                        ("highlight", json!([region.x, region.y, region.width, region.height]), None)
-                    }
-                    AnnotationType::Ellipse { center, radius_x, radius_y, .. } => {
-                        ("ellipse", json!([center.x, center.y, *radius_x, *radius_y]), None)
-                    }
+                    AnnotationType::Box { region, .. } => (
+                        "rectangle",
+                        json!([region.x, region.y, region.width, region.height]),
+                        None,
+                    ),
+                    AnnotationType::Text {
+                        position, content, ..
+                    } => (
+                        "text",
+                        json!([position.x, position.y]),
+                        Some(content.clone()),
+                    ),
+                    AnnotationType::Number {
+                        position, value, ..
+                    } => (
+                        "number",
+                        json!([position.x, position.y]),
+                        Some(value.to_string()),
+                    ),
+                    AnnotationType::Highlight { region, .. } => (
+                        "highlight",
+                        json!([region.x, region.y, region.width, region.height]),
+                        None,
+                    ),
+                    AnnotationType::Ellipse {
+                        center,
+                        radius_x,
+                        radius_y,
+                        ..
+                    } => (
+                        "ellipse",
+                        json!([center.x, center.y, *radius_x, *radius_y]),
+                        None,
+                    ),
                     AnnotationType::Line { start, end, .. } => {
                         ("line", json!([start.x, start.y, end.x, end.y]), None)
                     }
-                    AnnotationType::Blur { region, .. } => {
-                        ("blur", json!([region.x, region.y, region.width, region.height]), None)
-                    }
-                    AnnotationType::Crop { region } => {
-                        ("crop", json!([region.x, region.y, region.width, region.height]), None)
-                    }
+                    AnnotationType::Blur { region, .. } => (
+                        "blur",
+                        json!([region.x, region.y, region.width, region.height]),
+                        None,
+                    ),
+                    AnnotationType::Crop { region } => (
+                        "crop",
+                        json!([region.x, region.y, region.width, region.height]),
+                        None,
+                    ),
                     AnnotationType::Path { points, .. } => {
                         let coords: Vec<_> = points.iter().map(|p| [p.x, p.y]).collect();
                         ("path", json!(coords), None)
                     }
-                    AnnotationType::Image { region, .. } => {
-                        ("image", json!([region.x, region.y, region.width, region.height]), None)
-                    }
+                    AnnotationType::Image { region, .. } => (
+                        "image",
+                        json!([region.x, region.y, region.width, region.height]),
+                        None,
+                    ),
                 };
 
                 let mut obj = json!({
@@ -1324,10 +2405,7 @@ impl EditorView {
     /// Scale a single point from image coordinates to canvas coordinates
     fn scale_point(&self, x: f64, y: f64) -> (f32, f32) {
         let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
-        (
-            (x as f32 * scale) + offset_x,
-            (y as f32 * scale) + offset_y,
-        )
+        ((x as f32 * scale) + offset_x, (y as f32 * scale) + offset_y)
     }
 
     /// Render text with an all-around outline for better readability
@@ -1376,7 +2454,7 @@ impl EditorView {
                 div()
                     .text_color(text_color)
                     .text_size(px(font_size))
-                    .child(content_clone)
+                    .child(content_clone),
             )
     }
 
@@ -1445,7 +2523,11 @@ impl EditorView {
         text_color: gpui::Hsla,
         background: Color,
     ) -> impl IntoElement {
-        let lines = crate::elements::text::wrap_text(&content, font_size as f64, max_width.map(|w| w as f64));
+        let lines = crate::elements::text::wrap_text(
+            &content,
+            font_size as f64,
+            max_width.map(|w| w as f64),
+        );
         let padding = (font_size * 0.25).max(4.0);
         let line_height = font_size * 1.2;
 
@@ -1454,9 +2536,8 @@ impl EditorView {
         let box_width = max_width.unwrap_or(natural_width);
         let box_height = (lines.len().max(1)) as f32 * line_height;
 
-        let gpui_background = rgb(
-            background.r as u32 * 0x10000 + background.g as u32 * 0x100 + background.b as u32,
-        );
+        let gpui_background =
+            rgb(background.r as u32 * 0x10000 + background.g as u32 * 0x100 + background.b as u32);
 
         div()
             .absolute()
@@ -1493,11 +2574,17 @@ impl EditorView {
             move |bounds, _window, _cx| {
                 let origin_x: f32 = bounds.origin.x.into();
                 let origin_y: f32 = bounds.origin.y.into();
-                let start = NibPoint::new((start_sx + origin_x) as f64, (start_sy + origin_y) as f64);
+                let start =
+                    NibPoint::new((start_sx + origin_x) as f64, (start_sy + origin_y) as f64);
                 let end = NibPoint::new((end_sx + origin_x) as f64, (end_sy + origin_y) as f64);
                 dash_segments(start, end, stroke_style, stroke_width as f64)
                     .into_iter()
-                    .map(|(s, e)| (point(px(s.x as f32), px(s.y as f32)), point(px(e.x as f32), px(e.y as f32))))
+                    .map(|(s, e)| {
+                        (
+                            point(px(s.x as f32), px(s.y as f32)),
+                            point(px(e.x as f32), px(e.y as f32)),
+                        )
+                    })
                     .collect::<Vec<_>>()
             },
             move |_bounds, segments, window, _cx| {
@@ -1610,7 +2697,10 @@ impl EditorView {
                     point(px(start_wx + bx2_offset), px(start_wy + by2_offset)),
                 )
             },
-            move |_bounds, (p_start, p_end, p_arrow1, p_arrow2, p_arrow3, p_arrow4), window, _cx| {
+            move |_bounds,
+                  (p_start, p_end, p_arrow1, p_arrow2, p_arrow3, p_arrow4),
+                  window,
+                  _cx| {
                 // Draw main line (Arrow has no stroke_style field, so this stays solid)
                 let mut builder = PathBuilder::stroke(px(stroke_width));
                 builder.move_to(p_start);
@@ -1672,19 +2762,36 @@ impl EditorView {
             ToolResult::Created(annotation) => {
                 // Log with full content for text annotations
                 let details = match &annotation.annotation_type {
-                    AnnotationType::Text { content, position, .. } => {
-                        format!("text \"{}\" at ({}, {})", content, position.x as i32, position.y as i32)
+                    AnnotationType::Text {
+                        content, position, ..
+                    } => {
+                        format!(
+                            "text \"{}\" at ({}, {})",
+                            content, position.x as i32, position.y as i32
+                        )
                     }
-                    AnnotationType::Number { value, position, .. } => {
-                        format!("number {} at ({}, {})", value, position.x as i32, position.y as i32)
+                    AnnotationType::Number {
+                        value, position, ..
+                    } => {
+                        format!(
+                            "number {} at ({}, {})",
+                            value, position.x as i32, position.y as i32
+                        )
                     }
                     AnnotationType::Arrow { start, end, .. } => {
-                        format!("arrow ({}, {}) -> ({}, {})",
-                            start.x as i32, start.y as i32, end.x as i32, end.y as i32)
+                        format!(
+                            "arrow ({}, {}) -> ({}, {})",
+                            start.x as i32, start.y as i32, end.x as i32, end.y as i32
+                        )
                     }
                     AnnotationType::Box { region, .. } => {
-                        format!("box at ({}, {}) {}x{}",
-                            region.x as i32, region.y as i32, region.width as i32, region.height as i32)
+                        format!(
+                            "box at ({}, {}) {}x{}",
+                            region.x as i32,
+                            region.y as i32,
+                            region.width as i32,
+                            region.height as i32
+                        )
                     }
                     other => other.type_name().to_string(),
                 };
@@ -1694,8 +2801,17 @@ impl EditorView {
                 self.save_annotations(cx);
                 cx.notify();
             }
-            ToolResult::CreatedWithAsset { annotation, asset_hash, asset } => {
-                tracing::info!("human created a{} image ({}x{})", annotation.id.0, asset.width, asset.height);
+            ToolResult::CreatedWithAsset {
+                annotation,
+                asset_hash,
+                asset,
+            } => {
+                tracing::info!(
+                    "human created a{} image ({}x{})",
+                    annotation.id.0,
+                    asset.width,
+                    asset.height
+                );
                 self.asset_cache.insert(asset_hash, asset);
                 self.record_edit(Edit::Added(annotation.clone()));
                 self.annotations.push(annotation);
@@ -1711,11 +2827,17 @@ impl EditorView {
                 // Update text annotation content
                 let edit = if let Some(ann) = self.annotations.iter_mut().find(|a| a.id == id) {
                     let before = ann.clone();
-                    if let AnnotationType::Text { ref mut content, .. } = ann.annotation_type {
+                    if let AnnotationType::Text {
+                        ref mut content, ..
+                    } = ann.annotation_type
+                    {
                         *content = new_content;
                     }
                     ann.touch();
-                    Some(Edit::Replaced { before, after: ann.clone() })
+                    Some(Edit::Replaced {
+                        before,
+                        after: ann.clone(),
+                    })
                 } else {
                     None
                 };
@@ -1728,7 +2850,11 @@ impl EditorView {
             ToolResult::Deleted(id) => {
                 if let Some(pos) = self.annotations.iter().position(|a| a.id == id) {
                     let removed = self.annotations.remove(pos);
-                    tracing::info!("human deleted a{} {}", id.0, removed.annotation_type.type_name());
+                    tracing::info!(
+                        "human deleted a{} {}",
+                        id.0,
+                        removed.annotation_type.type_name()
+                    );
                     self.record_edit(Edit::Removed(removed));
                 }
                 self.save_annotations(cx);
@@ -1736,13 +2862,20 @@ impl EditorView {
             }
             ToolResult::EnterMode(mode) => {
                 match mode {
-                    ToolMode::TextInput { position, initial_content, editing_annotation_id, sticky_style } => {
+                    ToolMode::TextInput {
+                        position,
+                        initial_content,
+                        editing_annotation_id,
+                        sticky_style,
+                    } => {
                         // Sticky tool hands off to the Text tool's existing typing/confirm
                         // flow: switch the active tool so KeyDown routes to TextTool, then
                         // seed it with the sticky background/text color/max_width.
                         if let Some(style) = sticky_style {
                             self.select_tool(ToolId::Text, cx);
-                            if let Some(text_tool) = self.tool_manager.get_tool_as_mut::<TextTool>(ToolId::Text) {
+                            if let Some(text_tool) =
+                                self.tool_manager.get_tool_as_mut::<TextTool>(ToolId::Text)
+                            {
                                 text_tool.begin_sticky(position, style);
                             }
                         } else if let Some(id) = editing_annotation_id {
@@ -1751,7 +2884,9 @@ impl EditorView {
                             // accumulate into the existing annotation instead of being
                             // silently dropped (board #18).
                             self.select_tool(ToolId::Text, cx);
-                            if let Some(text_tool) = self.tool_manager.get_tool_as_mut::<TextTool>(ToolId::Text) {
+                            if let Some(text_tool) =
+                                self.tool_manager.get_tool_as_mut::<TextTool>(ToolId::Text)
+                            {
                                 text_tool.begin_edit(id, position, initial_content.clone());
                             }
                         }
@@ -1759,14 +2894,16 @@ impl EditorView {
                         let (screen_x, screen_y) = self.scale_point(position.x, position.y);
                         // Adjust for font height (text is drawn with baseline at position)
                         let (scale, _, _) = self.calculate_scale_and_offset();
-                        let adjusted_screen_y = screen_y + (self.style_state.font_size as f32 * scale);
+                        let adjusted_screen_y =
+                            screen_y + (self.style_state.font_size as f32 * scale);
                         let max_width = editing_annotation_id.and_then(|id| {
-                            self.annotations.iter().find(|annotation| annotation.id == id).and_then(|annotation| {
-                                match &annotation.annotation_type {
+                            self.annotations
+                                .iter()
+                                .find(|annotation| annotation.id == id)
+                                .and_then(|annotation| match &annotation.annotation_type {
                                     AnnotationType::Text { max_width, .. } => *max_width,
                                     _ => None,
-                                }
-                            })
+                                })
                         });
                         self.text_input_state = Some(TextInputState {
                             screen_x,
@@ -1800,14 +2937,21 @@ impl EditorView {
                         let before = ann.clone();
                         Self::move_annotation_type(&mut ann.annotation_type, delta_x, delta_y);
                         ann.touch();
-                        edits.push(Edit::Replaced { before, after: ann.clone() });
+                        edits.push(Edit::Replaced {
+                            before,
+                            after: ann.clone(),
+                        });
                     }
                 }
                 self.record_edit(Edit::Batch(edits));
-                tracing::info!("human moved {}", ids.iter()
-                    .filter_map(|id| self.annotations.iter().find(|a| a.id == *id))
-                    .map(|a| format!("a{} {}", a.id.0, a.annotation_type.type_name()))
-                    .collect::<Vec<_>>().join(", "));
+                tracing::info!(
+                    "human moved {}",
+                    ids.iter()
+                        .filter_map(|id| self.annotations.iter().find(|a| a.id == *id))
+                        .map(|a| format!("a{} {}", a.id.0, a.annotation_type.type_name()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
                 self.save_annotations(cx);
                 cx.notify();
             }
@@ -1817,7 +2961,13 @@ impl EditorView {
                     let before = ann.clone();
                     Self::resize_annotation_type(&mut ann.annotation_type, new_bounds);
                     ann.touch();
-                    Some((Edit::Replaced { before, after: ann.clone() }, ann.annotation_type.type_name()))
+                    Some((
+                        Edit::Replaced {
+                            before,
+                            after: ann.clone(),
+                        },
+                        ann.annotation_type.type_name(),
+                    ))
                 } else {
                     None
                 };
@@ -1862,8 +3012,7 @@ impl EditorView {
                 *radius_y = new_bounds.height / 2.0;
             }
             // For line-based types, map bounds corners to start/end
-            AnnotationType::Arrow { start, end, .. }
-            | AnnotationType::Line { start, end, .. } => {
+            AnnotationType::Arrow { start, end, .. } | AnnotationType::Line { start, end, .. } => {
                 *start = NibPoint::new(new_bounds.x, new_bounds.y);
                 *end = NibPoint::new(
                     new_bounds.x + new_bounds.width,
@@ -1877,10 +3026,22 @@ impl EditorView {
             // Path: scale all points to fit new bounds
             AnnotationType::Path { points, .. } => {
                 if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (
-                    points.iter().map(|p| p.x).fold(None, |m, x| Some(m.map_or(x, |v: f64| v.min(x)))),
-                    points.iter().map(|p| p.x).fold(None, |m, x| Some(m.map_or(x, |v: f64| v.max(x)))),
-                    points.iter().map(|p| p.y).fold(None, |m, y| Some(m.map_or(y, |v: f64| v.min(y)))),
-                    points.iter().map(|p| p.y).fold(None, |m, y| Some(m.map_or(y, |v: f64| v.max(y)))),
+                    points
+                        .iter()
+                        .map(|p| p.x)
+                        .fold(None, |m, x| Some(m.map_or(x, |v: f64| v.min(x)))),
+                    points
+                        .iter()
+                        .map(|p| p.x)
+                        .fold(None, |m, x| Some(m.map_or(x, |v: f64| v.max(x)))),
+                    points
+                        .iter()
+                        .map(|p| p.y)
+                        .fold(None, |m, y| Some(m.map_or(y, |v: f64| v.min(y)))),
+                    points
+                        .iter()
+                        .map(|p| p.y)
+                        .fold(None, |m, y| Some(m.map_or(y, |v: f64| v.max(y)))),
                 ) {
                     let old_width = (max_x - min_x).max(1.0);
                     let old_height = (max_y - min_y).max(1.0);
@@ -1894,7 +3055,11 @@ impl EditorView {
     }
 
     /// Move an annotation type by the given delta
-    pub(crate) fn move_annotation_type(annotation_type: &mut AnnotationType, delta_x: f64, delta_y: f64) {
+    pub(crate) fn move_annotation_type(
+        annotation_type: &mut AnnotationType,
+        delta_x: f64,
+        delta_y: f64,
+    ) {
         match annotation_type {
             AnnotationType::Arrow {
                 ref mut start,
@@ -1940,9 +3105,7 @@ impl EditorView {
                 end.x += delta_x;
                 end.y += delta_y;
             }
-            AnnotationType::Ellipse {
-                ref mut center, ..
-            } => {
+            AnnotationType::Ellipse { ref mut center, .. } => {
                 center.x += delta_x;
                 center.y += delta_y;
             }
@@ -1950,9 +3113,7 @@ impl EditorView {
                 region.x += delta_x;
                 region.y += delta_y;
             }
-            AnnotationType::Path {
-                ref mut points, ..
-            } => {
+            AnnotationType::Path { ref mut points, .. } => {
                 for point in points.iter_mut() {
                     point.x += delta_x;
                     point.y += delta_y;
@@ -1989,14 +3150,20 @@ impl EditorView {
                         self.load_annotations();
                         let after_count = self.annotations.len();
                         self.last_nib_modified = Some(current_modified);
-                        tracing::info!("human detected external change ({} -> {} annotations)",
-                            before_count, after_count);
+                        tracing::info!(
+                            "human detected external change ({} -> {} annotations)",
+                            before_count,
+                            after_count
+                        );
 
                         // Show toast for new annotations added externally (by Claude)
                         if after_count > before_count {
                             let new_count = after_count - before_count;
-                            self.pending_messages.push(format!("Claude added {} annotation{}",
-                                new_count, if new_count > 1 { "s" } else { "" }));
+                            self.pending_messages.push(format!(
+                                "Claude added {} annotation{}",
+                                new_count,
+                                if new_count > 1 { "s" } else { "" }
+                            ));
                         }
                     }
                 }
@@ -2035,8 +3202,11 @@ impl EditorView {
             let before_count = self.annotations.len();
             self.load_annotations();
             self.last_sidecar_modified = Some(current_modified);
-            tracing::info!("human detected external change ({} -> {} annotations)",
-                before_count, self.annotations.len());
+            tracing::info!(
+                "human detected external change ({} -> {} annotations)",
+                before_count,
+                self.annotations.len()
+            );
         }
 
         let elapsed = t0.elapsed();
@@ -2093,22 +3263,25 @@ impl EditorView {
         };
 
         let annotations_path = annotations_file_path(image_path);
-        let serialized: Vec<SerializedAnnotation> = self.annotations
-            .iter()
-            .map(serialize_annotation)
-            .collect();
+        let serialized: Vec<SerializedAnnotation> =
+            self.annotations.iter().map(serialize_annotation).collect();
 
-        let file = AnnotationsFile::new(
-            &image_path.to_string_lossy(),
-            serialized,
-        );
+        let file = AnnotationsFile::new(&image_path.to_string_lossy(), serialized);
 
         match serde_json::to_string_pretty(&file) {
             Ok(json) => {
                 if let Err(e) = std::fs::write(&annotations_path, json) {
-                    tracing::warn!("Failed to save annotations to {:?}: {}", annotations_path, e);
+                    tracing::warn!(
+                        "Failed to save annotations to {:?}: {}",
+                        annotations_path,
+                        e
+                    );
                 } else {
-                    tracing::debug!("Saved {} annotations to {:?}", self.annotations.len(), annotations_path);
+                    tracing::debug!(
+                        "Saved {} annotations to {:?}",
+                        self.annotations.len(),
+                        annotations_path
+                    );
                     // Update modification time to avoid reloading our own changes
                     self.update_sidecar_modified_time();
                 }
@@ -2160,7 +3333,10 @@ impl EditorView {
         self.blur_annotations_hash = new_hash;
 
         // Handle immediate clear case (no blur annotations) synchronously
-        let has_blur = self.annotations.iter().any(|a| matches!(a.annotation_type, AnnotationType::Blur { .. }));
+        let has_blur = self
+            .annotations
+            .iter()
+            .any(|a| matches!(a.annotation_type, AnnotationType::Blur { .. }));
         if !has_blur {
             if let Some(ref path) = self.blur_preview_path {
                 let _ = std::fs::remove_file(path);
@@ -2171,7 +3347,9 @@ impl EditorView {
         }
 
         // Collect blur regions and image path for the async task
-        let blur_regions: Vec<_> = self.annotations.iter()
+        let blur_regions: Vec<_> = self
+            .annotations
+            .iter()
             .filter_map(|a| {
                 if let AnnotationType::Blur { region, intensity } = &a.annotation_type {
                     Some((*region, intensity.radius()))
@@ -2242,7 +3420,9 @@ impl EditorView {
         }
         self.blur_annotations_hash = new_hash;
 
-        let blur_regions: Vec<_> = self.annotations.iter()
+        let blur_regions: Vec<_> = self
+            .annotations
+            .iter()
             .filter_map(|a| {
                 if let AnnotationType::Blur { region, intensity } = &a.annotation_type {
                     Some((*region, intensity.radius()))
@@ -2306,7 +3486,10 @@ impl EditorView {
             match nib.list_annotations() {
                 Ok(annotations) => {
                     self.annotations = annotations;
-                    tracing::info!("Loaded {} annotations from .nib file", self.annotations.len());
+                    tracing::info!(
+                        "Loaded {} annotations from .nib file",
+                        self.annotations.len()
+                    );
                 }
                 Err(e) => {
                     tracing::warn!("Failed to load annotations from .nib file: {}", e);
@@ -2330,22 +3513,33 @@ impl EditorView {
         }
 
         match std::fs::read_to_string(&annotations_path) {
-            Ok(json) => {
-                match serde_json::from_str::<AnnotationsFile>(&json) {
-                    Ok(file) => {
-                        self.annotations = file.annotations
-                            .iter()
-                            .filter_map(deserialize_annotation)
-                            .collect();
-                        tracing::info!("Loaded {} annotations from {:?}", self.annotations.len(), annotations_path);
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to parse annotations file {:?}: {}", annotations_path, e);
-                    }
+            Ok(json) => match serde_json::from_str::<AnnotationsFile>(&json) {
+                Ok(file) => {
+                    self.annotations = file
+                        .annotations
+                        .iter()
+                        .filter_map(deserialize_annotation)
+                        .collect();
+                    tracing::info!(
+                        "Loaded {} annotations from {:?}",
+                        self.annotations.len(),
+                        annotations_path
+                    );
                 }
-            }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to parse annotations file {:?}: {}",
+                        annotations_path,
+                        e
+                    );
+                }
+            },
             Err(e) => {
-                tracing::warn!("Failed to read annotations file {:?}: {}", annotations_path, e);
+                tracing::warn!(
+                    "Failed to read annotations file {:?}: {}",
+                    annotations_path,
+                    e
+                );
             }
         }
 
@@ -2398,7 +3592,12 @@ impl EditorView {
 
     /// Handle files dropped onto the canvas from Finder: insert each as an
     /// Image annotation via the same pipeline as clipboard-paste.
-    fn handle_file_drop(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_file_drop(
+        &mut self,
+        paths: &ExternalPaths,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let mouse_pos = window.mouse_position();
         let screen_x: f32 = mouse_pos.x.into();
         let screen_y: f32 = mouse_pos.y.into();
@@ -2418,7 +3617,11 @@ impl EditorView {
                         AnnotationType::Image { asset, .. } => asset.0.clone(),
                         _ => String::new(),
                     };
-                    ToolResult::CreatedWithAsset { annotation, asset_hash, asset }
+                    ToolResult::CreatedWithAsset {
+                        annotation,
+                        asset_hash,
+                        asset,
+                    }
                 })
                 .collect();
             self.process_tool_result(ToolResult::Batch(results), cx);
@@ -2503,7 +3706,8 @@ impl EditorView {
             );
             self.tool_manager.handle_event(tool_event, &ctx)
         };
-        let open_image_picker = self.active_tool == ToolId::Image && matches!(result, ToolResult::Ignored);
+        let open_image_picker =
+            self.active_tool == ToolId::Image && matches!(result, ToolResult::Ignored);
         self.process_tool_result(result, cx);
         if open_image_picker {
             self.prompt_for_image_files(NibPoint::new(img_x, img_y), cx);
@@ -2641,10 +3845,11 @@ impl EditorView {
         let text_color = rgb(0xcccccc);
         let icon_color = rgb(0xffffff);
 
-        // Outer wrapper for centering at bottom
+        // Compact floating glass toolbar. The canvas fit reserves space beneath
+        // the image so this stays visually separate without a permanent strip.
         div()
             .absolute()
-            .bottom(px(76.0))
+            .bottom(px(12.0))
             .left_0()
             .right_0()
             .flex()
@@ -2655,45 +3860,50 @@ impl EditorView {
                     .flex()
                     .flex_row()
                     .h(px(64.))
-                    .bg(rgba(0x181818b8))
+                    .bg(rgba(0x2c2c2ce8))
                     .rounded_xl()
                     .border_1()
-                    .border_color(rgba(0x00000044))
+                    .border_color(rgba(0xffffff24))
+                    .shadow_lg()
                     .px_3()
                     .gap_1()
                     .items_center()
                     .children(tools_before_shapes.iter().map(|tool| {
-                let is_active = *tool == self.active_tool;
-                let tool_copy = *tool;
+                        let is_active = *tool == self.active_tool;
+                        let tool_copy = *tool;
 
-                div()
-                    .id(tool.name())
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .w(px(56.))
-                    .h(px(56.))
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
-                    .hover(|style| style.bg(button_bg))
-                    .child(
-                        svg()
-                            .path(tool.icon_path())
-                            .size(px(28.))
-                            .text_color(icon_color)
-                    )
-                    // Keyboard shortcut badge on top-right
-                    .child(render_shortcut_badge(
-                        tool.shortcut().to_ascii_uppercase().to_string(),
-                        text_color,
-                    ))
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.select_tool(tool_copy, cx);
+                        div()
+                            .id(tool.name())
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .w(px(56.))
+                            .h(px(56.))
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(if is_active {
+                                button_active_bg
+                            } else {
+                                rgba(0x3d3d3d00)
+                            })
+                            .hover(|style| style.bg(button_bg))
+                            .child(
+                                svg()
+                                    .path(tool.icon_path())
+                                    .size(px(28.))
+                                    .text_color(icon_color),
+                            )
+                            // Keyboard shortcut badge on top-right
+                            .child(render_shortcut_badge(
+                                tool.shortcut().to_ascii_uppercase().to_string(),
+                                text_color,
+                            ))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.select_tool(tool_copy, cx);
+                            }))
                     }))
-            }))
                     // Shape tools (Rectangle/Ellipse/Line/Pencil/Highlight) collapsed into
                     // one flyout button (see tool_flyout.rs and toolbar_layout_tests for
                     // the width accounting this collapse relies on).
@@ -2713,73 +3923,79 @@ impl EditorView {
                             .h(px(56.))
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(if is_group_active || flyout_open { button_active_bg } else { rgba(0x3d3d3d00) })
+                            .bg(if is_group_active || flyout_open {
+                                button_active_bg
+                            } else {
+                                rgba(0x3d3d3d00)
+                            })
                             .hover(|style| style.bg(button_bg))
                             .child(
                                 svg()
                                     .path(current_icon.icon_path())
                                     .size(px(28.))
-                                    .text_color(icon_color)
+                                    .text_color(icon_color),
                             )
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.shape_flyout_open = !this.shape_flyout_open;
                                 cx.notify();
                             }))
                             .when(flyout_open, |el| {
-                                el.child(self.render_shape_flyout(button_bg, button_active_bg, text_color, icon_color, cx))
+                                el.child(self.render_shape_flyout(
+                                    button_bg,
+                                    button_active_bg,
+                                    text_color,
+                                    icon_color,
+                                    cx,
+                                ))
                             })
                     })
                     .children(tools_after_shapes.iter().map(|tool| {
-                let is_active = *tool == self.active_tool;
-                let tool_copy = *tool;
+                        let is_active = *tool == self.active_tool;
+                        let tool_copy = *tool;
 
-                div()
-                    .id(tool.name())
-                    .relative()
-                    .flex()
-                    .flex_col()
-                    .items_center()
-                    .justify_center()
-                    .w(px(56.))
-                    .h(px(56.))
-                    .rounded_md()
-                    .cursor_pointer()
-                    .bg(if is_active { button_active_bg } else { rgba(0x3d3d3d00) })
-                    .hover(|style| style.bg(button_bg))
-                    .child(
-                        svg()
-                            .path(tool.icon_path())
-                            .size(px(28.))
-                            .text_color(icon_color)
-                    )
-                    // Keyboard shortcut badge on top-right
-                    .child(render_shortcut_badge(
-                        tool.shortcut().to_ascii_uppercase().to_string(),
-                        text_color,
-                    ))
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.select_tool(tool_copy, cx);
-                    }))
-            }))
-                    // Separator
-                    .child(
                         div()
-                            .w(px(1.))
-                            .h(px(40.))
-                            .mx_2()
-                            .bg(rgba(0xffffff33))
-                    )
+                            .id(tool.name())
+                            .relative()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .w(px(56.))
+                            .h(px(56.))
+                            .rounded_md()
+                            .cursor_pointer()
+                            .bg(if is_active {
+                                button_active_bg
+                            } else {
+                                rgba(0x3d3d3d00)
+                            })
+                            .hover(|style| style.bg(button_bg))
+                            .child(
+                                svg()
+                                    .path(tool.icon_path())
+                                    .size(px(28.))
+                                    .text_color(icon_color),
+                            )
+                            // Keyboard shortcut badge on top-right
+                            .child(render_shortcut_badge(
+                                tool.shortcut().to_ascii_uppercase().to_string(),
+                                text_color,
+                            ))
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.select_tool(tool_copy, cx);
+                            }))
+                    }))
+                    // Separator
+                    .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgba(0xffffff33)))
                     // Style selector: collapsed into one swatch button that toggles a popup
                     // (see toolbar_layout_tests::toolbar_fits_default_window_with_margin for the
                     // width accounting this collapse relies on to keep the default 1200x800
                     // window uncropped)
                     .child({
                         let selected_color = self.style_state.effective_color();
-                        let gpui_selected_color = rgb(
-                            selected_color.r as u32 * 0x10000 +
-                            selected_color.g as u32 * 0x100 +
-                            selected_color.b as u32
-                        );
+                        let gpui_selected_color = rgb(selected_color.r as u32 * 0x10000
+                            + selected_color.g as u32 * 0x100
+                            + selected_color.b as u32);
                         let picker_open = self.style_picker_open;
 
                         div()
@@ -2793,7 +4009,11 @@ impl EditorView {
                             .h(px(48.))
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(if picker_open { button_active_bg } else { rgba(0x3d3d3d00) })
+                            .bg(if picker_open {
+                                button_active_bg
+                            } else {
+                                rgba(0x3d3d3d00)
+                            })
                             .hover(|s| s.bg(button_bg))
                             // Keyboard shortcut badge on top-right
                             .child(render_shortcut_badge(
@@ -2808,7 +4028,7 @@ impl EditorView {
                                     .rounded_full()
                                     .bg(gpui_selected_color)
                                     .border_2()
-                                    .border_color(rgb(0xffffff))
+                                    .border_color(rgb(0xffffff)),
                             )
                             // Selected style name
                             .child(
@@ -2816,7 +4036,7 @@ impl EditorView {
                                     .text_color(text_color)
                                     .text_size(px(9.))
                                     .mt(px(2.))
-                                    .child(self.style_state.style.label())
+                                    .child(self.style_state.style.label()),
                             )
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.style_picker_open = !this.style_picker_open;
@@ -2826,96 +4046,61 @@ impl EditorView {
                             // rows (stroke width, fill, stroke style, arrowhead, font size,
                             // blur intensity, opacity), rendered by style_panel.rs
                             .when(picker_open, |el| {
-                                el.child(self.render_style_flyout(button_bg, button_active_bg, text_color, cx))
+                                el.child(self.render_style_flyout(
+                                    button_bg,
+                                    button_active_bg,
+                                    text_color,
+                                    cx,
+                                ))
                             })
                     })
-                    // Separator before Send button
                     .child(
                         div()
-                            .w(px(1.))
-                            .h(px(40.))
-                            .mx_2()
-                            .bg(rgba(0xffffff33))
-                    )
-                    // Send button
-                    .child(
-                        div()
-                            .id("send-button")
+                            .id("undo-button")
                             .relative()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .w(px(80.))  // Explicit width for click target
-                            .h(px(44.))
+                            .w(px(56.0))
+                            .h(px(56.0))
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(rgb(0x0078d4))  // Blue
-                            .hover(|s| s.bg(rgb(0x1084d8)))
-                            .child(render_shortcut_badge(SEND_SHORTCUT_LABEL, text_color))
+                            .hover(|style| style.bg(button_bg))
+                            .text_color(icon_color)
+                            .child(render_shortcut_badge(UNDO_SHORTCUT_LABEL, text_color))
                             .child(
-                                div()
-                                    .text_color(rgb(0xffffff))
-                                    .text_size(px(14.))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .child("Send")
+                                svg()
+                                    .path("assets/icons/undo.svg")
+                                    .size(px(28.0))
+                                    .text_color(icon_color),
                             )
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.send_to_claude(cx);
-                            }))
+                                this.undo(cx);
+                            })),
                     )
-                    // Approve button
                     .child(
                         div()
-                            .id("approve-button")
+                            .id("redo-button")
                             .relative()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .w(px(110.))  // Explicit width for click target
-                            .h(px(44.))
-                            .ml_2()
+                            .w(px(56.0))
+                            .h(px(56.0))
                             .rounded_md()
                             .cursor_pointer()
-                            .bg(rgb(0x2e7d32))  // Green
-                            .hover(|s| s.bg(rgb(0x388e3c)))
-                            .child(render_shortcut_badge(APPROVE_SHORTCUT_LABEL, text_color))
+                            .hover(|style| style.bg(button_bg))
+                            .text_color(icon_color)
+                            .child(render_shortcut_badge(REDO_SHORTCUT_LABEL, text_color))
                             .child(
-                                div()
-                                    .text_color(rgb(0xffffff))
-                                    .text_size(px(14.))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .child("✓ Approve")
+                                svg()
+                                    .path("assets/icons/redo.svg")
+                                    .size(px(28.0))
+                                    .text_color(icon_color),
                             )
                             .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.approve_to_claude(cx);
-                            }))
-                    )
-                    // Reject button
-                    .child(
-                        div()
-                            .id("reject-button")
-                            .relative()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(100.))  // Explicit width for click target
-                            .h(px(44.))
-                            .ml_2()
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(rgb(0xc62828))  // Red
-                            .hover(|s| s.bg(rgb(0xd32f2f)))
-                            .child(render_shortcut_badge(REJECT_SHORTCUT_LABEL, text_color))
-                            .child(
-                                div()
-                                    .text_color(rgb(0xffffff))
-                                    .text_size(px(14.))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .child("✗ Reject")
-                            )
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.reject_to_claude(cx);
-                            }))
+                                this.redo(cx);
+                            })),
                     ),
             ) // Close inner toolbar container
     }
@@ -2924,24 +4109,27 @@ impl EditorView {
     fn render_annotation(&self, annotation: &Annotation) -> impl IntoElement {
         let color = annotation.color;
         let gpui_color = rgba(
-            color.r as u32 * 0x1000000 +
-            color.g as u32 * 0x10000 +
-            color.b as u32 * 0x100 +
-            color.a as u32
+            color.r as u32 * 0x1000000
+                + color.g as u32 * 0x10000
+                + color.b as u32 * 0x100
+                + color.a as u32,
         );
-        let border_color = rgb(
-            color.r as u32 * 0x10000 +
-            color.g as u32 * 0x100 +
-            color.b as u32
-        );
+        let border_color = rgb(color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32);
 
         // Get scale factor for stroke width scaling
         let (scale, _, _) = self.calculate_scale_and_offset();
 
         match &annotation.annotation_type {
-            AnnotationType::Box { region, stroke_width, stroke_style, filled, corner_radius } => {
+            AnnotationType::Box {
+                region,
+                stroke_width,
+                stroke_style,
+                filled,
+                corner_radius,
+            } => {
                 // Scale coordinates from image space to screen space
-                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
+                let (sx, sy, sw, sh) =
+                    self.scale_coords(region.x, region.y, region.width, region.height);
                 let mut element = div()
                     .absolute()
                     .left(px(sx))
@@ -2964,21 +4152,53 @@ impl EditorView {
 
                 element.into_any_element()
             }
-            AnnotationType::Arrow { start, end, head, stroke_width } => {
+            AnnotationType::Arrow {
+                start,
+                end,
+                head,
+                stroke_width,
+            } => {
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
                 let stroke = *stroke_width as f32 * scale;
-                Self::render_arrow_element(start_sx, start_sy, end_sx, end_sy, stroke, *head, border_color.into())
-                    .into_any_element()
+                Self::render_arrow_element(
+                    start_sx,
+                    start_sy,
+                    end_sx,
+                    end_sy,
+                    stroke,
+                    *head,
+                    border_color.into(),
+                )
+                .into_any_element()
             }
-            AnnotationType::Line { start, end, stroke_width, stroke_style } => {
+            AnnotationType::Line {
+                start,
+                end,
+                stroke_width,
+                stroke_style,
+            } => {
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
                 let stroke = *stroke_width as f32 * scale;
-                Self::render_line_element(start_sx, start_sy, end_sx, end_sy, stroke, *stroke_style, border_color.into())
-                    .into_any_element()
+                Self::render_line_element(
+                    start_sx,
+                    start_sy,
+                    end_sx,
+                    end_sy,
+                    stroke,
+                    *stroke_style,
+                    border_color.into(),
+                )
+                .into_any_element()
             }
-            AnnotationType::Ellipse { center, radius_x, radius_y, stroke_width, filled } => {
+            AnnotationType::Ellipse {
+                center,
+                radius_x,
+                radius_y,
+                stroke_width,
+                filled,
+            } => {
                 // Scale center and radii
                 let (center_sx, center_sy) = self.scale_point(center.x, center.y);
                 let scaled_radius_x = *radius_x as f32 * scale;
@@ -3000,7 +4220,14 @@ impl EditorView {
 
                 element.into_any_element()
             }
-            AnnotationType::Text { position, content, font_size, background, max_width, .. } => {
+            AnnotationType::Text {
+                position,
+                content,
+                font_size,
+                background,
+                max_width,
+                ..
+            } => {
                 // Scale position and font size
                 let (sx, sy) = self.scale_point(position.x, position.y);
                 let scaled_font_size = *font_size as f32 * scale;
@@ -3042,7 +4269,11 @@ impl EditorView {
                     },
                 }
             }
-            AnnotationType::Number { position, value, radius } => {
+            AnnotationType::Number {
+                position,
+                value,
+                radius,
+            } => {
                 // Scale position and radius
                 let (sx, sy) = self.scale_point(position.x, position.y);
                 let scaled_radius = *radius as f32 * scale;
@@ -3065,14 +4296,15 @@ impl EditorView {
             }
             AnnotationType::Highlight { region, .. } => {
                 let highlight_color = rgba(
-                    color.r as u32 * 0x1000000 +
-                    color.g as u32 * 0x10000 +
-                    color.b as u32 * 0x100 +
-                    0x60  // Semi-transparent
+                    color.r as u32 * 0x1000000
+                        + color.g as u32 * 0x10000
+                        + color.b as u32 * 0x100
+                        + 0x60, // Semi-transparent
                 );
 
                 // Scale coordinates
-                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
+                let (sx, sy, sw, sh) =
+                    self.scale_coords(region.x, region.y, region.width, region.height);
 
                 div()
                     .absolute()
@@ -3085,7 +4317,8 @@ impl EditorView {
             }
             AnnotationType::Blur { region, .. } => {
                 // Scale coordinates
-                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
+                let (sx, sy, sw, sh) =
+                    self.scale_coords(region.x, region.y, region.width, region.height);
 
                 // Blur is rendered in the preview image, no overlay needed
                 div()
@@ -3098,7 +4331,8 @@ impl EditorView {
             }
             AnnotationType::Crop { region } => {
                 // Scale coordinates
-                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
+                let (sx, sy, sw, sh) =
+                    self.scale_coords(region.x, region.y, region.width, region.height);
 
                 // Crop region shown as dashed border
                 div()
@@ -3111,24 +4345,31 @@ impl EditorView {
                     .border_color(rgb(0x00ff00))
                     .into_any_element()
             }
-            AnnotationType::Path { points, stroke_width, stroke_style } => {
+            AnnotationType::Path {
+                points,
+                stroke_width,
+                stroke_style,
+            } => {
                 if points.len() < 2 {
                     return div().into_any_element();
                 }
 
                 // Scale all points to screen coordinates
-                let scaled_points: Vec<(f32, f32)> = points
-                    .iter()
-                    .map(|p| self.scale_point(p.x, p.y))
-                    .collect();
+                let scaled_points: Vec<(f32, f32)> =
+                    points.iter().map(|p| self.scale_point(p.x, p.y)).collect();
 
                 let stroke = *stroke_width as f32 * scale;
 
                 Self::render_path_element(scaled_points, stroke, *stroke_style, border_color.into())
                     .into_any_element()
             }
-            AnnotationType::Image { region, asset, opacity } => {
-                let (sx, sy, sw, sh) = self.scale_coords(region.x, region.y, region.width, region.height);
+            AnnotationType::Image {
+                region,
+                asset,
+                opacity,
+            } => {
+                let (sx, sy, sw, sh) =
+                    self.scale_coords(region.x, region.y, region.width, region.height);
 
                 match self.asset_cache.get(&asset.0) {
                     Some(asset_data) => {
@@ -3185,9 +4426,8 @@ impl EditorView {
         match preview {
             ToolPreview::None => None,
             ToolPreview::Rectangle { region, color } => {
-                let preview_color = rgb(
-                    color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32,
-                );
+                let preview_color =
+                    rgb(color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32);
                 let preview_bg = rgba(
                     color.r as u32 * 0x1000000
                         + color.g as u32 * 0x10000
@@ -3213,15 +4453,22 @@ impl EditorView {
                 )
             }
             ToolPreview::Line { start, end, color } => {
-                let preview_color = rgb(
-                    color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32,
-                );
+                let preview_color =
+                    rgb(color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32);
                 let (start_sx, start_sy) = self.scale_point(start.x, start.y);
                 let (end_sx, end_sy) = self.scale_point(end.x, end.y);
 
                 Some(
-                    Self::render_line_element(start_sx, start_sy, end_sx, end_sy, 2.0, StrokeStyle::Solid, preview_color.into())
-                        .into_any_element(),
+                    Self::render_line_element(
+                        start_sx,
+                        start_sy,
+                        end_sx,
+                        end_sy,
+                        2.0,
+                        StrokeStyle::Solid,
+                        preview_color.into(),
+                    )
+                    .into_any_element(),
                 )
             }
             ToolPreview::Ellipse {
@@ -3230,9 +4477,8 @@ impl EditorView {
                 radius_y,
                 color,
             } => {
-                let preview_color = rgb(
-                    color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32,
-                );
+                let preview_color =
+                    rgb(color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32);
 
                 // Scale to screen coordinates
                 let (center_sx, center_sy) = self.scale_point(center.x, center.y);
@@ -3253,7 +4499,11 @@ impl EditorView {
                         .into_any_element(),
                 )
             }
-            ToolPreview::Selection { bounds, handles, guides } => {
+            ToolPreview::Selection {
+                bounds,
+                handles,
+                guides,
+            } => {
                 // Render selection bounds with optional resize handles
                 if bounds.is_empty() {
                     return None;
@@ -3284,11 +4534,13 @@ impl EditorView {
 
                     for (point, _handle_type) in handle_positions {
                         let (hx, hy) = self.scale_point(point.x, point.y);
+                        let (local_x, local_y) =
+                            local_selection_handle_position(hx, hy, sx, sy, handle_size);
                         handles_container = handles_container.child(
                             div()
                                 .absolute()
-                                .left(px(hx - handle_size / 2.0))
-                                .top(px(hy - handle_size / 2.0))
+                                .left(px(local_x))
+                                .top(px(local_y))
                                 .w(px(handle_size))
                                 .h(px(handle_size))
                                 .bg(handle_color)
@@ -3340,7 +4592,12 @@ impl EditorView {
                     };
                 }
 
-                Some(div().child(container).child(guides_container).into_any_element())
+                Some(
+                    div()
+                        .child(container)
+                        .child(guides_container)
+                        .into_any_element(),
+                )
             }
             ToolPreview::Marquee { region } => {
                 // Render marquee selection rectangle (dashed border effect)
@@ -3369,21 +4626,23 @@ impl EditorView {
                     return None;
                 }
 
-                let preview_color = rgb(
-                    color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32,
-                );
+                let preview_color =
+                    rgb(color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32);
 
                 // Scale all points to screen coordinates
-                let scaled_points: Vec<(f32, f32)> = points
-                    .iter()
-                    .map(|p| self.scale_point(p.x, p.y))
-                    .collect();
+                let scaled_points: Vec<(f32, f32)> =
+                    points.iter().map(|p| self.scale_point(p.x, p.y)).collect();
 
                 let stroke = stroke_width as f32 * self.calculate_scale_and_offset().0;
 
                 Some(
-                    Self::render_path_element(scaled_points, stroke, StrokeStyle::Solid, preview_color.into())
-                        .into_any_element(),
+                    Self::render_path_element(
+                        scaled_points,
+                        stroke,
+                        StrokeStyle::Solid,
+                        preview_color.into(),
+                    )
+                    .into_any_element(),
                 )
             }
         }
@@ -3391,27 +4650,31 @@ impl EditorView {
 
     /// Render the canvas area with image and annotations
     fn render_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let background_color = rgba(0x12121255);
         let text_color = rgb(0xcccccc);
 
         let mut canvas = div()
             .id("canvas")
             .size_full()
-            .bg(background_color)
             .relative()
             .overflow_hidden()
             .track_focus(&self.focus_handle)
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, event, window, cx| {
-                // Grab focus so keyboard shortcuts work
-                this.focus_handle.focus(window);
-                this.handle_mouse_down(event, cx);
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event, window, cx| {
+                    // Grab focus so keyboard shortcuts work
+                    this.focus_handle.focus(window);
+                    this.handle_mouse_down(event, cx);
+                }),
+            )
             .on_mouse_move(cx.listener(|this, event, _window, cx| {
                 this.handle_mouse_move(event, cx);
             }))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, event, _window, cx| {
-                this.handle_mouse_up(event, cx);
-            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event, _window, cx| {
+                    this.handle_mouse_up(event, cx);
+                }),
+            )
             .on_scroll_wheel(cx.listener(|this, event, _window, cx| {
                 this.handle_scroll_wheel(event, cx);
             }))
@@ -3435,6 +4698,10 @@ impl EditorView {
                     .top(px(offset_y))
                     .w(px(scaled_width))
                     .h(px(scaled_height))
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(rgba(0xffffff33))
+                    .overflow_hidden()
                     .child(
                         img(display_path.clone())
                             .size_full()
@@ -3476,7 +4743,9 @@ impl EditorView {
         z_ordered.sort_by_key(|a| a.z_index);
         for annotation in z_ordered {
             // If we're editing this annotation, skip rendering it - we'll render the editable version
-            let is_being_edited = self.text_input_state.as_ref()
+            let is_being_edited = self
+                .text_input_state
+                .as_ref()
                 .and_then(|state| state.editing_annotation_id)
                 .map(|id| id == annotation.id)
                 .unwrap_or(false);
@@ -3500,16 +4769,31 @@ impl EditorView {
     }
 
     /// Handle keyboard input
-    fn handle_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let keystroke = &event.keystroke;
-        let response_focused = self.response_composer.read(cx).focus_handle.is_focused(window);
+        let response_focused = self
+            .response_composer
+            .read(cx)
+            .focus_handle
+            .is_focused(window);
 
         // Decision shortcuts remain available from either focus target.
-        if keystroke.modifiers.platform && keystroke.modifiers.shift && keystroke.key.as_str() == "a" {
+        if keystroke.modifiers.platform
+            && keystroke.modifiers.shift
+            && keystroke.key.as_str() == "a"
+        {
             self.approve_to_claude(cx);
             return;
         }
-        if keystroke.modifiers.platform && keystroke.modifiers.shift && keystroke.key.as_str() == "r" {
+        if keystroke.modifiers.platform
+            && keystroke.modifiers.shift
+            && keystroke.key.as_str() == "r"
+        {
             self.reject_to_claude(cx);
             return;
         }
@@ -3536,7 +4820,10 @@ impl EditorView {
         }
 
         // Handle Shift+Cmd+Enter to send to Claude and quit
-        if keystroke.modifiers.shift && keystroke.modifiers.platform && keystroke.key.as_str() == "enter" {
+        if keystroke.modifiers.shift
+            && keystroke.modifiers.platform
+            && keystroke.key.as_str() == "enter"
+        {
             self.send_to_claude_and_quit(cx);
             return;
         }
@@ -3728,11 +5015,7 @@ impl EditorView {
 
         // Use the effective color (based on current style)
         let color = self.effective_color();
-        let text_color = rgb(
-            color.r as u32 * 0x10000 +
-            color.g as u32 * 0x100 +
-            color.b as u32
-        );
+        let text_color = rgb(color.r as u32 * 0x10000 + color.g as u32 * 0x100 + color.b as u32);
 
         // Cursor color matches text
         let cursor_color = text_color;
@@ -3785,15 +5068,10 @@ impl EditorView {
                         div()
                             .text_color(text_color)
                             .text_size(px(scaled_font_size))
-                            .child(content.clone())
+                            .child(content.clone()),
                     )
             }))
-            .child(
-                div()
-                    .w(px(2.))
-                    .h(px(scaled_font_size))
-                    .bg(cursor_color)
-            )
+            .child(div().w(px(2.)).h(px(scaled_font_size)).bg(cursor_color))
     }
 }
 
@@ -3847,7 +5125,8 @@ mod feedback_payload_tests {
 
     #[test]
     fn typed_comment_is_optional_and_preserved() {
-        let payload = EditorView::build_send_payload("comment", Some("ship the tighter spacing"), vec![]);
+        let payload =
+            EditorView::build_send_payload("comment", Some("ship the tighter spacing"), vec![]);
         let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
         assert_eq!(parsed["comment"], "ship the tighter spacing");
 
@@ -3868,7 +5147,7 @@ mod window_layout_tests {
             Some(display),
             size(px(DEFAULT_WINDOW_WIDTH), px(DEFAULT_WINDOW_HEIGHT)),
         );
-        assert_eq!(bounds.size, size(px(1200.0), px(800.0)));
+        assert_eq!(bounds.size, size(px(1400.0), px(720.0)));
         assert_eq!(bounds.center(), display.center());
     }
 
@@ -3882,6 +5161,60 @@ mod window_layout_tests {
         assert_eq!(bounds.size, size(px(752.0), px(552.0)));
         assert_eq!(bounds.center(), display.center());
     }
+
+    #[test]
+    fn review_rail_reserves_space_beside_the_canvas() {
+        assert_eq!(canvas_viewport_width(1400.0, true), 1080.0);
+        assert_eq!(canvas_viewport_width(1400.0, false), 1400.0);
+        assert_eq!(canvas_viewport_width(200.0, true), 1.0);
+    }
+
+    #[test]
+    fn select_is_the_default_active_tool() {
+        assert_eq!(DEFAULT_ACTIVE_TOOL, Tool::Select);
+    }
+
+    #[test]
+    fn review_request_markdown_is_split_into_scannable_blocks() {
+        assert_eq!(
+            parse_markdown_blocks(
+                "# Review\n\nKeep **contrast** high.\n\n- Desktop\n1. Mobile\n\n> Preserve layout\n\n```\nnib judge\n```"
+            ),
+            vec![
+                MarkdownBlock::Heading(1, "Review".into()),
+                MarkdownBlock::Paragraph("Keep **contrast** high.".into()),
+                MarkdownBlock::Bullet("Desktop".into()),
+                MarkdownBlock::Numbered("1.".into(), "Mobile".into()),
+                MarkdownBlock::Quote("Preserve layout".into()),
+                MarkdownBlock::Code("nib judge".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn selection_handles_are_positioned_relative_to_the_selection_container() {
+        assert_eq!(
+            local_selection_handle_position(140.0, 220.0, 100.0, 200.0, 8.0),
+            (36.0, 16.0)
+        );
+    }
+
+    #[test]
+    fn response_composer_stays_four_rows_tall_and_scrolls_overflow() {
+        assert_eq!(response_height_for_text_height(18.0), 88.0);
+        assert_eq!(response_height_for_text_height(72.0), 88.0);
+        assert_eq!(response_height_for_text_height(400.0), 88.0);
+    }
+
+    #[test]
+    fn initial_feedback_window_preserves_exact_image_inset() {
+        let display = Bounds::new(point(px(0.0), px(0.0)), size(px(1728.0), px(1117.0)));
+        let window = initial_window_size(Some(display), Some((1200, 832)));
+        let inner_height = f32::from(window.height) - TOOLBAR_SAFE_AREA - FIT_PADDING as f32 * 2.0;
+        let inner_width = f32::from(window.width) - REVIEW_RAIL_WIDTH - FIT_PADDING as f32 * 2.0;
+        assert!((inner_width / inner_height - 1200.0 / 832.0).abs() < 0.001);
+        assert_eq!(window.height, px(720.0));
+    }
 }
 
 #[cfg(test)]
@@ -3892,31 +5225,27 @@ mod toolbar_layout_tests {
     // if those literals are edited, update these to match.
     const TOOLBAR_PADDING_X: f32 = 24.0; // px_3, both sides
     const GAP: f32 = 4.0; // gap_1, applied between each of the direct children below
-    // Phase 4: Rectangle/Ellipse/Line/Pencil/Highlight collapsed into one shape-flyout
-    // button (tool_flyout.rs), and Image added; Sticky button added post-acceptance --
-    // 2 (before) + 1 (flyout) + 6 (after, includes Sticky + Image) = 9 buttons, all the
-    // same 56px width. Margin ~228px, still passes.
+                          // Phase 4: Rectangle/Ellipse/Line/Pencil/Highlight collapsed into one shape-flyout
+                          // button (tool_flyout.rs), and Image added; Sticky button added post-acceptance --
+                          // 2 (before) + 1 (flyout) + 6 (after, includes Sticky + Image) = 9 buttons, all the
+                          // same 56px width. Feedback actions live only in the review rail.
     const NUM_TOOL_BUTTONS: f32 = 9.0;
     const TOOL_BUTTON_W: f32 = 56.0;
+    const HISTORY_BUTTONS: f32 = 2.0;
     const SEPARATOR_W: f32 = 1.0 + 8.0 * 2.0; // 1px rule + mx_2 margin both sides
     const STYLE_PICKER_BUTTON_W: f32 = 48.0; // collapsed swatch button (was 6 * 48px inline)
-    const SEND_BUTTON_W: f32 = 80.0;
-    const APPROVE_BUTTON_W: f32 = 110.0 + 8.0; // + ml_2
-    const REJECT_BUTTON_W: f32 = 100.0 + 8.0; // + ml_2
-    const DEFAULT_WINDOW_WIDTH: f32 = 1200.0;
+    const CANVAS_STRIP_WIDTH: f32 = 1080.0; // 1400px window minus 320px review rail
 
     fn toolbar_min_width() -> f32 {
         // Direct children of the toolbar container, in render order:
-        // [8 tool buttons/flyout] [separator] [style picker button] [separator] [send] [approve] [reject]
-        let num_direct_children = NUM_TOOL_BUTTONS + 6.0;
+        // [9 tool buttons/flyout] [separator] [style picker] [undo] [redo]
+        let num_direct_children = NUM_TOOL_BUTTONS + HISTORY_BUTTONS + 2.0;
 
         TOOLBAR_PADDING_X
             + NUM_TOOL_BUTTONS * TOOL_BUTTON_W
-            + SEPARATOR_W * 2.0
+            + SEPARATOR_W
             + STYLE_PICKER_BUTTON_W
-            + SEND_BUTTON_W
-            + APPROVE_BUTTON_W
-            + REJECT_BUTTON_W
+            + HISTORY_BUTTONS * TOOL_BUTTON_W
             + GAP * (num_direct_children - 1.0)
     }
 
@@ -3924,13 +5253,13 @@ mod toolbar_layout_tests {
     fn toolbar_fits_default_window_with_margin() {
         let width = toolbar_min_width();
         assert!(
-            width < DEFAULT_WINDOW_WIDTH,
-            "toolbar width {width} does not fit default window width {DEFAULT_WINDOW_WIDTH}"
+            width < CANVAS_STRIP_WIDTH,
+            "toolbar width {width} does not fit canvas strip width {CANVAS_STRIP_WIDTH}"
         );
-        // Require visible margin, not just a bare fit, so Reject isn't clipped at the edge.
+        // Require visible margin so the toolbar stays visually centered and quiet.
         assert!(
-            DEFAULT_WINDOW_WIDTH - width >= 100.0,
-            "toolbar width {width} leaves less than 100px margin in a {DEFAULT_WINDOW_WIDTH}px window"
+            CANVAS_STRIP_WIDTH - width >= 100.0,
+            "toolbar width {width} leaves less than 100px margin in a {CANVAS_STRIP_WIDTH}px strip"
         );
     }
 
@@ -4022,11 +5351,14 @@ impl Render for EditorView {
         let viewport = window.viewport_size();
         let viewport_width: f32 = viewport.width.into();
         let viewport_height: f32 = viewport.height.into();
-        self.canvas_width = viewport_width;
-        self.canvas_height = viewport_height; // Toolbar floats inside canvas
+        let review_rail_visible = self.collab_session.is_some() || self.claude_question.is_some();
+        self.canvas_width = canvas_viewport_width(viewport_width, review_rail_visible);
+        self.canvas_height =
+            (viewport_height - TITLEBAR_CONTENT_INSET - TOOLBAR_SAFE_AREA).max(1.0);
 
         // Sync canvas viewport (handles resize and initial fit-to-view)
-        self.canvas.set_viewport(viewport_width as f64, viewport_height as f64);
+        self.canvas
+            .set_viewport(self.canvas_width as f64, self.canvas_height as f64);
 
         // Check if sidecar file has changed and reload annotations if needed
         self.check_and_reload_annotations();
@@ -4047,20 +5379,24 @@ impl Render for EditorView {
         div()
             .id("editor-container")
             .size_full()
-            .relative()
-            .bg(rgba(0x10101066))
+            .flex()
+            .flex_row()
+            .pt(px(TITLEBAR_CONTENT_INSET))
+            .bg(app_background())
             .capture_key_down(cx.listener(Self::handle_key_down))
-            .child(self.render_canvas(cx))
-            .child(self.render_toolbar(cx)) // Toolbar floats over canvas
-            .child(self.render_toasts()) // Toasts in top-right corner
-            .child(self.render_claude_question()) // Claude question banner at top center
             .child(
                 div()
-                    .absolute()
-                    .left(px(180.0))
-                    .right(px(180.0))
-                    .bottom(px(18.0))
-                    .child(self.response_composer.clone()),
+                    .id("canvas-pane")
+                    .relative()
+                    .h_full()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(self.render_canvas(cx))
+                    .child(self.render_toolbar(cx))
+                    .child(self.render_toasts()),
             )
+            .when(review_rail_visible, |el| {
+                el.child(self.render_review_rail(cx))
+            })
     }
 }

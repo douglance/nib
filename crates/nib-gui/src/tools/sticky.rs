@@ -12,7 +12,10 @@ use std::any::Any;
 
 use nib_core::Color;
 
-use super::{MouseButton, StickyStyle, Tool, ToolContext, ToolEvent, ToolId, ToolMode, ToolPreview, ToolResult};
+use super::{
+    MouseButton, StickyStyle, Tool, ToolContext, ToolEvent, ToolId, ToolMode, ToolPreview,
+    ToolResult,
+};
 
 /// Fixed wrap width for sticky notes (image pixels).
 pub const STICKY_MAX_WIDTH: f64 = 200.0;
@@ -20,7 +23,8 @@ pub const STICKY_MAX_WIDTH: f64 = 200.0;
 /// Pick black or white text for readability against `background`, using
 /// perceptual (ITU-R BT.601) luminance.
 pub fn contrasting_text_color(background: Color) -> Color {
-    let luminance = 0.299 * background.r as f64 + 0.587 * background.g as f64 + 0.114 * background.b as f64;
+    let luminance =
+        0.299 * background.r as f64 + 0.587 * background.g as f64 + 0.114 * background.b as f64;
     if luminance > 140.0 {
         Color::rgb(0, 0, 0)
     } else {
@@ -136,7 +140,11 @@ mod tests {
         );
 
         match result {
-            ToolResult::EnterMode(ToolMode::TextInput { position, sticky_style, .. }) => {
+            ToolResult::EnterMode(ToolMode::TextInput {
+                position,
+                sticky_style,
+                ..
+            }) => {
                 assert_eq!(position, Point::new(10.0, 20.0));
                 let style = sticky_style.expect("sticky tool must set sticky_style");
                 assert_eq!(style.background, Color::rgb(245, 200, 20));
@@ -148,11 +156,17 @@ mod tests {
 
     #[test]
     fn light_background_gets_black_text() {
-        assert_eq!(contrasting_text_color(Color::rgb(255, 255, 255)), Color::rgb(0, 0, 0));
+        assert_eq!(
+            contrasting_text_color(Color::rgb(255, 255, 255)),
+            Color::rgb(0, 0, 0)
+        );
     }
 
     #[test]
     fn dark_background_gets_white_text() {
-        assert_eq!(contrasting_text_color(Color::rgb(10, 10, 10)), Color::rgb(255, 255, 255));
+        assert_eq!(
+            contrasting_text_color(Color::rgb(10, 10, 10)),
+            Color::rgb(255, 255, 255)
+        );
     }
 }

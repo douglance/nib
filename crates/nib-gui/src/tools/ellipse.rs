@@ -4,7 +4,9 @@ use std::any::Any;
 
 use nib_core::{Annotation, AnnotationType, Point};
 
-use super::{DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult};
+use super::{
+    DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult,
+};
 
 /// Tool for drawing ellipse annotations
 pub struct EllipseTool {
@@ -21,10 +23,7 @@ impl EllipseTool {
     /// Calculate ellipse parameters from drag points using bounding-box model
     /// Center is midpoint, radii are half the width/height of bounding box
     fn calculate_ellipse(start: Point, end: Point) -> (Point, f64, f64) {
-        let center = Point::new(
-            (start.x + end.x) / 2.0,
-            (start.y + end.y) / 2.0,
-        );
+        let center = Point::new((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
         let radius_x = (end.x - start.x).abs() / 2.0;
         let radius_y = (end.y - start.y).abs() / 2.0;
         (center, radius_x, radius_y)

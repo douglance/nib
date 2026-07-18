@@ -306,11 +306,9 @@ impl NibFile {
     pub fn latest_annotation_modified_at(&self) -> StorageResult<Option<i64>> {
         let result: Option<i64> = self
             .conn
-            .query_row(
-                "SELECT MAX(modified_at) FROM annotations",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT MAX(modified_at) FROM annotations", [], |row| {
+                row.get(0)
+            })
             .optional()?
             .flatten();
         Ok(result)
@@ -483,7 +481,10 @@ impl NibFile {
     }
 
     /// Get cached OCR results for a region
-    pub fn get_cached_ocr(&self, region: Option<&str>) -> StorageResult<Option<Vec<OcrCacheEntry>>> {
+    pub fn get_cached_ocr(
+        &self,
+        region: Option<&str>,
+    ) -> StorageResult<Option<Vec<OcrCacheEntry>>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT text, bounds, confidence
@@ -503,9 +504,8 @@ impl NibFile {
         for row_result in rows {
             let (text, bounds_json, confidence) = row_result?;
 
-            let bounds: serde_json::Value = serde_json::from_str(&bounds_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid bounds JSON: {}", e))
-            })?;
+            let bounds: serde_json::Value = serde_json::from_str(&bounds_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid bounds JSON: {}", e)))?;
 
             entries.push(OcrCacheEntry {
                 text,
@@ -616,10 +616,9 @@ impl NibFile {
 
         match result {
             Some(json_str) => {
-                let value: serde_json::Value =
-                    serde_json::from_str(&json_str).map_err(|e| {
-                        StorageError::InvalidFormat(format!("Invalid grid metadata JSON: {}", e))
-                    })?;
+                let value: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
+                    StorageError::InvalidFormat(format!("Invalid grid metadata JSON: {}", e))
+                })?;
                 Ok(Some(value))
             }
             None => Ok(None),
@@ -862,9 +861,9 @@ impl NibFile {
 
     /// Migrate schema to latest version
     fn migrate(&self) -> StorageResult<()> {
-        let _version: i32 = self
-            .conn
-            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))?;
+        let _version: i32 =
+            self.conn
+                .query_row("SELECT version FROM schema_version", [], |row| row.get(0))?;
 
         // Add messages table if not exists (for files created before messages feature)
         let has_messages: bool = self
@@ -980,7 +979,9 @@ impl NibFile {
     /// Load every asset referenced by this file's annotations, keyed by hash
     /// (for building a `NibImage.assets` map, e.g. before export).
     pub fn get_all_assets(&self) -> StorageResult<std::collections::HashMap<String, AssetData>> {
-        let mut stmt = self.conn.prepare("SELECT hash, bytes, format, width, height FROM assets")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT hash, bytes, format, width, height FROM assets")?;
         let assets = stmt
             .query_map([], |row| {
                 let hash: String = row.get(0)?;
@@ -1312,7 +1313,11 @@ fn serialize_annotation_data(annotation_type: &AnnotationType) -> StorageResult<
             };
             serde_json::to_string(&data)
         }
-        AnnotationType::Image { region, asset, opacity } => {
+        AnnotationType::Image {
+            region,
+            asset,
+            opacity,
+        } => {
             let data = ImageData {
                 x: region.x,
                 y: region.y,
@@ -1329,15 +1334,11 @@ fn serialize_annotation_data(annotation_type: &AnnotationType) -> StorageResult<
     Ok(json)
 }
 
-fn deserialize_annotation_data(
-    type_name: &str,
-    data_json: &str,
-) -> StorageResult<AnnotationType> {
+fn deserialize_annotation_data(type_name: &str, data_json: &str) -> StorageResult<AnnotationType> {
     let annotation_type = match type_name {
         "arrow" => {
-            let data: ArrowData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid arrow data: {}", e))
-            })?;
+            let data: ArrowData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid arrow data: {}", e)))?;
             AnnotationType::Arrow {
                 start: Point::new(data.start_x, data.start_y),
                 end: Point::new(data.end_x, data.end_y),
@@ -1346,9 +1347,8 @@ fn deserialize_annotation_data(
             }
         }
         "box" | "rectangle" => {
-            let data: BoxData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid box data: {}", e))
-            })?;
+            let data: BoxData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid box data: {}", e)))?;
             AnnotationType::Box {
                 region: Region::new(data.x, data.y, data.width, data.height),
                 stroke_width: data.stroke_width,
@@ -1358,9 +1358,8 @@ fn deserialize_annotation_data(
             }
         }
         "text" => {
-            let data: TextData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid text data: {}", e))
-            })?;
+            let data: TextData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid text data: {}", e)))?;
             AnnotationType::Text {
                 position: Point::new(data.x, data.y),
                 content: data.content,
@@ -1371,9 +1370,8 @@ fn deserialize_annotation_data(
             }
         }
         "number" => {
-            let data: NumberData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid number data: {}", e))
-            })?;
+            let data: NumberData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid number data: {}", e)))?;
             AnnotationType::Number {
                 position: Point::new(data.x, data.y),
                 value: data.value,
@@ -1390,18 +1388,16 @@ fn deserialize_annotation_data(
             }
         }
         "blur" => {
-            let data: BlurData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid blur data: {}", e))
-            })?;
+            let data: BlurData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid blur data: {}", e)))?;
             AnnotationType::Blur {
                 region: Region::new(data.x, data.y, data.width, data.height),
                 intensity: string_to_blur_intensity(&data.intensity),
             }
         }
         "line" => {
-            let data: LineData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid line data: {}", e))
-            })?;
+            let data: LineData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid line data: {}", e)))?;
             AnnotationType::Line {
                 start: Point::new(data.start_x, data.start_y),
                 end: Point::new(data.end_x, data.end_y),
@@ -1410,9 +1406,8 @@ fn deserialize_annotation_data(
             }
         }
         "ellipse" => {
-            let data: EllipseData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid ellipse data: {}", e))
-            })?;
+            let data: EllipseData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid ellipse data: {}", e)))?;
             AnnotationType::Ellipse {
                 center: Point::new(data.center_x, data.center_y),
                 radius_x: data.radius_x,
@@ -1422,17 +1417,15 @@ fn deserialize_annotation_data(
             }
         }
         "crop" => {
-            let data: CropData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid crop data: {}", e))
-            })?;
+            let data: CropData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid crop data: {}", e)))?;
             AnnotationType::Crop {
                 region: Region::new(data.x, data.y, data.width, data.height),
             }
         }
         "path" => {
-            let data: PathData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid path data: {}", e))
-            })?;
+            let data: PathData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid path data: {}", e)))?;
             AnnotationType::Path {
                 points: data.points.iter().map(|p| Point::new(p.x, p.y)).collect(),
                 stroke_width: data.stroke_width,
@@ -1440,9 +1433,8 @@ fn deserialize_annotation_data(
             }
         }
         "image" => {
-            let data: ImageData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid image data: {}", e))
-            })?;
+            let data: ImageData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid image data: {}", e)))?;
             AnnotationType::Image {
                 region: Region::new(data.x, data.y, data.width, data.height),
                 asset: nib_core::AssetRef(data.asset_hash),
@@ -1488,7 +1480,10 @@ fn row_to_annotation(row: AnnotationRow) -> StorageResult<Annotation> {
 }
 
 fn color_to_hex(color: &Color) -> String {
-    format!("#{:02x}{:02x}{:02x}{:02x}", color.r, color.g, color.b, color.a)
+    format!(
+        "#{:02x}{:02x}{:02x}{:02x}",
+        color.r, color.g, color.b, color.a
+    )
 }
 
 fn hex_to_color(hex: &str) -> Color {
@@ -1648,7 +1643,10 @@ mod tests {
 
         // Retrieve it
         let retrieved = nib.get_annotation("a1").unwrap().unwrap();
-        assert!(matches!(retrieved.annotation_type, AnnotationType::Box { .. }));
+        assert!(matches!(
+            retrieved.annotation_type,
+            AnnotationType::Box { .. }
+        ));
         assert_eq!(retrieved.color.r, Color::RED.r);
     }
 
@@ -1677,7 +1675,12 @@ mod tests {
         let retrieved = nib.get_annotation(&id).unwrap().unwrap();
 
         match retrieved.annotation_type {
-            AnnotationType::Text { background, max_width, content, .. } => {
+            AnnotationType::Text {
+                background,
+                max_width,
+                content,
+                ..
+            } => {
                 assert_eq!(background, Some(Color::rgb(255, 220, 130)));
                 assert_eq!(max_width, Some(200.0));
                 assert_eq!(content, "Sticky note text");
@@ -1702,7 +1705,10 @@ mod tests {
         nib.add_asset("deadbeef", &data).unwrap();
 
         let retrieved = nib.get_asset("deadbeef").unwrap().unwrap();
-        assert_eq!(retrieved.bytes, bytes, "asset bytes must round-trip byte-identical");
+        assert_eq!(
+            retrieved.bytes, bytes,
+            "asset bytes must round-trip byte-identical"
+        );
         assert_eq!(retrieved.format, "png");
         assert_eq!(retrieved.width, 4);
         assert_eq!(retrieved.height, 4);
@@ -1720,7 +1726,12 @@ mod tests {
         let asset = nib_core::AssetRef::from_bytes(&asset_bytes);
         nib.add_asset(
             &asset.0,
-            &AssetData { bytes: asset_bytes.clone(), format: "png".to_string(), width: 2, height: 2 },
+            &AssetData {
+                bytes: asset_bytes.clone(),
+                format: "png".to_string(),
+                width: 2,
+                height: 2,
+            },
         )
         .unwrap();
 
@@ -1733,7 +1744,11 @@ mod tests {
         let retrieved = nib.get_annotation(&id).unwrap().unwrap();
 
         match retrieved.annotation_type {
-            AnnotationType::Image { region, asset: retrieved_asset, opacity } => {
+            AnnotationType::Image {
+                region,
+                asset: retrieved_asset,
+                opacity,
+            } => {
                 assert_eq!(region, Region::new(5.0, 6.0, 40.0, 40.0));
                 assert_eq!(retrieved_asset, asset);
                 assert_eq!(opacity, 0.75);
@@ -1742,7 +1757,10 @@ mod tests {
         }
 
         let retrieved_bytes = nib.get_asset(&asset.0).unwrap().unwrap();
-        assert_eq!(retrieved_bytes.bytes, asset_bytes, "asset bytes must be byte-identical");
+        assert_eq!(
+            retrieved_bytes.bytes, asset_bytes,
+            "asset bytes must be byte-identical"
+        );
     }
 
     #[test]
@@ -1754,9 +1772,13 @@ mod tests {
         let path = temp_dir.path().join("pre_assets.nib");
         {
             let conn = rusqlite::Connection::open(&path).unwrap();
-            conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)", [])
+            conn.execute(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY)",
+                [],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO schema_version VALUES (1)", [])
                 .unwrap();
-            conn.execute("INSERT INTO schema_version VALUES (1)", []).unwrap();
         }
 
         let nib = NibFile::open(&path).expect("pre-assets .nib file must still open");
@@ -1769,11 +1791,22 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(has_assets, "migrate() must add the assets table to old files");
+        assert!(
+            has_assets,
+            "migrate() must add the assets table to old files"
+        );
 
         // And the table is actually usable post-migration.
-        nib.add_asset("h", &AssetData { bytes: vec![1, 2, 3], format: "png".to_string(), width: 1, height: 1 })
-            .unwrap();
+        nib.add_asset(
+            "h",
+            &AssetData {
+                bytes: vec![1, 2, 3],
+                format: "png".to_string(),
+                width: 1,
+                height: 1,
+            },
+        )
+        .unwrap();
         assert!(nib.get_asset("h").unwrap().is_some());
     }
 
@@ -1787,9 +1820,13 @@ mod tests {
         let path = temp_dir.path().join("pre_group_id.nib");
         {
             let conn = rusqlite::Connection::open(&path).unwrap();
-            conn.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)", [])
+            conn.execute(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY)",
+                [],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO schema_version VALUES (2)", [])
                 .unwrap();
-            conn.execute("INSERT INTO schema_version VALUES (2)", []).unwrap();
             conn.execute(
                 r#"CREATE TABLE annotations (
                     id TEXT PRIMARY KEY,
@@ -1824,10 +1861,16 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(has_group_id, "migrate() must add the group_id column to old files");
+        assert!(
+            has_group_id,
+            "migrate() must add the group_id column to old files"
+        );
 
         // Existing pre-migration row reads back with group_id defaulted to None.
-        let existing = nib.get_annotation("a1").unwrap().expect("existing annotation must still be readable");
+        let existing = nib
+            .get_annotation("a1")
+            .unwrap()
+            .expect("existing annotation must still be readable");
         assert_eq!(existing.group_id, None);
 
         // And the column is actually usable post-migration.

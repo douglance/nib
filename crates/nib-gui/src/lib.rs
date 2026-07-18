@@ -18,7 +18,10 @@ pub mod tools;
 pub mod zorder;
 
 pub use app::NibApp;
-pub use app::{annotations_file_path, deserialize_annotation, AnnotationsFile, AnnotationGeometry, SerializedAnnotation};
+pub use app::{
+    annotations_file_path, deserialize_annotation, AnnotationGeometry, AnnotationsFile,
+    SerializedAnnotation,
+};
 
 // Re-export commonly used tool types for convenience
 pub use tools::{

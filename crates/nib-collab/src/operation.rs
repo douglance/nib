@@ -265,7 +265,12 @@ pub fn data_to_annotation(id: u64, data: &AnnotationData) -> Annotation {
             max_width: *max_width,
         },
 
-        AnnotationTypeData::Number { x, y, value, radius } => AnnotationType::Number {
+        AnnotationTypeData::Number {
+            x,
+            y,
+            value,
+            radius,
+        } => AnnotationType::Number {
             position: Point::new(*x, *y),
             value: *value,
             radius: *radius,
@@ -413,7 +418,11 @@ pub fn apply_operation(annotations: &mut Vec<Annotation>, op: &AnnotationOp) {
             }
         }
 
-        AnnotationOp::Move { id, delta_x, delta_y } => {
+        AnnotationOp::Move {
+            id,
+            delta_x,
+            delta_y,
+        } => {
             if let Some(annotation) = annotations.iter_mut().find(|a| a.id.0 == *id) {
                 move_annotation(&mut annotation.annotation_type, *delta_x, *delta_y);
                 annotation.touch();
@@ -550,10 +559,7 @@ pub fn compose_moves(op1: &AnnotationOp, op2: &AnnotationOp) -> Option<Annotatio
 }
 
 /// Get the inverse of an operation (for undo)
-pub fn inverse_operation(
-    op: &AnnotationOp,
-    current_state: &[Annotation],
-) -> Option<AnnotationOp> {
+pub fn inverse_operation(op: &AnnotationOp, current_state: &[Annotation]) -> Option<AnnotationOp> {
     match op {
         AnnotationOp::Add { id, .. } => Some(AnnotationOp::Remove { id: *id }),
 
@@ -568,25 +574,27 @@ pub fn inverse_operation(
                 })
         }
 
-        AnnotationOp::Move { id, delta_x, delta_y } => Some(AnnotationOp::Move {
+        AnnotationOp::Move {
+            id,
+            delta_x,
+            delta_y,
+        } => Some(AnnotationOp::Move {
             id: *id,
             delta_x: -delta_x,
             delta_y: -delta_y,
         }),
 
-        AnnotationOp::Reorder { id, new_z } => {
-            current_state
-                .iter()
-                .find(|a| a.id.0 == *id)
-                .map(|a| AnnotationOp::Reorder {
-                    id: *id,
-                    new_z: a.z_index,
-                })
-                .or(Some(AnnotationOp::Reorder {
-                    id: *id,
-                    new_z: *new_z,
-                }))
-        }
+        AnnotationOp::Reorder { id, new_z } => current_state
+            .iter()
+            .find(|a| a.id.0 == *id)
+            .map(|a| AnnotationOp::Reorder {
+                id: *id,
+                new_z: a.z_index,
+            })
+            .or(Some(AnnotationOp::Reorder {
+                id: *id,
+                new_z: *new_z,
+            })),
 
         AnnotationOp::SetVisible { id, visible } => Some(AnnotationOp::SetVisible {
             id: *id,
@@ -694,7 +702,11 @@ mod tests {
 
         let restored = data_to_annotation(image.id.0, &parsed);
         match restored.annotation_type {
-            AnnotationType::Image { region, asset, opacity } => {
+            AnnotationType::Image {
+                region,
+                asset,
+                opacity,
+            } => {
                 assert_eq!(region, Region::new(5.0, 10.0, 300.0, 200.0));
                 assert_eq!(asset.0, "deadbeef1234");
                 assert_eq!(opacity, 0.6);
@@ -706,8 +718,13 @@ mod tests {
             panic!("expected AnnotationTypeData::Image");
         };
         assert_eq!(*asset_base64, expected_base64);
-        let decoded = general_purpose::STANDARD.decode(asset_base64).expect("valid base64");
-        assert_eq!(decoded, original_bytes, "asset bytes must survive the wire round trip byte-identical");
+        let decoded = general_purpose::STANDARD
+            .decode(asset_base64)
+            .expect("valid base64");
+        assert_eq!(
+            decoded, original_bytes,
+            "asset bytes must survive the wire round trip byte-identical"
+        );
     }
 
     #[test]
@@ -730,10 +747,7 @@ mod tests {
         };
 
         // Add
-        apply_operation(
-            &mut annotations,
-            &AnnotationOp::Add { id: 42, data },
-        );
+        apply_operation(&mut annotations, &AnnotationOp::Add { id: 42, data });
         assert_eq!(annotations.len(), 1);
         assert_eq!(annotations[0].id.0, 42);
 
@@ -863,8 +877,12 @@ mod tests {
         // Should only include human annotations
         assert_eq!(delta_annotations.len(), 2);
         assert!(delta_annotations.iter().all(|a| a.owner == "human"));
-        assert!(delta_annotations.iter().any(|a| matches!(a.annotation_type, AnnotationType::Text { .. })));
-        assert!(delta_annotations.iter().any(|a| matches!(a.annotation_type, AnnotationType::Box { .. })));
+        assert!(delta_annotations
+            .iter()
+            .any(|a| matches!(a.annotation_type, AnnotationType::Text { .. })));
+        assert!(delta_annotations
+            .iter()
+            .any(|a| matches!(a.annotation_type, AnnotationType::Box { .. })));
     }
 
     #[test]

@@ -107,26 +107,22 @@ impl GridColor {
 
         if hex.len() == 6 {
             // RGB format, assume full opacity
-            let r = u8::from_str_radix(&hex[0..2], 16)
-                .map_err(|_| "Invalid red component")?;
-            let g = u8::from_str_radix(&hex[2..4], 16)
-                .map_err(|_| "Invalid green component")?;
-            let b = u8::from_str_radix(&hex[4..6], 16)
-                .map_err(|_| "Invalid blue component")?;
+            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| "Invalid red component")?;
+            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| "Invalid green component")?;
+            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| "Invalid blue component")?;
             Ok(Self::new(r, g, b, 255))
         } else if hex.len() == 8 {
             // RGBA format
-            let r = u8::from_str_radix(&hex[0..2], 16)
-                .map_err(|_| "Invalid red component")?;
-            let g = u8::from_str_radix(&hex[2..4], 16)
-                .map_err(|_| "Invalid green component")?;
-            let b = u8::from_str_radix(&hex[4..6], 16)
-                .map_err(|_| "Invalid blue component")?;
-            let a = u8::from_str_radix(&hex[6..8], 16)
-                .map_err(|_| "Invalid alpha component")?;
+            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| "Invalid red component")?;
+            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| "Invalid green component")?;
+            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| "Invalid blue component")?;
+            let a = u8::from_str_radix(&hex[6..8], 16).map_err(|_| "Invalid alpha component")?;
             Ok(Self::new(r, g, b, a))
         } else {
-            Err(format!("Invalid hex color format: expected 6 or 8 characters, got {}", hex.len()))
+            Err(format!(
+                "Invalid hex color format: expected 6 or 8 characters, got {}",
+                hex.len()
+            ))
         }
     }
 }
@@ -204,6 +200,7 @@ pub struct GridMetadata {
 
 impl GridMetadata {
     /// Create metadata for a grid
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         image_width: u32,
         image_height: u32,
@@ -222,7 +219,8 @@ impl GridMetadata {
             grid_size: [cols, rows],
             major_interval,
             region,
-            formula: "pixel_x = origin[0] + col * spacing, pixel_y = origin[1] + row * spacing".to_string(),
+            formula: "pixel_x = origin[0] + col * spacing, pixel_y = origin[1] + row * spacing"
+                .to_string(),
         }
     }
 }

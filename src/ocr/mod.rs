@@ -39,7 +39,12 @@ pub struct Region {
 impl Region {
     /// Create a new region from coordinates.
     pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     /// Check if this region intersects with a text region.
@@ -98,9 +103,7 @@ fn ureq_download(url: &str) -> Result<Vec<u8>> {
         .arg("-fsSL")
         .arg(url)
         .output()
-        .map_err(|e| {
-            crate::core::NibError::Other(format!("Failed to run curl: {}", e))
-        })?;
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to run curl: {}", e)))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -138,9 +141,9 @@ fn init_engine() -> Result<OcrEngine> {
 
 /// Get or initialize the global OCR engine.
 fn get_or_init_engine() -> Result<()> {
-    let mut guard = OCR_ENGINE.lock().map_err(|e| {
-        crate::core::NibError::Other(format!("Failed to lock OCR engine: {}", e))
-    })?;
+    let mut guard = OCR_ENGINE
+        .lock()
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to lock OCR engine: {}", e)))?;
 
     if guard.is_none() {
         *guard = Some(init_engine()?);
@@ -154,13 +157,13 @@ pub fn extract_text_regions(image_path: &std::path::Path) -> Result<Vec<TextRegi
     // Ensure engine is initialized
     get_or_init_engine()?;
 
-    let guard = OCR_ENGINE.lock().map_err(|e| {
-        crate::core::NibError::Other(format!("Failed to lock OCR engine: {}", e))
-    })?;
+    let guard = OCR_ENGINE
+        .lock()
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to lock OCR engine: {}", e)))?;
 
-    let engine = guard.as_ref().ok_or_else(|| {
-        crate::core::NibError::Other("OCR engine not initialized".to_string())
-    })?;
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| crate::core::NibError::Other("OCR engine not initialized".to_string()))?;
 
     // Load and prepare image
     let img = image::open(image_path)
@@ -171,22 +174,22 @@ pub fn extract_text_regions(image_path: &std::path::Path) -> Result<Vec<TextRegi
         crate::core::NibError::Other(format!("Failed to create image source: {}", e))
     })?;
 
-    let ocr_input = engine.prepare_input(img_source).map_err(|e| {
-        crate::core::NibError::Other(format!("Failed to prepare OCR input: {}", e))
-    })?;
+    let ocr_input = engine
+        .prepare_input(img_source)
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to prepare OCR input: {}", e)))?;
 
     // Step 1: Detect word bounding boxes
-    let word_rects = engine.detect_words(&ocr_input).map_err(|e| {
-        crate::core::NibError::Other(format!("Failed to detect words: {}", e))
-    })?;
+    let word_rects = engine
+        .detect_words(&ocr_input)
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to detect words: {}", e)))?;
 
     // Step 2: Group words into lines
     let line_rects = engine.find_text_lines(&ocr_input, &word_rects);
 
     // Step 3: Recognize text in each line
-    let line_texts = engine.recognize_text(&ocr_input, &line_rects).map_err(|e| {
-        crate::core::NibError::Other(format!("Failed to recognize text: {}", e))
-    })?;
+    let line_texts = engine
+        .recognize_text(&ocr_input, &line_rects)
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to recognize text: {}", e)))?;
 
     // Collect results with word-level bounding boxes
     let mut regions = Vec::new();

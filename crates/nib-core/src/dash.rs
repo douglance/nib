@@ -69,10 +69,16 @@ mod tests {
         let start = Point::new(0.0, 0.0);
         let end = Point::new(100.0, 0.0);
         let segments = dash_segments(start, end, StrokeStyle::Dashed, 2.0);
-        assert!(segments.len() > 1, "expected multiple dashes, got {segments:?}");
+        assert!(
+            segments.len() > 1,
+            "expected multiple dashes, got {segments:?}"
+        );
         for (s, e) in &segments {
             let seg_len = s.distance_to(*e);
-            assert!(seg_len < 100.0, "dash segment should be shorter than the full line");
+            assert!(
+                seg_len < 100.0,
+                "dash segment should be shorter than the full line"
+            );
             assert!(seg_len > 0.0);
         }
     }
