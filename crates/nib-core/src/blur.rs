@@ -68,13 +68,12 @@ pub fn pixelate_region(img: &mut RgbaImage, region: &Region, block_size: u32) {
                 }
             }
 
-            if count > 0 {
-                let avg = Rgba([
-                    (r_sum / count) as u8,
-                    (g_sum / count) as u8,
-                    (b_sum / count) as u8,
-                    255,
-                ]);
+            if let (Some(r), Some(g), Some(b)) = (
+                r_sum.checked_div(count),
+                g_sum.checked_div(count),
+                b_sum.checked_div(count),
+            ) {
+                let avg = Rgba([r as u8, g as u8, b as u8, 255]);
 
                 // Fill block with average
                 for dy in 0..block_size.min(h - by) {

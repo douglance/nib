@@ -34,16 +34,21 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.11", features = ["v4", "serde"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 imageproc = "0.25"
+ab_glyph = "0.2"
 tokio = { version = "1.42", features = ["rt-multi-thread", "fs", "sync", "macros"] }
 tracing = "0.1"
 
 # Root crate dependencies
 gpui = "0.2"
 clap = { version = "4.5", features = ["derive", "env", "string"] }
+incurs = { git = "https://github.com/douglance/incurs.git", rev = "93d02770396167c275e142884a1964bca7bfcb72" }
+async-trait = "0.1"
+async-stream = "0.3"
 screenshots = "0.8"
 arboard = { version = "3.4", features = ["image-data"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -75,7 +80,7 @@ insta = { version = "1.41", features = ["yaml"] }
 
 [package]
 name = "nib"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "Fast, native screenshot annotation tool with semantic visual communication"
@@ -90,6 +95,12 @@ readme = "README.md"
 [[bin]]
 name = "nib"
 path = "src/main.rs"
+
+# Temporary parallel binary for the incurs migration (see
+# ~/.claude/plans/what-would-it-look-typed-kettle.md). Removed at cutover.
+[[bin]]
+name = "nib2"
+path = "src/main_incurs.rs"
 
 [lib]
 name = "nib"
@@ -110,6 +121,9 @@ gpui.workspace = true
 
 # CLI parsing
 clap.workspace = true
+incurs.workspace = true
+async-trait.workspace = true
+async-stream.workspace = true
 
 # Image processing
 image.workspace = true
@@ -153,6 +167,9 @@ chrono.workspace = true
 
 # Unique IDs
 uuid.workspace = true
+
+# Config file parsing (nib generate / nib judge command seam)
+toml = "0.8"
 
 # OCR (text detection and recognition) - feature-gated
 ocrs = { workspace = true, optional = true }

@@ -5,12 +5,12 @@ use nib_core::Color;
 /// Predefined color palette
 pub const COLOR_PALETTE: &[Color] = &[
     Color::RED,
-    Color::rgb(249, 115, 22),  // Orange
+    Color::rgb(249, 115, 22), // Orange
     Color::YELLOW,
     Color::GREEN,
     Color::BLUE,
-    Color::rgb(139, 92, 246),  // Purple
-    Color::rgb(236, 72, 153),  // Pink
+    Color::rgb(139, 92, 246), // Purple
+    Color::rgb(236, 72, 153), // Pink
     Color::WHITE,
     Color::rgb(156, 163, 175), // Gray
     Color::BLACK,

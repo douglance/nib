@@ -105,7 +105,12 @@ pub struct Region {
 
 impl Region {
     pub const fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     pub fn from_points(p1: Point, p2: Point) -> Self {
@@ -113,7 +118,12 @@ impl Region {
         let y = p1.y.min(p2.y);
         let width = (p1.x - p2.x).abs();
         let height = (p1.y - p2.y).abs();
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 
     pub fn contains(&self, point: Point) -> bool {
@@ -183,7 +193,7 @@ impl Severity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AnnotationStyle {
     #[default]
-    Note,   // Neutral labels, identifiers (gray)
+    Note, // Neutral labels, identifiers (gray)
     Info,   // Context, explanations (blue)
     Todo,   // Action needed, "fix this" (yellow/amber)
     Bug,    // Problems, broken things (red)
@@ -298,6 +308,26 @@ pub enum StrokeStyle {
     Dotted,
 }
 
+/// Content-hash reference to an out-of-band asset (e.g. inserted image bytes).
+/// Storage layers keep the reference inline and the bytes elsewhere: the
+/// `.nib` SQLite file in an `assets` table keyed by this hash, the sidecar in
+/// the style block as base64, the wire protocol inlined as base64 (screenshot
+/// scale, so simplest wins over a fetch protocol).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AssetRef(pub String);
+
+impl AssetRef {
+    /// Compute the content-hash reference for `bytes` (hex-encoded SHA-256).
+    /// Identical bytes always produce the same `AssetRef`, so storing by hash
+    /// naturally de-duplicates identical images.
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(bytes);
+        Self(format!("{:x}", hasher.finalize()))
+    }
+}
+
 /// The type-specific data for each annotation variant
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnnotationType {
@@ -342,10 +372,7 @@ pub enum AnnotationType {
     },
 
     /// Freeform highlight (semi-transparent)
-    Highlight {
-        region: Region,
-        corner_radius: f64,
-    },
+    Highlight { region: Region, corner_radius: f64 },
 
     /// Line between two points (no arrow head)
     Line {
@@ -372,6 +399,13 @@ pub enum AnnotationType {
         points: Vec<Point>,
         stroke_width: f64,
         stroke_style: StrokeStyle,
+    },
+
+    /// Inserted image, referenced by content hash (bytes live out-of-band)
+    Image {
+        region: Region,
+        asset: AssetRef,
+        opacity: f64,
     },
 }
 
@@ -400,9 +434,17 @@ impl AnnotationType {
                 max_width,
                 ..
             } => {
-                // Approximate text bounds
-                let width = max_width.unwrap_or(content.len() as f64 * font_size * 0.6);
-                let height = *font_size * 1.2;
+                let lines = crate::wrap_text(content, *font_size, *max_width);
+                let width = max_width.unwrap_or_else(|| {
+                    lines
+                        .iter()
+                        .map(|line| line.chars().count())
+                        .max()
+                        .unwrap_or(0) as f64
+                        * font_size
+                        * 0.6
+                });
+                let height = lines.len().max(1) as f64 * font_size * 1.2;
                 Region::new(position.x, position.y, width, height)
             }
             AnnotationType::Number {
@@ -448,6 +490,7 @@ impl AnnotationType {
                 let max_y = points.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max);
                 Region::new(min_x, min_y, max_x - min_x, max_y - min_y).expand(*stroke_width / 2.0)
             }
+            AnnotationType::Image { region, .. } => *region,
         }
     }
 
@@ -464,6 +507,7 @@ impl AnnotationType {
             AnnotationType::Ellipse { .. } => "ellipse",
             AnnotationType::Crop { .. } => "crop",
             AnnotationType::Path { .. } => "path",
+            AnnotationType::Image { .. } => "image",
         }
     }
 }
@@ -481,6 +525,9 @@ pub struct Annotation {
     pub visible: bool,
     pub locked: bool,
     pub z_index: i32,
+    /// Flat (non-nested) group membership: annotations sharing the same id
+    /// were grouped together via ⌘G. `None` means ungrouped.
+    pub group_id: Option<u64>,
     pub created_at: SystemTime,
     pub modified_at: SystemTime,
 }
@@ -498,6 +545,7 @@ impl Annotation {
             visible: true,
             locked: false,
             z_index: 0,
+            group_id: None,
             created_at: now,
             modified_at: now,
         }
@@ -505,6 +553,11 @@ impl Annotation {
 
     pub fn with_owner(mut self, owner: impl Into<String>) -> Self {
         self.owner = owner.into();
+        self
+    }
+
+    pub fn with_group_id(mut self, group_id: Option<u64>) -> Self {
+        self.group_id = group_id;
         self
     }
 
@@ -558,6 +611,16 @@ pub enum ImageSource {
     Url(String),
 }
 
+/// Bytes for an out-of-band asset (e.g. an Image annotation's pixels), keyed
+/// by content hash (see `AssetRef`) wherever it's stored.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssetData {
+    pub bytes: Vec<u8>,
+    pub format: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 /// A complete annotated image document
 #[derive(Debug, Clone)]
 pub struct NibImage {
@@ -570,6 +633,9 @@ pub struct NibImage {
     pub source: ImageSource,
     /// All annotations on this image
     pub annotations: Vec<Annotation>,
+    /// Out-of-band asset bytes referenced by Image annotations, keyed by
+    /// content hash. Empty for documents with no inserted images.
+    pub assets: std::collections::HashMap<String, AssetData>,
     /// Document-level metadata
     pub title: Option<String>,
     pub description: Option<String>,
@@ -590,6 +656,7 @@ impl NibImage {
             height,
             source,
             annotations: Vec::new(),
+            assets: std::collections::HashMap::new(),
             title: None,
             description: None,
             tags: Vec::new(),
@@ -656,5 +723,65 @@ impl NibImage {
                 _ => None,
             })
             .unwrap_or(Region::new(0.0, 0.0, self.width as f64, self.height as f64))
+    }
+}
+
+#[cfg(test)]
+mod image_annotation_tests {
+    use super::*;
+
+    #[test]
+    fn asset_ref_from_bytes_is_deterministic() {
+        assert_eq!(
+            AssetRef::from_bytes(b"hello"),
+            AssetRef::from_bytes(b"hello")
+        );
+    }
+
+    #[test]
+    fn asset_ref_from_bytes_differs_for_different_content() {
+        assert_ne!(
+            AssetRef::from_bytes(b"hello"),
+            AssetRef::from_bytes(b"world")
+        );
+    }
+
+    #[test]
+    fn image_bounds_is_its_region() {
+        let region = Region::new(10.0, 20.0, 100.0, 50.0);
+        let image = AnnotationType::Image {
+            region,
+            asset: AssetRef::from_bytes(b"x"),
+            opacity: 1.0,
+        };
+        assert_eq!(image.bounds(), region);
+    }
+
+    #[test]
+    fn image_type_name_is_image() {
+        let image = AnnotationType::Image {
+            region: Region::new(0.0, 0.0, 1.0, 1.0),
+            asset: AssetRef::from_bytes(b"x"),
+            opacity: 1.0,
+        };
+        assert_eq!(image.type_name(), "image");
+    }
+
+    #[test]
+    fn fixed_width_text_bounds_include_wrapped_line_height() {
+        let text = AnnotationType::Text {
+            position: Point::new(10.0, 20.0),
+            content: "one two three four five six".to_string(),
+            font_size: 16.0,
+            align: TextAlign::Left,
+            background: None,
+            max_width: Some(60.0),
+        };
+        let bounds = text.bounds();
+        assert_eq!(bounds.width, 60.0);
+        assert!(
+            bounds.height > 16.0 * 1.2,
+            "wrapped text must span multiple lines"
+        );
     }
 }

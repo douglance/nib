@@ -165,6 +165,24 @@ pub fn annotation_to_data(annotation: &Annotation) -> AnnotationData {
             }
             .to_string(),
         },
+
+        AnnotationType::Image {
+            region,
+            asset,
+            opacity,
+        } => AnnotationTypeData::Image {
+            x: region.x,
+            y: region.y,
+            width: region.width,
+            height: region.height,
+            asset_hash: asset.0.clone(),
+            // Bytes aren't reachable from an Annotation alone (they live in the
+            // caller's asset cache, out-of-band) -- callers that have them
+            // patch this field on the returned AnnotationTypeData before
+            // sending it over the wire.
+            asset_base64: String::new(),
+            opacity: *opacity,
+        },
     };
 
     AnnotationData {
@@ -179,6 +197,7 @@ pub fn annotation_to_data(annotation: &Annotation) -> AnnotationData {
         label: annotation.label.clone(),
         z_index: annotation.z_index,
         owner: annotation.owner.clone(),
+        group_id: annotation.group_id,
     }
 }
 
@@ -246,7 +265,12 @@ pub fn data_to_annotation(id: u64, data: &AnnotationData) -> Annotation {
             max_width: *max_width,
         },
 
-        AnnotationTypeData::Number { x, y, value, radius } => AnnotationType::Number {
+        AnnotationTypeData::Number {
+            x,
+            y,
+            value,
+            radius,
+        } => AnnotationType::Number {
             position: Point::new(*x, *y),
             value: *value,
             radius: *radius,
@@ -334,6 +358,23 @@ pub fn data_to_annotation(id: u64, data: &AnnotationData) -> Annotation {
                 _ => StrokeStyle::Solid,
             },
         },
+
+        AnnotationTypeData::Image {
+            x,
+            y,
+            width,
+            height,
+            asset_hash,
+            opacity,
+            // `asset_base64` isn't decoded here -- see `annotation_to_data`'s
+            // doc comment; a caller that needs the bytes reads
+            // `data.annotation_type`'s field directly and decodes it.
+            asset_base64: _,
+        } => AnnotationType::Image {
+            region: Region::new(*x, *y, *width, *height),
+            asset: nib_core::AssetRef(asset_hash.clone()),
+            opacity: *opacity,
+        },
     };
 
     let severity = match data.severity.as_str() {
@@ -351,6 +392,7 @@ pub fn data_to_annotation(id: u64, data: &AnnotationData) -> Annotation {
     annotation.label = data.label.clone();
     annotation.z_index = data.z_index;
     annotation.owner = data.owner.clone();
+    annotation.group_id = data.group_id;
 
     annotation
 }
@@ -376,7 +418,11 @@ pub fn apply_operation(annotations: &mut Vec<Annotation>, op: &AnnotationOp) {
             }
         }
 
-        AnnotationOp::Move { id, delta_x, delta_y } => {
+        AnnotationOp::Move {
+            id,
+            delta_x,
+            delta_y,
+        } => {
             if let Some(annotation) = annotations.iter_mut().find(|a| a.id.0 == *id) {
                 move_annotation(&mut annotation.annotation_type, *delta_x, *delta_y);
                 annotation.touch();
@@ -461,6 +507,7 @@ fn move_annotation(annotation_type: &mut AnnotationType, delta_x: f64, delta_y: 
         AnnotationType::Box { region, .. }
         | AnnotationType::Blur { region, .. }
         | AnnotationType::Highlight { region, .. }
+        | AnnotationType::Image { region, .. }
         | AnnotationType::Crop { region } => {
             region.x += delta_x;
             region.y += delta_y;
@@ -512,10 +559,7 @@ pub fn compose_moves(op1: &AnnotationOp, op2: &AnnotationOp) -> Option<Annotatio
 }
 
 /// Get the inverse of an operation (for undo)
-pub fn inverse_operation(
-    op: &AnnotationOp,
-    current_state: &[Annotation],
-) -> Option<AnnotationOp> {
+pub fn inverse_operation(op: &AnnotationOp, current_state: &[Annotation]) -> Option<AnnotationOp> {
     match op {
         AnnotationOp::Add { id, .. } => Some(AnnotationOp::Remove { id: *id }),
 
@@ -530,25 +574,27 @@ pub fn inverse_operation(
                 })
         }
 
-        AnnotationOp::Move { id, delta_x, delta_y } => Some(AnnotationOp::Move {
+        AnnotationOp::Move {
+            id,
+            delta_x,
+            delta_y,
+        } => Some(AnnotationOp::Move {
             id: *id,
             delta_x: -delta_x,
             delta_y: -delta_y,
         }),
 
-        AnnotationOp::Reorder { id, new_z } => {
-            current_state
-                .iter()
-                .find(|a| a.id.0 == *id)
-                .map(|a| AnnotationOp::Reorder {
-                    id: *id,
-                    new_z: a.z_index,
-                })
-                .or(Some(AnnotationOp::Reorder {
-                    id: *id,
-                    new_z: *new_z,
-                }))
-        }
+        AnnotationOp::Reorder { id, new_z } => current_state
+            .iter()
+            .find(|a| a.id.0 == *id)
+            .map(|a| AnnotationOp::Reorder {
+                id: *id,
+                new_z: a.z_index,
+            })
+            .or(Some(AnnotationOp::Reorder {
+                id: *id,
+                new_z: *new_z,
+            })),
 
         AnnotationOp::SetVisible { id, visible } => Some(AnnotationOp::SetVisible {
             id: *id,
@@ -584,6 +630,7 @@ pub fn inverse_operation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose, Engine as _};
 
     #[test]
     fn test_annotation_roundtrip() {
@@ -605,6 +652,82 @@ mod tests {
     }
 
     #[test]
+    fn test_group_id_roundtrip_over_wire() {
+        let grouped = Annotation::new(AnnotationType::Number {
+            position: Point::new(1.0, 2.0),
+            value: 1,
+            radius: 15.0,
+        })
+        .with_group_id(Some(9));
+
+        let data = annotation_to_data(&grouped);
+        let json = serde_json::to_string(&data).expect("serialize to json");
+        let parsed: AnnotationData = serde_json::from_str(&json).expect("parse json");
+        let restored = data_to_annotation(grouped.id.0, &parsed);
+        assert_eq!(restored.group_id, Some(9));
+    }
+
+    #[test]
+    fn test_old_wire_json_without_group_id_field_parses_as_ungrouped() {
+        let json = r#"{"annotation_type":{"Number":{"x":1.0,"y":2.0,"value":1,"radius":15.0}},"color":[255,0,0,255],"severity":"none","label":null,"z_index":0,"owner":"human"}"#;
+        let parsed: AnnotationData = serde_json::from_str(json).expect("parse json");
+        let restored = data_to_annotation(1, &parsed);
+        assert_eq!(restored.group_id, None);
+    }
+
+    #[test]
+    fn test_image_annotation_roundtrip_with_base64_byte_identical() {
+        let image = Annotation::new(AnnotationType::Image {
+            region: Region::new(5.0, 10.0, 300.0, 200.0),
+            asset: nib_core::AssetRef("deadbeef1234".to_string()),
+            opacity: 0.6,
+        });
+
+        let mut data = annotation_to_data(&image);
+        // annotation_to_data can't fill this in itself -- an Annotation only
+        // carries the asset's hash, not its bytes. A sender that has the
+        // bytes (e.g. the GUI's asset cache) patches this in before putting
+        // the AnnotationData on the wire; simulate that, then round-trip
+        // through JSON the way the wire protocol actually would.
+        let original_bytes = vec![10u8, 20, 30, 40, 250, 251, 252, 253];
+        let expected_base64 = general_purpose::STANDARD.encode(&original_bytes);
+        if let AnnotationTypeData::Image { asset_base64, .. } = &mut data.annotation_type {
+            *asset_base64 = expected_base64.clone();
+        } else {
+            panic!("expected AnnotationTypeData::Image");
+        }
+
+        let json = serde_json::to_string(&data).expect("serialize to json");
+        let parsed: AnnotationData = serde_json::from_str(&json).expect("parse json");
+
+        let restored = data_to_annotation(image.id.0, &parsed);
+        match restored.annotation_type {
+            AnnotationType::Image {
+                region,
+                asset,
+                opacity,
+            } => {
+                assert_eq!(region, Region::new(5.0, 10.0, 300.0, 200.0));
+                assert_eq!(asset.0, "deadbeef1234");
+                assert_eq!(opacity, 0.6);
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+
+        let AnnotationTypeData::Image { asset_base64, .. } = &parsed.annotation_type else {
+            panic!("expected AnnotationTypeData::Image");
+        };
+        assert_eq!(*asset_base64, expected_base64);
+        let decoded = general_purpose::STANDARD
+            .decode(asset_base64)
+            .expect("valid base64");
+        assert_eq!(
+            decoded, original_bytes,
+            "asset bytes must survive the wire round trip byte-identical"
+        );
+    }
+
+    #[test]
     fn test_apply_add_remove() {
         let mut annotations = Vec::new();
 
@@ -620,13 +743,11 @@ mod tests {
             label: None,
             z_index: 0,
             owner: "human".to_string(),
+            group_id: None,
         };
 
         // Add
-        apply_operation(
-            &mut annotations,
-            &AnnotationOp::Add { id: 42, data },
-        );
+        apply_operation(&mut annotations, &AnnotationOp::Add { id: 42, data });
         assert_eq!(annotations.len(), 1);
         assert_eq!(annotations[0].id.0, 42);
 
@@ -756,8 +877,12 @@ mod tests {
         // Should only include human annotations
         assert_eq!(delta_annotations.len(), 2);
         assert!(delta_annotations.iter().all(|a| a.owner == "human"));
-        assert!(delta_annotations.iter().any(|a| matches!(a.annotation_type, AnnotationType::Text { .. })));
-        assert!(delta_annotations.iter().any(|a| matches!(a.annotation_type, AnnotationType::Box { .. })));
+        assert!(delta_annotations
+            .iter()
+            .any(|a| matches!(a.annotation_type, AnnotationType::Text { .. })));
+        assert!(delta_annotations
+            .iter()
+            .any(|a| matches!(a.annotation_type, AnnotationType::Box { .. })));
     }
 
     #[test]

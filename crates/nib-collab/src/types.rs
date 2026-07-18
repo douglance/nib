@@ -258,10 +258,7 @@ pub enum CollabMessage {
     Error { message: String },
 
     /// Display a message/question to the user in the GUI
-    ShowMessage {
-        message: String,
-        source: String,
-    },
+    ShowMessage { message: String, source: String },
 
     /// Add multiple annotations at once (for batch Claude annotations)
     AddAnnotations {
@@ -320,10 +317,7 @@ impl Hash for CollabOperation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AnnotationOp {
     /// Add a new annotation
-    Add {
-        id: u64,
-        data: AnnotationData,
-    },
+    Add { id: u64, data: AnnotationData },
 
     /// Remove an annotation
     Remove { id: u64 },
@@ -365,6 +359,10 @@ pub struct AnnotationData {
     /// Owner of the annotation: "claude", "human", or "system"
     #[serde(default = "default_owner")]
     pub owner: String,
+    /// Flat group membership (⌘G). Absent from old wire messages, which
+    /// default to `None` (ungrouped).
+    #[serde(default)]
+    pub group_id: Option<u64>,
 }
 
 fn default_owner() -> String {
@@ -447,6 +445,18 @@ pub enum AnnotationTypeData {
         points: Vec<(f64, f64)>,
         stroke_width: f64,
         stroke_style: String,
+    },
+    /// Inserted image. Bytes are inlined as base64 (screenshot scale, so
+    /// simplest wins over a separate asset-fetch protocol); `asset_hash` is
+    /// carried too so a receiver can de-duplicate by content hash.
+    Image {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        asset_hash: String,
+        asset_base64: String,
+        opacity: f64,
     },
 }
 

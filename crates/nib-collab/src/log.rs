@@ -51,7 +51,7 @@ impl OperationLog {
             }
 
             // Sort by timestamp for deterministic ordering
-            operations.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+            operations.sort_by_key(|operation| operation.timestamp);
         }
 
         Ok(Self {
@@ -75,9 +75,8 @@ impl OperationLog {
             .open(&self.path)?;
 
         let mut writer = BufWriter::new(file);
-        let json = serde_json::to_string(&op).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let json = serde_json::to_string(&op)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         writeln!(writer, "{}", json)?;
         writer.flush()?;
 
@@ -95,7 +94,11 @@ impl OperationLog {
     /// Get operations since a given timestamp
     pub fn operations_since(&self, timestamp: Option<LogicalTimestamp>) -> Vec<&CollabOperation> {
         match timestamp {
-            Some(ts) => self.operations.iter().filter(|op| op.timestamp > ts).collect(),
+            Some(ts) => self
+                .operations
+                .iter()
+                .filter(|op| op.timestamp > ts)
+                .collect(),
             None => self.operations.iter().collect(),
         }
     }
@@ -157,9 +160,8 @@ impl OperationLog {
                 },
             );
 
-            let json = serde_json::to_string(&op).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-            })?;
+            let json = serde_json::to_string(&op)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             writeln!(writer, "{}", json)?;
 
             new_seen_ids.insert(op.op_id);
@@ -244,9 +246,8 @@ impl SessionManager {
         }
 
         let contents = std::fs::read_to_string(&path)?;
-        let state: SessionState = serde_json::from_str(&contents).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let state: SessionState = serde_json::from_str(&contents)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         Ok(Some(state))
     }
@@ -254,9 +255,8 @@ impl SessionManager {
     /// Save session state
     pub fn save_session(&self, state: &SessionState) -> std::io::Result<()> {
         let path = self.session_path(&state.image_path);
-        let contents = serde_json::to_string_pretty(state).map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-        })?;
+        let contents = serde_json::to_string_pretty(state)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
 
         // Write to temp file first for atomic update
         let temp_path = path.with_extension("session.tmp");
@@ -312,8 +312,7 @@ impl SessionManager {
     /// Clean up stale sessions (no connected clients, older than threshold)
     pub fn cleanup_stale_sessions(&self, max_age_secs: u64) -> std::io::Result<usize> {
         let mut cleaned = 0;
-        let threshold = std::time::SystemTime::now()
-            - std::time::Duration::from_secs(max_age_secs);
+        let threshold = std::time::SystemTime::now() - std::time::Duration::from_secs(max_age_secs);
 
         for session in self.list_sessions()? {
             if session.connected_clients.is_empty() && session.last_modified < threshold {
@@ -358,6 +357,7 @@ mod tests {
                         label: None,
                         z_index: 0,
                         owner: "human".to_string(),
+                        group_id: None,
                     },
                 },
             );
@@ -430,6 +430,7 @@ mod tests {
                     label: None,
                     z_index: 0,
                     owner: "human".to_string(),
+                    group_id: None,
                 },
             },
         );

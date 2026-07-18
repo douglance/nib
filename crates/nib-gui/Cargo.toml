@@ -1,6 +1,6 @@
 [package]
 name = "nib-gui"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "GPUI-based graphical editor for Nib"
@@ -20,6 +20,7 @@ gpui.workspace = true
 
 # Image processing
 image.workspace = true
+arboard.workspace = true
 
 # Serialization
 serde.workspace = true
@@ -37,3 +38,10 @@ tokio.workspace = true
 
 # Other
 anyhow.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSGraphics", "NSResponder", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow"] }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -2,9 +2,11 @@
 
 use std::any::Any;
 
-use nib_core::{Annotation, AnnotationType, StrokeStyle};
+use nib_core::{Annotation, AnnotationType};
 
-use super::{DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult};
+use super::{
+    DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult,
+};
 
 /// Tool for drawing line annotations
 pub struct LineTool {
@@ -72,7 +74,7 @@ impl Tool for LineTool {
                         start,
                         end: position,
                         stroke_width: ctx.stroke_width,
-                        stroke_style: StrokeStyle::Solid,
+                        stroke_style: ctx.stroke_style,
                     })
                     .with_color(ctx.effective_color());
 

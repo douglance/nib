@@ -101,7 +101,10 @@ impl Session {
                         });
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to connect to existing session, creating new: {}", e);
+                        tracing::warn!(
+                            "Failed to connect to existing session, creating new: {}",
+                            e
+                        );
                         // Fall through to create new session
                     }
                 }
@@ -320,7 +323,9 @@ impl Session {
                     apply_operation(&mut self.annotations.write(), &op.operation);
                     count += 1;
                 }
-                CollabMessage::Pong { connected_clients: _ } => {
+                CollabMessage::Pong {
+                    connected_clients: _,
+                } => {
                     // Update client list if needed
                 }
                 _ => {}
@@ -389,20 +394,26 @@ impl Session {
     /// Block waiting for a SendToAgent message from GUI
     /// Returns the JSON payload when received
     /// Used by CLI feedback command to wait for user to click "Send"
-    pub fn wait_for_send(&self, timeout: Duration) -> Result<String, String> {
+    pub fn wait_for_send(&self, timeout: Option<Duration>) -> Result<String, String> {
         use super::types::CollabMessage;
 
         let handle = self.handle.as_ref().ok_or("No session handle")?;
-        let deadline = std::time::Instant::now() + timeout;
+        let deadline = timeout.and_then(|duration| std::time::Instant::now().checked_add(duration));
 
         loop {
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                return Err("Timeout waiting for send".to_string());
-            }
+            let wait_duration = match deadline {
+                Some(deadline) => {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        return Err("Timeout waiting for send".to_string());
+                    }
+                    remaining.min(Duration::from_millis(100))
+                }
+                None => Duration::from_millis(100),
+            };
 
             // Try to receive with timeout
-            match handle.receiver.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            match handle.receiver.recv_timeout(wait_duration) {
                 Ok(CollabMessage::Operation(op)) => {
                     // Check if this is a SendToAgent operation
                     if let AnnotationOp::SendToAgent { payload } = op.operation {
@@ -438,7 +449,9 @@ impl Session {
         }
 
         if let Some(server) = self.server.take() {
-            server.cleanup().map_err(|e| format!("Cleanup failed: {}", e))?;
+            server
+                .cleanup()
+                .map_err(|e| format!("Cleanup failed: {}", e))?;
         }
 
         // Only delete session files if we're the last client and owner
@@ -507,12 +520,7 @@ mod tests {
         // Create empty image file
         std::fs::write(&image_path, &[]).unwrap();
 
-        let session = Session::from_annotations(
-            &image_path,
-            vec![],
-            ClientType::Cli,
-        )
-        .unwrap();
+        let session = Session::from_annotations(&image_path, vec![], ClientType::Cli).unwrap();
 
         assert!(session.is_owner());
         assert_eq!(session.annotations().len(), 0);
@@ -524,12 +532,7 @@ mod tests {
         let image_path = temp_dir.path().join("test.png");
         std::fs::write(&image_path, &[]).unwrap();
 
-        let session = Session::from_annotations(
-            &image_path,
-            vec![],
-            ClientType::Cli,
-        )
-        .unwrap();
+        let session = Session::from_annotations(&image_path, vec![], ClientType::Cli).unwrap();
 
         let annotation = Annotation::new(AnnotationType::Number {
             position: Point::new(100.0, 100.0),

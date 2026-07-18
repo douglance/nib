@@ -21,10 +21,16 @@ async fn run() -> Result<()> {
     // For MCP server, skip logging initialization (stdout must be pure JSON-RPC)
     let is_mcp_server = matches!(&cli.command, Command::McpServer(_));
 
-    // Feedback and AwaitSubmit need quiet logging (JSON output)
+    // Feedback, AwaitSubmit, Generate, and Judge need quiet logging: their
+    // stdout is a JSON contract consumed by scripts/agents and must not be
+    // interleaved with log lines.
     let is_quiet_mode = matches!(
         &cli.command,
-        Command::Feedback(_) | Command::AwaitSubmit(_)
+        Command::Feedback(_)
+            | Command::AwaitSubmit(_)
+            | Command::Generate(_)
+            | Command::Judge(_)
+            | Command::Sessions
     );
 
     if is_mcp_server || is_quiet_mode {
@@ -80,6 +86,8 @@ async fn run() -> Result<()> {
         Command::Render(args) => cli::run_render(&args),
         Command::Import(args) => cli::run_import(&args),
         Command::Export(args) => cli::run_export(&args),
+        Command::Generate(args) => cli::run_generate(&args, &cli.format).await,
+        Command::Judge(args) => cli::run_judge(&args, &cli.format),
 
         // Claude inspection
         Command::Grid(args) => cli::run_grid(&args),
@@ -102,7 +110,7 @@ async fn run() -> Result<()> {
         // Utilities
         Command::Validate(args) => cli::run_validate(&args),
         Command::List(args) => cli::run_list(&args),
-        Command::Sessions => cli::run_sessions(),
+        Command::Sessions => cli::run_sessions(&cli.format),
         #[cfg(feature = "mcp")]
         Command::McpServer(args) => cli::run_mcp_server(&args).await,
         #[cfg(not(feature = "mcp"))]

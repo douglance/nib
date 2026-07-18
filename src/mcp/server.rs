@@ -7,19 +7,22 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use rmcp::{
-    ErrorData as McpError, ServerHandler, RoleServer,
-    model::*,
-    service::{ServiceExt, RequestContext},
-    tool, tool_router,
-    handler::server::tool::{ToolRouter, ToolCallContext},
+    handler::server::tool::{ToolCallContext, ToolRouter},
     handler::server::wrapper::Parameters,
+    model::*,
+    service::{RequestContext, ServiceExt},
+    tool, tool_router,
     transport::stdio,
+    ErrorData as McpError, RoleServer, ServerHandler,
 };
 use tokio::sync::Mutex;
 
 use crate::core::{ImageSource, NibImage, Result as NibResult};
-use crate::{annotations_file_path, AnnotationsFile, AnnotationGeometry, SerializedAnnotation, deserialize_annotation};
 use crate::storage::export;
+use crate::{
+    annotations_file_path, deserialize_annotation, AnnotationGeometry, AnnotationsFile,
+    SerializedAnnotation,
+};
 
 use super::tools::*;
 use super::watcher::AnnotationWatcher;
@@ -28,6 +31,7 @@ use super::watcher::AnnotationWatcher;
 #[derive(Clone)]
 pub struct NibMcpServer {
     /// Current image being annotated (optional, can work with any image)
+    #[allow(dead_code)]
     current_image: Arc<Mutex<Option<PathBuf>>>,
     /// Tool router for MCP protocol
     tool_router: ToolRouter<Self>,
@@ -56,7 +60,9 @@ impl NibMcpServer {
     }
 
     /// Add an annotation to an image
-    #[tool(description = "Add an annotation to an image. Supports: arrow, rectangle, text, number, ellipse, line, highlight, blur. Returns the annotation ID.")]
+    #[tool(
+        description = "Add an annotation to an image. Supports: arrow, rectangle, text, number, ellipse, line, highlight, blur. Returns the annotation ID."
+    )]
     async fn add_annotation(
         &self,
         Parameters(request): Parameters<AddAnnotationRequest>,
@@ -74,11 +80,11 @@ impl NibMcpServer {
 
         // Load existing annotations or create empty file
         let mut annotations_file = if annotations_path.exists() {
-            let json_content = std::fs::read_to_string(&annotations_path)
-                .map_err(|e| McpError::internal_error(format!("Failed to read annotations: {}", e), None))?;
-            serde_json::from_str::<AnnotationsFile>(&json_content).unwrap_or_else(|_| {
-                AnnotationsFile::new(&request.image_path, Vec::new())
-            })
+            let json_content = std::fs::read_to_string(&annotations_path).map_err(|e| {
+                McpError::internal_error(format!("Failed to read annotations: {}", e), None)
+            })?;
+            serde_json::from_str::<AnnotationsFile>(&json_content)
+                .unwrap_or_else(|_| AnnotationsFile::new(&request.image_path, Vec::new()))
         } else {
             AnnotationsFile::new(&request.image_path, Vec::new())
         };
@@ -87,17 +93,18 @@ impl NibMcpServer {
         let next_id = annotations_file
             .annotations
             .iter()
-            .filter_map(|a| {
-                a.id.strip_prefix('a')
-                    .and_then(|n| n.parse::<u32>().ok())
-            })
+            .filter_map(|a| a.id.strip_prefix('a').and_then(|n| n.parse::<u32>().ok()))
             .max()
-            .unwrap_or(0) + 1;
+            .unwrap_or(0)
+            + 1;
 
         let annotation_id = format!("a{}", next_id);
 
         // Parse color
-        let color = request.color.clone().unwrap_or_else(|| "#ff0000".to_string());
+        let color = request
+            .color
+            .clone()
+            .unwrap_or_else(|| "#ff0000".to_string());
 
         // Create geometry based on annotation type
         let geometry = match request.annotation_type.as_str() {
@@ -131,22 +138,18 @@ impl NibMcpServer {
                     radius_y: height / 2.0,
                 }
             }
-            "text" => {
-                AnnotationGeometry::Point {
-                    x: request.x,
-                    y: request.y,
-                    value: None,
-                    content: Some(request.text.clone().unwrap_or_else(|| "Text".to_string())),
-                }
-            }
-            "number" => {
-                AnnotationGeometry::Point {
-                    x: request.x,
-                    y: request.y,
-                    value: Some(request.number.unwrap_or(next_id)),
-                    content: None,
-                }
-            }
+            "text" => AnnotationGeometry::Point {
+                x: request.x,
+                y: request.y,
+                value: None,
+                content: Some(request.text.clone().unwrap_or_else(|| "Text".to_string())),
+            },
+            "number" => AnnotationGeometry::Point {
+                x: request.x,
+                y: request.y,
+                value: Some(request.number.unwrap_or(next_id)),
+                content: None,
+            },
             _ => {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
                     "Error: Unknown annotation type '{}'. Valid types: rectangle, arrow, line, ellipse, highlight, blur, text, number",
@@ -161,6 +164,11 @@ impl NibMcpServer {
             annotation_type: request.annotation_type.clone(),
             geometry,
             color,
+            style: nib_serde::SerializedStyle {
+                stroke_width: request.stroke_width,
+                font_size: request.font_size,
+                ..Default::default()
+            },
         };
 
         annotations_file.annotations.push(annotation);
@@ -175,18 +183,16 @@ impl NibMcpServer {
         let timestamp = crate::events::timestamp_ms();
         let result_text = format!(
             "[NIB {}] claude added [{}] {} at ({}, {})",
-            timestamp,
-            annotation_id,
-            request.annotation_type,
-            request.x,
-            request.y
+            timestamp, annotation_id, request.annotation_type, request.x, request.y
         );
 
         Ok(CallToolResult::success(vec![Content::text(result_text)]))
     }
 
     /// Read all annotations from an image
-    #[tool(description = "Read all annotations from an image. Returns a list of annotations with their IDs, types, positions, and colors.")]
+    #[tool(
+        description = "Read all annotations from an image. Returns a list of annotations with their IDs, types, positions, and colors."
+    )]
     async fn read_annotations(
         &self,
         Parameters(request): Parameters<ReadAnnotationsRequest>,
@@ -204,7 +210,7 @@ impl NibMcpServer {
 
         if !annotations_path.exists() {
             return Ok(CallToolResult::success(vec![Content::text(
-                "No annotations found for this image."
+                "No annotations found for this image.",
             )]));
         }
 
@@ -216,25 +222,51 @@ impl NibMcpServer {
 
         if annotations_file.annotations.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
-                "No annotations found."
+                "No annotations found.",
             )]));
         }
 
         // Format annotations for output
-        let mut output = format!("Found {} annotation(s):\n\n", annotations_file.annotations.len());
+        let mut output = format!(
+            "Found {} annotation(s):\n\n",
+            annotations_file.annotations.len()
+        );
 
         for ann in &annotations_file.annotations {
             let position = match &ann.geometry {
-                AnnotationGeometry::Rectangle { x, y, width, height } => {
+                AnnotationGeometry::Rectangle {
+                    x,
+                    y,
+                    width,
+                    height,
+                } => {
                     format!("position: ({}, {}), size: {}x{}", x, y, width, height)
                 }
-                AnnotationGeometry::Line { start_x, start_y, end_x, end_y } => {
+                AnnotationGeometry::Line {
+                    start_x,
+                    start_y,
+                    end_x,
+                    end_y,
+                } => {
                     format!("from ({}, {}) to ({}, {})", start_x, start_y, end_x, end_y)
                 }
-                AnnotationGeometry::Ellipse { center_x, center_y, radius_x, radius_y } => {
-                    format!("center: ({}, {}), radius: {}x{}", center_x, center_y, radius_x, radius_y)
+                AnnotationGeometry::Ellipse {
+                    center_x,
+                    center_y,
+                    radius_x,
+                    radius_y,
+                } => {
+                    format!(
+                        "center: ({}, {}), radius: {}x{}",
+                        center_x, center_y, radius_x, radius_y
+                    )
                 }
-                AnnotationGeometry::Point { x, y, value, content } => {
+                AnnotationGeometry::Point {
+                    x,
+                    y,
+                    value,
+                    content,
+                } => {
                     let extra = match (value, content) {
                         (Some(v), _) => format!(", value: {}", v),
                         (_, Some(c)) => format!(", text: \"{}\"", c),
@@ -275,7 +307,7 @@ impl NibMcpServer {
 
         if !annotations_path.exists() {
             return Ok(CallToolResult::error(vec![Content::text(
-                "Error: No annotations file found."
+                "Error: No annotations file found.",
             )]));
         }
 
@@ -286,7 +318,9 @@ impl NibMcpServer {
             .map_err(|e| McpError::internal_error(format!("Failed to parse: {}", e), None))?;
 
         let original_count = annotations_file.annotations.len();
-        annotations_file.annotations.retain(|a| a.id != request.annotation_id);
+        annotations_file
+            .annotations
+            .retain(|a| a.id != request.annotation_id);
 
         if annotations_file.annotations.len() == original_count {
             return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -352,7 +386,9 @@ impl NibMcpServer {
     }
 
     /// Render annotations onto image
-    #[tool(description = "Render annotations onto the image, creating a new file with annotations baked in. Output defaults to {stem}.rendered.{ext}.")]
+    #[tool(
+        description = "Render annotations onto the image, creating a new file with annotations baked in. Output defaults to {stem}.rendered.{ext}."
+    )]
     async fn render(
         &self,
         Parameters(request): Parameters<RenderRequest>,
@@ -373,12 +409,11 @@ impl NibMcpServer {
             let json_content = std::fs::read_to_string(&annotations_path)
                 .map_err(|e| McpError::internal_error(format!("Failed to read: {}", e), None))?;
             match serde_json::from_str::<AnnotationsFile>(&json_content) {
-                Ok(file) => {
-                    file.annotations
-                        .iter()
-                        .filter_map(deserialize_annotation)
-                        .collect()
-                }
+                Ok(file) => file
+                    .annotations
+                    .iter()
+                    .filter_map(deserialize_annotation)
+                    .collect(),
                 Err(_) => Vec::new(),
             }
         } else {
@@ -388,8 +423,9 @@ impl NibMcpServer {
         // Load the base image
         let image_data = std::fs::read(&image_path)
             .map_err(|e| McpError::internal_error(format!("Failed to read image: {}", e), None))?;
-        let img = image::load_from_memory(&image_data)
-            .map_err(|e| McpError::internal_error(format!("Failed to decode image: {}", e), None))?;
+        let img = image::load_from_memory(&image_data).map_err(|e| {
+            McpError::internal_error(format!("Failed to decode image: {}", e), None)
+        })?;
 
         // Create NibImage with annotations
         let nib_image = NibImage {
@@ -398,6 +434,7 @@ impl NibMcpServer {
             height: img.height(),
             source: ImageSource::File(image_path.clone()),
             annotations,
+            assets: std::collections::HashMap::new(),
             title: None,
             description: None,
             tags: Vec::new(),
@@ -431,7 +468,9 @@ impl NibMcpServer {
     }
 
     /// Wait for annotation events from the human
-    #[tool(description = "Wait for the human to add, modify, or delete annotations. Blocks until events occur or timeout. Use since_seq from previous response to avoid duplicate events.")]
+    #[tool(
+        description = "Wait for the human to add, modify, or delete annotations. Blocks until events occur or timeout. Use since_seq from previous response to avoid duplicate events."
+    )]
     async fn wait_for_events(
         &self,
         Parameters(request): Parameters<WaitForEventsRequest>,
@@ -486,7 +525,9 @@ impl NibMcpServer {
         // Wait for events (need to reacquire lock)
         let watcher_guard = self.watcher.lock().await;
         let (events, reason) = if let Some(watcher) = watcher_guard.as_ref() {
-            watcher.wait_for_events(&image_path, timeout, since_seq).await
+            watcher
+                .wait_for_events(&image_path, timeout, since_seq)
+                .await
         } else {
             (Vec::new(), "timeout".to_string())
         };
@@ -494,7 +535,11 @@ impl NibMcpServer {
 
         // Build result
         let result = WaitForEventsResult {
-            seq: if events.is_empty() { current_seq } else { events.last().map(|e| e.seq).unwrap_or(current_seq) },
+            seq: if events.is_empty() {
+                current_seq
+            } else {
+                events.last().map(|e| e.seq).unwrap_or(current_seq)
+            },
             events,
             reason,
         };
@@ -503,6 +548,98 @@ impl NibMcpServer {
             .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
 
         Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    /// Generate an image via the configured generator (default: imago)
+    #[tool(
+        description = "Generate an image via the configured generator (default: imago). Shells out and can take 12+ minutes to return; never fabricates success — a non-zero exit from the generator surfaces as a tool error. Returns the generator's JSON result envelope."
+    )]
+    async fn generate_image(
+        &self,
+        Parameters(request): Parameters<GenerateImageRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let config = crate::config::load();
+
+        let out_path = request
+            .out
+            .map(PathBuf::from)
+            .unwrap_or_else(crate::external::default_output_path);
+
+        if let Some(parent) = out_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "Error: Failed to create output directory: {}",
+                    e
+                ))]));
+            }
+        }
+
+        let references: Vec<PathBuf> = request
+            .refs
+            .unwrap_or_default()
+            .into_iter()
+            .map(PathBuf::from)
+            .collect();
+
+        let generate_request = crate::external::GenerateRequest {
+            prompt: &request.prompt,
+            width: request.width,
+            height: request.height,
+            out: &out_path,
+            references: &references,
+            crop: request.crop.unwrap_or(false),
+            timeout: request.timeout.as_deref(),
+        };
+
+        match crate::external::generate(&config, &generate_request) {
+            Ok(result) => {
+                let json = serde_json::to_string(&result).map_err(|e| {
+                    McpError::internal_error(format!("Failed to serialize: {}", e), None)
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+
+    /// Judge a pair of images via the configured judge tool (default: imago compare)
+    #[tool(
+        description = "Compare an expected and actual image via the configured judge tool (default: imago compare). Returns the judge's JSON verdict envelope (verdict: READY or BLOCKED, plus blockers/polish/review)."
+    )]
+    async fn judge_pair(
+        &self,
+        Parameters(request): Parameters<JudgePairRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let config = crate::config::load();
+
+        let judge_request = crate::external::JudgeRequest {
+            expected: &PathBuf::from(&request.expected),
+            actual: &PathBuf::from(&request.actual),
+            timeout: request.timeout.as_deref(),
+            open: request.open.unwrap_or(false),
+        };
+
+        match crate::external::judge(&config, &judge_request) {
+            Ok(result) => {
+                let json = serde_json::to_string(&result).map_err(|e| {
+                    McpError::internal_error(format!("Failed to serialize: {}", e), None)
+                })?;
+                Ok(CallToolResult::success(vec![Content::text(json)]))
+            }
+            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+                "Error: {}",
+                e
+            ))])),
+        }
+    }
+}
+
+impl Default for NibMcpServer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -528,7 +665,9 @@ impl ServerHandler for NibMcpServer {
                 - remove_annotation: Remove an annotation by ID (e.g., 'a1')\n\
                 - clear_annotations: Remove all annotations\n\
                 - render: Bake annotations onto image for viewing\n\
-                - wait_for_events: Block until human adds annotations (or timeout)\n\n\
+                - wait_for_events: Block until human adds annotations (or timeout)\n\
+                - generate_image: Generate an image via the configured generator (default: imago)\n\
+                - judge_pair: Compare expected vs actual images via the configured judge tool (default: imago compare)\n\n\
                 Collaboration Workflow:\n\
                 1. Use add_annotation to mark up images, then render\n\
                 2. Call wait_for_events to block until human responds\n\
@@ -568,10 +707,14 @@ pub async fn run_mcp_server(image_path: Option<PathBuf>) -> NibResult<()> {
         None => NibMcpServer::new(),
     };
 
-    let service = server.serve(stdio()).await
+    let service = server
+        .serve(stdio())
+        .await
         .map_err(|e| crate::core::NibError::Other(format!("Failed to start MCP server: {}", e)))?;
 
-    service.waiting().await
+    service
+        .waiting()
+        .await
         .map_err(|e| crate::core::NibError::Other(format!("MCP server error: {}", e)))?;
 
     Ok(())

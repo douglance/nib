@@ -2,9 +2,11 @@
 
 use std::any::Any;
 
-use nib_core::{Annotation, AnnotationType, ArrowHead};
+use nib_core::{Annotation, AnnotationType};
 
-use super::{DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult};
+use super::{
+    DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult,
+};
 
 /// Tool for drawing arrow annotations
 pub struct ArrowTool {
@@ -71,7 +73,7 @@ impl Tool for ArrowTool {
                     let annotation = Annotation::new(AnnotationType::Arrow {
                         start,
                         end: position,
-                        head: ArrowHead::End,
+                        head: ctx.arrow_head,
                         stroke_width: ctx.stroke_width,
                     })
                     .with_color(ctx.effective_color());

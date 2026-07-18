@@ -23,5 +23,5 @@ mod server;
 mod tools;
 mod watcher;
 
-pub use server::{NibMcpServer, run_mcp_server};
+pub use server::{run_mcp_server, NibMcpServer};
 pub use watcher::AnnotationWatcher;

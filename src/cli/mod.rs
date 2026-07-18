@@ -19,6 +19,22 @@
 pub mod annotation_json;
 pub mod args;
 pub mod commands;
+pub mod fields;
+pub mod sessions;
 
 pub use args::*;
 pub use commands::*;
+pub use sessions::*;
+
+/// Builds the incurs-based CLI command tree.
+///
+/// Under active migration from clap (see `~/.claude/plans/what-would-it-look-typed-kettle.md`):
+/// commands are ported one at a time and registered here; nothing is
+/// registered yet. This runs behind the temporary `nib2` binary
+/// (`src/main_incurs.rs`) so the existing clap-based `nib` binary and its
+/// full test suite are unaffected while the migration is in progress.
+pub fn build_cli() -> incurs::cli::Cli {
+    incurs::cli::Cli::create("nib")
+        .description("Fast, native screenshot annotation tool with semantic visual communication")
+        .version(env!("CARGO_PKG_VERSION"))
+}

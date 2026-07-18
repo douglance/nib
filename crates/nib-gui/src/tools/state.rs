@@ -150,7 +150,10 @@ impl MarqueeState {
 
     /// End the marquee selection and return the final region
     pub fn end_marquee(&mut self) -> Option<Region> {
-        let result = self.start.zip(self.current).map(|(s, c)| Region::from_points(s, c));
+        let result = self
+            .start
+            .zip(self.current)
+            .map(|(s, c)| Region::from_points(s, c));
         self.reset();
         result
     }
@@ -162,7 +165,9 @@ impl MarqueeState {
 
     /// Get the current marquee region if active
     pub fn region(&self) -> Option<Region> {
-        self.start.zip(self.current).map(|(s, c)| Region::from_points(s, c))
+        self.start
+            .zip(self.current)
+            .map(|(s, c)| Region::from_points(s, c))
     }
 }
 
@@ -258,7 +263,9 @@ impl SelectDragState {
     /// Get the original bounds for a specific annotation (during move operation)
     pub fn original_bounds_for(&self, id: AnnotationId) -> Option<&Region> {
         match &self.operation {
-            Some(SelectDragOperation::Move { original_bounds, .. }) => original_bounds.get(&id),
+            Some(SelectDragOperation::Move {
+                original_bounds, ..
+            }) => original_bounds.get(&id),
             _ => None,
         }
     }

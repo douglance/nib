@@ -2,19 +2,15 @@
 
 use super::args::*;
 use crate::capture::{generate_tiles, screen, TiledCapture};
+use crate::collab::{session::Session, types::ClientType};
 use crate::core::TileConfig;
-use crate::collab::{
-    log::SessionManager,
-    session::Session,
-    types::ClientType,
-};
 use crate::core::{qml, NibImage, Result, TileBounds, TileId};
-use crate::{annotations_file_path, AnnotationsFile, AnnotationGeometry};
 #[cfg(feature = "gui")]
 use crate::gui::NibApp;
 use crate::storage::{
     self, convert, export, index::Index, nib_file::NibFile, qml_file, sessions::SessionRegistry,
 };
+use crate::{annotations_file_path, AnnotationGeometry, AnnotationsFile};
 use arboard::Clipboard;
 use chrono::{DateTime, Local};
 use std::path::{Path, PathBuf};
@@ -55,10 +51,7 @@ pub fn run_capture(args: &CaptureArgs) -> Result<()> {
                     .map_err(|e| crate::core::NibError::Other(format!("{}", e)))?;
                 let focused = windows.iter().find(|w| w.is_focused);
                 if let Some(w) = focused {
-                    println!(
-                        "Capturing focused window: {} - \"{}\"",
-                        w.app_name, w.title
-                    );
+                    println!("Capturing focused window: {} - \"{}\"", w.app_name, w.title);
                     crate::capture::window::capture_by_app(&w.app_name)?
                 } else {
                     println!("No focused window found, capturing full screen...");
@@ -85,7 +78,9 @@ pub fn run_capture(args: &CaptureArgs) -> Result<()> {
 
         // Load image as RGBA
         let img = image::load_from_memory(&image.image_data)
-            .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?
+            .map_err(|e| {
+                crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+            })?
             .to_rgba8();
 
         // Create tile config
@@ -127,68 +122,6 @@ fn generate_tiled_dirname() -> PathBuf {
     storage::captures_dir().join(dirname)
 }
 
-/// Execute the sessions command (list active sessions)
-pub fn run_sessions() -> Result<()> {
-    tracing::info!("Running sessions");
-
-    let manager = SessionManager::new(SessionManager::default_dir())
-        .map_err(|e| crate::core::NibError::Other(e.to_string()))?;
-
-    let sessions = manager
-        .list_sessions()
-        .map_err(|e| crate::core::NibError::Other(e.to_string()))?;
-
-    if sessions.is_empty() {
-        println!("No active collaboration sessions.");
-        println!("\nStart a session with: nib gui <image.png>");
-        return Ok(());
-    }
-
-    println!("Active collaboration sessions:");
-    println!("{}", "─".repeat(70));
-
-    for session in &sessions {
-        let created = DateTime::<Local>::from(session.created_at);
-        let modified = DateTime::<Local>::from(session.last_modified);
-
-        let path = &session.image_path;
-        let filename = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy();
-
-        let client_count = session.connected_clients.len();
-        let client_info = if client_count == 0 {
-            "no clients".to_string()
-        } else {
-            let types: Vec<_> = session
-                .connected_clients
-                .iter()
-                .map(|c| format!("{}", c.client_type))
-                .collect();
-            format!("{} client(s): {}", client_count, types.join(", "))
-        };
-
-        println!("  {} │ {}", filename, session.session_id);
-        println!(
-            "    Created: {} │ Modified: {}",
-            created.format("%Y-%m-%d %H:%M"),
-            modified.format("%H:%M:%S")
-        );
-        println!("    Operations: {} │ {}", session.operation_count, client_info);
-        println!("    Path: {}", path.display());
-        println!();
-    }
-
-    println!("{}", "─".repeat(70));
-    println!(
-        "Session storage: {}",
-        SessionManager::default_dir().display()
-    );
-
-    Ok(())
-}
-
 /// Execute the validate command
 pub fn run_validate(args: &ValidateArgs) -> Result<()> {
     tracing::info!(?args, "Running validate");
@@ -197,12 +130,7 @@ pub fn run_validate(args: &ValidateArgs) -> Result<()> {
         // Validate raw QML file
         let content = std::fs::read_to_string(&args.file)?;
         qml::parse_qml_str(&content)
-    } else if args
-        .file
-        .extension()
-        .map(|e| e == "qml")
-        .unwrap_or(false)
-    {
+    } else if args.file.extension().map(|e| e == "qml").unwrap_or(false) {
         // .qml extension - treat as raw QML
         let content = std::fs::read_to_string(&args.file)?;
         qml::parse_qml_str(&content)
@@ -248,10 +176,8 @@ pub fn run_list(args: &ListArgs) -> Result<()> {
     // Load session registry to check which files are open
     let registry = SessionRegistry::load()?;
     let active_sessions = registry.list_active()?;
-    let open_paths: std::collections::HashSet<PathBuf> = active_sessions
-        .iter()
-        .map(|s| s.path.clone())
-        .collect();
+    let open_paths: std::collections::HashSet<PathBuf> =
+        active_sessions.iter().map(|s| s.path.clone()).collect();
 
     if entries.is_empty() {
         println!("No captures found.");
@@ -276,8 +202,12 @@ pub fn run_list(args: &ListArgs) -> Result<()> {
         let is_open = open_paths.contains(path);
 
         // Also check embedded session for .nib files
-        let is_nib_open = if path.extension().map(|e| e == "nib").unwrap_or(false) && path.exists() {
-            get_nib_session_info(&path.to_path_buf()).ok().flatten().is_some()
+        let is_nib_open = if path.extension().map(|e| e == "nib").unwrap_or(false) && path.exists()
+        {
+            get_nib_session_info(&path.to_path_buf())
+                .ok()
+                .flatten()
+                .is_some()
         } else {
             false
         };
@@ -320,10 +250,7 @@ pub fn run_gui(args: &GuiArgs) -> Result<()> {
     if let Some(ref path) = file_path {
         if !path.exists() {
             return Err(crate::core::NibError::Storage(
-                crate::core::StorageError::NotFound(format!(
-                    "File not found: {}",
-                    path.display()
-                )),
+                crate::core::StorageError::NotFound(format!("File not found: {}", path.display())),
             ));
         }
         println!("Opening {} in Nib editor...", path.display());
@@ -357,7 +284,9 @@ pub fn run_gui(args: &GuiArgs) -> Result<()> {
         None => NibApp::new(),
     };
 
-    let result = app.run().map_err(|e| crate::core::NibError::Other(e.to_string()));
+    let result = app
+        .run()
+        .map_err(|e| crate::core::NibError::Other(e.to_string()));
 
     // Unregister session for .nib files when GUI closes
     if is_nib_file {
@@ -399,14 +328,17 @@ pub fn run_annotation_list(args: &AnnotationListArgs) -> Result<()> {
     if !annotations_path.exists() {
         if args.json {
             // Output empty JSON structure
-            let empty = AnnotationsFile::new(
-                &args.file.to_string_lossy(),
-                Vec::new(),
+            let empty = AnnotationsFile::new(&args.file.to_string_lossy(), Vec::new());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&empty).unwrap_or_default()
             );
-            println!("{}", serde_json::to_string_pretty(&empty).unwrap_or_default());
         } else {
             println!("No annotations found for: {}", args.file.display());
-            println!("Annotations file would be at: {}", annotations_path.display());
+            println!(
+                "Annotations file would be at: {}",
+                annotations_path.display()
+            );
         }
         return Ok(());
     }
@@ -432,16 +364,42 @@ pub fn run_annotation_list(args: &AnnotationListArgs) -> Result<()> {
 
                     for (i, annotation) in file.annotations.iter().enumerate() {
                         let geometry_info = match &annotation.geometry {
-                            AnnotationGeometry::Rectangle { x, y, width, height } => {
+                            AnnotationGeometry::Rectangle {
+                                x,
+                                y,
+                                width,
+                                height,
+                            } => {
                                 format!("x={:.0}, y={:.0}, w={:.0}, h={:.0}", x, y, width, height)
                             }
-                            AnnotationGeometry::Line { start_x, start_y, end_x, end_y } => {
-                                format!("({:.0},{:.0}) -> ({:.0},{:.0})", start_x, start_y, end_x, end_y)
+                            AnnotationGeometry::Line {
+                                start_x,
+                                start_y,
+                                end_x,
+                                end_y,
+                            } => {
+                                format!(
+                                    "({:.0},{:.0}) -> ({:.0},{:.0})",
+                                    start_x, start_y, end_x, end_y
+                                )
                             }
-                            AnnotationGeometry::Ellipse { center_x, center_y, radius_x, radius_y } => {
-                                format!("center=({:.0},{:.0}), rx={:.0}, ry={:.0}", center_x, center_y, radius_x, radius_y)
+                            AnnotationGeometry::Ellipse {
+                                center_x,
+                                center_y,
+                                radius_x,
+                                radius_y,
+                            } => {
+                                format!(
+                                    "center=({:.0},{:.0}), rx={:.0}, ry={:.0}",
+                                    center_x, center_y, radius_x, radius_y
+                                )
                             }
-                            AnnotationGeometry::Point { x, y, value, content } => {
+                            AnnotationGeometry::Point {
+                                x,
+                                y,
+                                value,
+                                content,
+                            } => {
                                 let mut info = format!("({:.0},{:.0})", x, y);
                                 if let Some(v) = value {
                                     info.push_str(&format!(" value={}", v));
@@ -485,10 +443,7 @@ fn run_annotations_nib(args: &AnnotationListArgs) -> Result<()> {
     // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
@@ -538,7 +493,10 @@ fn run_annotations_nib(args: &AnnotationListArgs) -> Result<()> {
             "annotations": annotations_json
         });
 
-        println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output).unwrap_or_default()
+        );
     } else {
         // Human-readable output
         println!("Annotations for: {}", args.file.display());
@@ -573,17 +531,17 @@ fn run_annotations_nib(args: &AnnotationListArgs) -> Result<()> {
 
 /// Add an annotation to an image
 pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
-    use crate::core::{Annotation, AnnotationType, ArrowHead, BlurIntensity, Color, Point, Region, StrokeStyle, TextAlign};
+    use crate::core::{
+        Annotation, AnnotationType, ArrowHead, BlurIntensity, Color, Point, Region, StrokeStyle,
+        TextAlign,
+    };
 
     tracing::info!(?args, "Running annotation add");
 
     // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
@@ -646,7 +604,8 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
             },
             "number" => {
                 // Get next number value from existing annotations
-                let next_num = nib.list_annotations()?
+                let next_num = nib
+                    .list_annotations()?
                     .iter()
                     .filter_map(|a| {
                         if let AnnotationType::Number { value, .. } = &a.annotation_type {
@@ -656,7 +615,8 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
                         }
                     })
                     .max()
-                    .unwrap_or(0) + 1;
+                    .unwrap_or(0)
+                    + 1;
 
                 AnnotationType::Number {
                     position: Point::new(args.x, args.y),
@@ -682,7 +642,8 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
         }
         nib.save()?;
 
-        println!("[NIB {}] claude added [{}] {} at ({}, {})",
+        println!(
+            "[NIB {}] claude added [{}] {} at ({}, {})",
             crate::events::timestamp_ms(),
             id,
             args.annotation_type,
@@ -706,7 +667,8 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
         let img = image::load_from_memory(&image_data).map_err(|e| {
             crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
         })?;
-        let extension = args.file
+        let extension = args
+            .file
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("png")
@@ -768,7 +730,8 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
         },
         "number" => {
             // Get next number value from existing annotations
-            let next_num = nib.list_annotations()?
+            let next_num = nib
+                .list_annotations()?
                 .iter()
                 .filter_map(|a| {
                     if let AnnotationType::Number { value, .. } = &a.annotation_type {
@@ -778,7 +741,8 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
                     }
                 })
                 .max()
-                .unwrap_or(0) + 1;
+                .unwrap_or(0)
+                + 1;
 
             AnnotationType::Number {
                 position: Point::new(args.x, args.y),
@@ -804,7 +768,8 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
     }
     nib.save()?;
 
-    println!("[NIB {}] claude added [{}] {} at ({}, {})",
+    println!(
+        "[NIB {}] claude added [{}] {} at ({}, {})",
         crate::events::timestamp_ms(),
         id,
         args.annotation_type,
@@ -884,7 +849,6 @@ fn copy_to_clipboard(image: &NibImage) -> Result<()> {
     Ok(())
 }
 
-
 /// Parse a region string in "x,y,width,height" format.
 #[cfg(feature = "ocr")]
 fn parse_region(region_str: &str) -> Result<crate::ocr::Region> {
@@ -896,18 +860,22 @@ fn parse_region(region_str: &str) -> Result<crate::ocr::Region> {
         )));
     }
 
-    let x = parts[0].trim().parse::<i32>().map_err(|_| {
-        crate::core::NibError::Other(format!("Invalid x coordinate: {}", parts[0]))
-    })?;
-    let y = parts[1].trim().parse::<i32>().map_err(|_| {
-        crate::core::NibError::Other(format!("Invalid y coordinate: {}", parts[1]))
-    })?;
-    let width = parts[2].trim().parse::<i32>().map_err(|_| {
-        crate::core::NibError::Other(format!("Invalid width: {}", parts[2]))
-    })?;
-    let height = parts[3].trim().parse::<i32>().map_err(|_| {
-        crate::core::NibError::Other(format!("Invalid height: {}", parts[3]))
-    })?;
+    let x = parts[0]
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| crate::core::NibError::Other(format!("Invalid x coordinate: {}", parts[0])))?;
+    let y = parts[1]
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| crate::core::NibError::Other(format!("Invalid y coordinate: {}", parts[1])))?;
+    let width = parts[2]
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| crate::core::NibError::Other(format!("Invalid width: {}", parts[2])))?;
+    let height = parts[3]
+        .trim()
+        .parse::<i32>()
+        .map_err(|_| crate::core::NibError::Other(format!("Invalid height: {}", parts[3])))?;
 
     Ok(crate::ocr::Region::new(x, y, width, height))
 }
@@ -920,10 +888,7 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
     // Verify the image file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
@@ -974,7 +939,10 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
                 })
             }).collect::<Vec<_>>()
         });
-        println!("{}", serde_json::to_string_pretty(&json_output).unwrap_or_default());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json_output).unwrap_or_default()
+        );
     } else {
         // Human-readable output
         if let Some(ref search) = args.search {
@@ -983,7 +951,10 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
             println!("All text found in: {}", args.file.display());
         }
         if let Some(r) = region {
-            println!("Region filter: x={}, y={}, width={}, height={}", r.x, r.y, r.width, r.height);
+            println!(
+                "Region filter: x={}, y={}, width={}, height={}",
+                r.x, r.y, r.width, r.height
+            );
         }
         println!("{}", "─".repeat(70));
 
@@ -992,11 +963,7 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
         } else {
             println!("Found {} match(es):\n", results.len());
             for (i, m) in results.iter().enumerate() {
-                println!(
-                    "  {}. \"{}\"",
-                    i + 1,
-                    m.text
-                );
+                println!("  {}. \"{}\"", i + 1, m.text);
                 println!(
                     "     x={}, y={}, width={}, height={} (confidence: {}%)",
                     m.x, m.y, m.width, m.height, m.confidence
@@ -1021,7 +988,8 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
             let img = image::load_from_memory(&image_data).map_err(|e| {
                 crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
             })?;
-            let extension = args.file
+            let extension = args
+                .file
                 .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("png")
@@ -1035,19 +1003,25 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
         };
 
         // Parse the color
-        let color = parse_hex_color(&args.color).unwrap_or(crate::core::Color::rgba(255, 255, 0, 128));
+        let color =
+            parse_hex_color(&args.color).unwrap_or(crate::core::Color::rgba(255, 255, 0, 128));
 
         // Add highlight for each match
         for m in &results {
             let annotation = Annotation::new(AnnotationType::Highlight {
                 region: Region::new(m.x as f64, m.y as f64, m.width as f64, m.height as f64),
                 corner_radius: 0.0,
-            }).with_color(color);
+            })
+            .with_color(color);
             nib.add_annotation(&annotation)?;
         }
 
         nib.save()?;
-        println!("Added {} highlight annotation(s) to: {}", results.len(), nib_path.display());
+        println!(
+            "Added {} highlight annotation(s) to: {}",
+            results.len(),
+            nib_path.display()
+        );
     }
 
     Ok(())
@@ -1096,22 +1070,20 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
     // Verify the image file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
     // Check if this is a .nib file or an image file
     let is_nib_file = args.file.extension().map(|e| e == "nib").unwrap_or(false);
 
-    let (image_data, width, height, annotations) = if is_nib_file {
+    let (image_data, width, height, annotations, assets) = if is_nib_file {
         // Load directly from .nib file
         let nib = NibFile::open(&args.file)?;
         let (data, info) = nib.get_image()?;
         let anns = nib.list_annotations()?;
-        (data, info.width, info.height, anns)
+        let assets = nib.get_all_assets()?;
+        (data, info.width, info.height, anns, assets)
     } else {
         // For image files, look for corresponding .nib file
         let nib_path = args.file.with_extension("nib");
@@ -1120,17 +1092,26 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
             // Load annotations from .nib file
             let nib = NibFile::open(&nib_path)?;
             let anns = nib.list_annotations()?;
+            let assets = nib.get_all_assets()?;
             // But use the image data from the original file for freshness
             let image_data = std::fs::read(&args.file)?;
-            let img = image::load_from_memory(&image_data)
-                .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
-            (image_data, img.width(), img.height(), anns)
+            let img = image::load_from_memory(&image_data).map_err(|e| {
+                crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+            })?;
+            (image_data, img.width(), img.height(), anns, assets)
         } else {
             // No .nib file exists - render with no annotations
             let image_data = std::fs::read(&args.file)?;
-            let img = image::load_from_memory(&image_data)
-                .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
-            (image_data, img.width(), img.height(), Vec::new())
+            let img = image::load_from_memory(&image_data).map_err(|e| {
+                crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+            })?;
+            (
+                image_data,
+                img.width(),
+                img.height(),
+                Vec::new(),
+                std::collections::HashMap::new(),
+            )
         }
     };
 
@@ -1141,6 +1122,7 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
         height,
         source: crate::core::ImageSource::File(args.file.clone()),
         annotations,
+        assets,
         title: None,
         description: None,
         tags: Vec::new(),
@@ -1158,7 +1140,8 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
         } else {
             let stem = args.file.file_stem().unwrap_or_default().to_string_lossy();
             let ext = args.file.extension().unwrap_or_default().to_string_lossy();
-            args.file.with_file_name(format!("{}.rendered.{}", stem, ext))
+            args.file
+                .with_file_name(format!("{}.rendered.{}", stem, ext))
         }
     });
 
@@ -1169,7 +1152,11 @@ pub fn run_render(args: &RenderArgs) -> Result<()> {
     };
     export::export_image(&nib_image, &output_path, &options)?;
 
-    println!("Rendered {} annotation(s) to: {}", nib_image.annotations.len(), output_path.display());
+    println!(
+        "Rendered {} annotation(s) to: {}",
+        nib_image.annotations.len(),
+        output_path.display()
+    );
 
     Ok(())
 }
@@ -1181,10 +1168,7 @@ pub fn run_annotation_remove(args: &AnnotationRemoveArgs) -> Result<()> {
     // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
@@ -1234,10 +1218,7 @@ pub fn run_annotation_clear(args: &AnnotationClearArgs) -> Result<()> {
     // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
@@ -1279,8 +1260,8 @@ pub fn run_annotation_clear(args: &AnnotationClearArgs) -> Result<()> {
 /// Execute the grid command (overlay coordinate grid on image)
 pub fn run_grid(args: &GridArgs) -> Result<()> {
     use crate::core::tile::TileBounds;
-    use crate::grid::{self, GridColor, GridConfig, GridMetadata};
     use crate::grid::types::RegionJson;
+    use crate::grid::{self, GridColor, GridConfig, GridMetadata};
     use image::GenericImageView;
 
     tracing::info!(?args, "Running grid");
@@ -1288,17 +1269,15 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
     // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
     // Load the image
     let image_data = std::fs::read(&args.file)?;
-    let img = image::load_from_memory(&image_data)
-        .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
+    let img = image::load_from_memory(&image_data).map_err(|e| {
+        crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+    })?;
     let (width, height) = img.dimensions();
 
     // Parse region if provided
@@ -1331,9 +1310,8 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
         // JSON output mode - formula-based for compact representation
         // Labels on image show base36 indices (col,row)
         // Use formula to convert: pixel_x = origin[0] + col * spacing
-        let render_bounds = region.unwrap_or_else(|| {
-            TileBounds::from_corners(0.0, 0.0, width as f64, height as f64)
-        });
+        let render_bounds = region
+            .unwrap_or_else(|| TileBounds::from_corners(0.0, 0.0, width as f64, height as f64));
 
         let entries = grid::lines_in_region(&index, &render_bounds);
 
@@ -1378,9 +1356,8 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
         let mut output_img = img.to_rgba8();
 
         // Determine render bounds
-        let render_bounds = region.unwrap_or_else(|| {
-            TileBounds::from_corners(0.0, 0.0, width as f64, height as f64)
-        });
+        let render_bounds = region
+            .unwrap_or_else(|| TileBounds::from_corners(0.0, 0.0, width as f64, height as f64));
 
         // Render grid
         grid::render_grid(&mut output_img, &index, &render_bounds, &config);
@@ -1403,12 +1380,16 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
         });
 
         // Save output
-        final_img.save(&output_path)
-            .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::EncodeError(e.to_string())))?;
+        final_img.save(&output_path).map_err(|e| {
+            crate::core::NibError::Image(crate::core::ImageError::EncodeError(e.to_string()))
+        })?;
 
         println!("Grid overlay saved to: {}", output_path.display());
         println!("Image size: {}x{}", final_img.width(), final_img.height());
-        println!("Grid spacing: {}px (major every {} lines)", args.spacing, args.major_interval);
+        println!(
+            "Grid spacing: {}px (major every {} lines)",
+            args.spacing, args.major_interval
+        );
     }
 
     Ok(())
@@ -1423,17 +1404,15 @@ pub fn run_pick_color(args: &super::args::PickColorArgs) -> Result<()> {
     // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
     // Load the image
     let image_data = std::fs::read(&args.file)?;
-    let img = image::load_from_memory(&image_data)
-        .map_err(|e| crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string())))?;
+    let img = image::load_from_memory(&image_data).map_err(|e| {
+        crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+    })?;
     let (width, height) = img.dimensions();
 
     // Validate coordinates
@@ -1499,7 +1478,10 @@ pub fn run_pick_color(args: &super::args::PickColorArgs) -> Result<()> {
 
     // Format colors
     let hex = format!("#{:02x}{:02x}{:02x}", rgba[0], rgba[1], rgba[2]);
-    let hex_alpha = format!("#{:02x}{:02x}{:02x}{:02x}", rgba[0], rgba[1], rgba[2], rgba[3]);
+    let hex_alpha = format!(
+        "#{:02x}{:02x}{:02x}{:02x}",
+        rgba[0], rgba[1], rgba[2], rgba[3]
+    );
 
     if args.json {
         let output = serde_json::json!({
@@ -1534,10 +1516,7 @@ pub fn run_info(args: &super::args::InfoArgs) -> Result<()> {
     // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
@@ -1614,7 +1593,11 @@ pub fn run_info(args: &super::args::InfoArgs) -> Result<()> {
                 .iter()
                 .map(|(t, c)| format!("{} {}", c, t))
                 .collect();
-            println!("Annotations: {} ({})", annotation_count, type_summary.join(", "));
+            println!(
+                "Annotations: {} ({})",
+                annotation_count,
+                type_summary.join(", ")
+            );
         }
 
         // OCR cache status
@@ -1677,10 +1660,7 @@ pub async fn run_await_submit(args: &super::args::AwaitSubmitArgs) -> Result<()>
     // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
@@ -1774,7 +1754,10 @@ pub async fn run_await_submit(args: &super::args::AwaitSubmitArgs) -> Result<()>
                         "visible": annotation.visible,
                         "locked": annotation.locked
                     });
-                    println!("{}", serde_json::to_string(&json_output).unwrap_or_default());
+                    println!(
+                        "{}",
+                        serde_json::to_string(&json_output).unwrap_or_default()
+                    );
                 } else {
                     // Human-readable output
                     let timestamp = DateTime::<Local>::from(annotation.modified_at);
@@ -1828,10 +1811,7 @@ fn import_image_to_nib(image_path: &PathBuf, output: Option<&PathBuf>) -> Result
 
     // Determine output path
     let nib_path = output.cloned().unwrap_or_else(|| {
-        let stem = image_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy();
+        let stem = image_path.file_stem().unwrap_or_default().to_string_lossy();
         image_path.with_file_name(format!("{}.nib", stem))
     });
 
@@ -1846,13 +1826,7 @@ fn import_image_to_nib(image_path: &PathBuf, output: Option<&PathBuf>) -> Result
     }
 
     // Create the .nib file
-    let nib = NibFile::create(
-        &nib_path,
-        &image_data,
-        format,
-        img.width(),
-        img.height(),
-    )?;
+    let nib = NibFile::create(&nib_path, &image_data, format, img.width(), img.height())?;
 
     // Set original path metadata
     if let Ok(canonical) = image_path.canonicalize() {
@@ -1986,10 +1960,7 @@ fn migrate_single_file(
 
     // Determine output path
     let nib_path = output.cloned().unwrap_or_else(|| {
-        let stem = image_path
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy();
+        let stem = image_path.file_stem().unwrap_or_default().to_string_lossy();
         image_path.with_file_name(format!("{}.nib", stem))
     });
 
@@ -2121,10 +2092,7 @@ pub fn run_tile_query(args: &TileQueryArgs, format: &OutputFormat) -> Result<()>
         let (x, y) = parse_point(point_str)?;
 
         let tile_id = capture.tile_at_point(x, y, zoom).ok_or_else(|| {
-            crate::core::NibError::Other(format!(
-                "Point ({}, {}) is outside image bounds",
-                x, y
-            ))
+            crate::core::NibError::Other(format!("Point ({}, {}) is outside image bounds", x, y))
         })?;
 
         let bounds = capture.tile_bounds(tile_id);
@@ -2151,7 +2119,10 @@ pub fn run_tile_query(args: &TileQueryArgs, format: &OutputFormat) -> Result<()>
 
         match format {
             OutputFormat::Json => {
-                println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&response).unwrap_or_default()
+                );
             }
             OutputFormat::Text => {
                 println!("Point ({}, {}) at zoom {}", x, y, zoom);
@@ -2203,7 +2174,10 @@ pub fn run_tile_query(args: &TileQueryArgs, format: &OutputFormat) -> Result<()>
 
         match format {
             OutputFormat::Json => {
-                println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&response).unwrap_or_default()
+                );
             }
             OutputFormat::Text => {
                 println!(
@@ -2245,7 +2219,10 @@ pub fn run_tile_query(args: &TileQueryArgs, format: &OutputFormat) -> Result<()>
 
         match format {
             OutputFormat::Json => {
-                println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&response).unwrap_or_default()
+                );
             }
             OutputFormat::Text => {
                 println!("Tiled capture: {}", capture.manifest.capture_id);
@@ -2276,9 +2253,9 @@ pub fn run_tile_extract(args: &TileExtractArgs) -> Result<()> {
     let bounds = parse_tile_region(&args.region)?;
 
     // Extract region
-    let extracted = capture.extract_region(&bounds).map_err(|e| {
-        crate::core::NibError::Other(format!("Failed to extract region: {}", e))
-    })?;
+    let extracted = capture
+        .extract_region(&bounds)
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to extract region: {}", e)))?;
 
     // Save to output
     extracted.save(&args.output).map_err(|e| {
@@ -2286,8 +2263,10 @@ pub fn run_tile_extract(args: &TileExtractArgs) -> Result<()> {
     })?;
 
     println!("Extracted region to: {}", args.output.display());
-    println!("  Region: ({:.0},{:.0}) - ({:.0},{:.0})",
-        bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y);
+    println!(
+        "  Region: ({:.0},{:.0}) - ({:.0},{:.0})",
+        bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y
+    );
     println!("  Size: {}x{}", extracted.width(), extracted.height());
 
     Ok(())
@@ -2305,16 +2284,9 @@ pub fn run_tile_list(args: &TileListArgs, format: &OutputFormat) -> Result<()> {
     let max_zoom = capture.manifest.tile_config.max_zoom;
     let zoom = args.zoom.unwrap_or(max_zoom);
 
-    let level = capture
-        .manifest
-        .levels
-        .get(zoom as usize)
-        .ok_or_else(|| {
-            crate::core::NibError::Other(format!(
-                "Invalid zoom level {}. Max is {}",
-                zoom, max_zoom
-            ))
-        })?;
+    let level = capture.manifest.levels.get(zoom as usize).ok_or_else(|| {
+        crate::core::NibError::Other(format!("Invalid zoom level {}. Max is {}", zoom, max_zoom))
+    })?;
 
     // Build tile list
     let mut tiles: Vec<serde_json::Value> = Vec::new();
@@ -2361,7 +2333,10 @@ pub fn run_tile_list(args: &TileListArgs, format: &OutputFormat) -> Result<()> {
 
     match format {
         OutputFormat::Json => {
-            println!("{}", serde_json::to_string_pretty(&response).unwrap_or_default());
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&response).unwrap_or_default()
+            );
         }
         OutputFormat::Text => {
             println!("Tiles at zoom level {}:", zoom);
@@ -2398,12 +2373,14 @@ fn parse_point(point_str: &str) -> Result<(f64, f64)> {
         )));
     }
 
-    let x = parts[0].trim().parse::<f64>().map_err(|_| {
-        crate::core::NibError::Other(format!("Invalid x coordinate: {}", parts[0]))
-    })?;
-    let y = parts[1].trim().parse::<f64>().map_err(|_| {
-        crate::core::NibError::Other(format!("Invalid y coordinate: {}", parts[1]))
-    })?;
+    let x = parts[0]
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| crate::core::NibError::Other(format!("Invalid x coordinate: {}", parts[0])))?;
+    let y = parts[1]
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| crate::core::NibError::Other(format!("Invalid y coordinate: {}", parts[1])))?;
 
     Ok((x, y))
 }
@@ -2418,18 +2395,22 @@ fn parse_tile_region(region_str: &str) -> Result<TileBounds> {
         )));
     }
 
-    let x = parts[0].trim().parse::<f64>().map_err(|_| {
-        crate::core::NibError::Other(format!("Invalid x coordinate: {}", parts[0]))
-    })?;
-    let y = parts[1].trim().parse::<f64>().map_err(|_| {
-        crate::core::NibError::Other(format!("Invalid y coordinate: {}", parts[1]))
-    })?;
-    let width = parts[2].trim().parse::<f64>().map_err(|_| {
-        crate::core::NibError::Other(format!("Invalid width: {}", parts[2]))
-    })?;
-    let height = parts[3].trim().parse::<f64>().map_err(|_| {
-        crate::core::NibError::Other(format!("Invalid height: {}", parts[3]))
-    })?;
+    let x = parts[0]
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| crate::core::NibError::Other(format!("Invalid x coordinate: {}", parts[0])))?;
+    let y = parts[1]
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| crate::core::NibError::Other(format!("Invalid y coordinate: {}", parts[1])))?;
+    let width = parts[2]
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| crate::core::NibError::Other(format!("Invalid width: {}", parts[2])))?;
+    let height = parts[3]
+        .trim()
+        .parse::<f64>()
+        .map_err(|_| crate::core::NibError::Other(format!("Invalid height: {}", parts[3])))?;
 
     Ok(TileBounds::from_corners(x, y, x + width, y + height))
 }
@@ -2443,10 +2424,7 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
     // Verify the file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
@@ -2464,6 +2442,7 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
     // Get the image and annotations
     let (image_data, image_info) = nib.get_image()?;
     let annotations = nib.list_annotations()?;
+    let assets = nib.get_all_assets()?;
 
     // Determine output path
     let output_path = args.output.clone().unwrap_or_else(|| {
@@ -2480,6 +2459,7 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
                 height: image_info.height,
                 source: crate::core::ImageSource::File(args.file.clone()),
                 annotations,
+                assets,
                 title: None,
                 description: None,
                 tags: Vec::new(),
@@ -2522,6 +2502,7 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
                 height: image_info.height,
                 source: crate::core::ImageSource::File(args.file.clone()),
                 annotations,
+                assets,
                 title: None,
                 description: None,
                 tags: Vec::new(),
@@ -2543,6 +2524,108 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
     Ok(())
 }
 
+/// Execute the generate command — shells out to the configured generator
+/// (default: imago) to produce an image, then optionally imports it to
+/// .nib and/or hands it to the human via the feedback flow.
+pub async fn run_generate(args: &super::args::GenerateArgs, format: &OutputFormat) -> Result<()> {
+    tracing::info!(?args, "Running generate");
+
+    let config = crate::config::load();
+    let out_path = args
+        .out
+        .clone()
+        .unwrap_or_else(crate::external::default_output_path);
+
+    if let Some(parent) = out_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let request = crate::external::GenerateRequest {
+        prompt: &args.prompt,
+        width: args.width,
+        height: args.height,
+        out: &out_path,
+        references: &args.reference,
+        crop: args.crop,
+        timeout: args.timeout.as_deref(),
+    };
+
+    // No kill timer: generation can legitimately take 12+ minutes.
+    let mut result = crate::external::generate(&config, &request)?;
+
+    // The generator's `cta` suggests its own follow-up commands (e.g. "imago
+    // compare"); through nib the next step is `nib judge`, so drop it.
+    if let Some(obj) = result.as_object_mut() {
+        obj.remove("cta");
+    }
+
+    match format {
+        OutputFormat::Json => println!("{}", serde_json::to_string(&result).unwrap_or_default()),
+        OutputFormat::Text => println!("Generated: {}", out_path.display()),
+    }
+
+    if args.nib {
+        let nib_path = import_image_to_nib(&out_path, None)?;
+        if matches!(format, OutputFormat::Text) {
+            println!("Imported: {}", nib_path.display());
+        }
+    }
+
+    if args.feedback {
+        let feedback_args = super::args::FeedbackArgs {
+            file: out_path.clone(),
+            message: args.message.clone(),
+            annotations: None,
+            timeout: 0,
+        };
+        run_feedback(&feedback_args).await?;
+    }
+
+    Ok(())
+}
+
+/// Execute the judge command — shells out to the configured judge tool
+/// (default: imago compare) and passes its verdict through. Exit code
+/// mirrors the verdict: 0 for READY, 2 for BLOCKED, non-zero for any
+/// other tool failure.
+pub fn run_judge(args: &super::args::JudgeArgs, format: &OutputFormat) -> Result<()> {
+    tracing::info!(?args, "Running judge");
+
+    let config = crate::config::load();
+    let request = crate::external::JudgeRequest {
+        expected: &args.expected,
+        actual: &args.actual,
+        timeout: args.timeout.as_deref(),
+        open: args.open,
+    };
+
+    let result = crate::external::judge(&config, &request)?;
+
+    let verdict = result
+        .get("verdict")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            crate::core::NibError::Other(format!(
+                "Judge output missing 'verdict' field: {}",
+                result
+            ))
+        })?
+        .to_string();
+
+    match format {
+        OutputFormat::Json => println!("{}", serde_json::to_string(&result).unwrap_or_default()),
+        OutputFormat::Text => println!("Verdict: {}", verdict),
+    }
+
+    match verdict.as_str() {
+        "READY" => Ok(()),
+        "BLOCKED" => std::process::exit(2),
+        other => Err(crate::core::NibError::Other(format!(
+            "Unexpected verdict: {}",
+            other
+        ))),
+    }
+}
 
 /// Execute the windows command (list capturable windows)
 pub fn run_windows(args: &WindowsArgs) -> Result<()> {
@@ -2578,10 +2661,7 @@ pub fn run_windows(args: &WindowsArgs) -> Result<()> {
                 })
             })
             .collect();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&json_windows).unwrap()
-        );
+        println!("{}", serde_json::to_string_pretty(&json_windows).unwrap());
     } else {
         if filtered.is_empty() {
             println!("No windows found.");
@@ -2626,15 +2706,17 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
     // Verify file exists
     if !args.file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!(
-                "File not found: {}",
-                args.file.display()
-            )),
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
 
     // Determine if this is an image or .nib file
-    let extension = args.file.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let extension = args
+        .file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
     let is_image = matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif");
     let is_nib = extension == "nib";
 
@@ -2661,11 +2743,7 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
         args.file.clone()
     };
 
-    let timeout_duration = if args.timeout > 0 {
-        Duration::from_secs(args.timeout)
-    } else {
-        Duration::from_secs(3600) // 1 hour default
-    };
+    let timeout_duration = feedback_timeout(args.timeout);
 
     // Step 1: Try connecting to an existing GUI session first
     let session = match Session::connect(&nib_path, ClientType::Cli).await {
@@ -2684,10 +2762,9 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
             let _child = std::process::Command::new(&exe_path)
                 .arg("gui")
                 .arg(&nib_path)
+                .stdout(std::process::Stdio::null())
                 .spawn()
-                .map_err(|e| {
-                    crate::core::NibError::Other(format!("Failed to spawn GUI: {}", e))
-                })?;
+                .map_err(|e| crate::core::NibError::Other(format!("Failed to spawn GUI: {}", e)))?;
 
             // Step 4: Retry connection with backoff (200ms intervals, 25 attempts = 5 seconds)
             let mut session_result = Err("No connection".to_string());
@@ -2722,7 +2799,9 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
         let annotation_data: Vec<_> = inputs.iter().map(|i| i.to_annotation_data()).collect();
 
         if !annotation_data.is_empty() {
-            session.send_annotations(annotation_data).map_err(crate::core::NibError::Other)?;
+            session
+                .send_annotations(annotation_data)
+                .map_err(crate::core::NibError::Other)?;
             tracing::info!("Sent {} annotations to GUI", inputs.len());
         }
     }
@@ -2744,6 +2823,7 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
             // Render the annotations onto the image
             let nib = NibFile::open(&nib_path)?;
             let all_annotations = nib.list_annotations()?;
+            let assets = nib.get_all_assets()?;
             let (image_data, image_info) = nib.get_image()?;
 
             let stem = nib_path.file_stem().unwrap_or_default().to_string_lossy();
@@ -2755,6 +2835,7 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
                 height: image_info.height,
                 source: crate::core::ImageSource::File(nib_path.clone()),
                 annotations: all_annotations,
+                assets,
                 title: None,
                 description: None,
                 tags: Vec::new(),
@@ -2784,3 +2865,112 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
     }
 }
 
+fn feedback_timeout(seconds: u64) -> Option<Duration> {
+    (seconds > 0).then(|| Duration::from_secs(seconds))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{Annotation, AnnotationType, AssetData, AssetRef, Region};
+    use image::{DynamicImage, Rgba, RgbaImage};
+    use tempfile::TempDir;
+
+    #[test]
+    fn zero_feedback_timeout_waits_indefinitely() {
+        assert_eq!(feedback_timeout(0), None);
+        assert_eq!(feedback_timeout(60), Some(Duration::from_secs(60)));
+    }
+
+    /// Encode a solid-color `width`x`height` RGBA image as PNG bytes.
+    fn solid_png(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
+        let img = RgbaImage::from_pixel(width, height, Rgba(color));
+        let mut bytes = Vec::new();
+        DynamicImage::ImageRgba8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+
+    /// Builds a `.nib` fixture with a 20x20 solid-black base image and a
+    /// single Image annotation (4x4 solid red asset) placed at (2,2)-(6,6).
+    /// Returns the fixture's directory (kept alive for the caller) and the
+    /// path to the `.nib` file.
+    fn build_nib_with_image_annotation() -> (TempDir, PathBuf) {
+        let temp_dir = TempDir::new().unwrap();
+        let nib_path = temp_dir.path().join("fixture.nib");
+
+        let base_image = solid_png(20, 20, [0, 0, 0, 255]);
+        let nib = NibFile::create(&nib_path, &base_image, "png", 20, 20).unwrap();
+
+        let asset_bytes = solid_png(4, 4, [255, 0, 0, 255]);
+        let asset = AssetRef::from_bytes(&asset_bytes);
+        nib.add_asset(
+            &asset.0,
+            &AssetData {
+                bytes: asset_bytes,
+                format: "png".to_string(),
+                width: 4,
+                height: 4,
+            },
+        )
+        .unwrap();
+
+        let annotation = Annotation::new(AnnotationType::Image {
+            region: Region::new(2.0, 2.0, 4.0, 4.0),
+            asset,
+            opacity: 1.0,
+        });
+        nib.add_annotation(&annotation).unwrap();
+
+        (temp_dir, nib_path)
+    }
+
+    /// Proves `run_render` composites Image annotations end-to-end: before
+    /// the fix, `commands.rs` passed an empty `assets` map to `NibImage`, so
+    /// `render_annotation` silently skipped the Image annotation and pixel
+    /// (3,3) stayed the base black instead of the asset's red.
+    #[test]
+    fn run_render_composites_image_annotation() {
+        let (_temp_dir, nib_path) = build_nib_with_image_annotation();
+        let out_path = nib_path.with_extension("rendered.png");
+
+        run_render(&RenderArgs {
+            file: nib_path.clone(),
+            output: Some(out_path.clone()),
+        })
+        .unwrap();
+
+        let rendered = image::open(&out_path).unwrap().to_rgba8();
+        assert_eq!(
+            *rendered.get_pixel(3, 3),
+            Rgba([255, 0, 0, 255]),
+            "pixel inside the Image annotation region should be the asset's red, not the black base"
+        );
+    }
+
+    /// Same bug, second site: `run_export --format rendered` must also
+    /// composite Image annotations.
+    #[test]
+    fn run_export_rendered_composites_image_annotation() {
+        let (_temp_dir, nib_path) = build_nib_with_image_annotation();
+        let out_path = nib_path.with_extension("png");
+
+        run_export(&super::super::args::ExportArgs {
+            file: nib_path.clone(),
+            output: Some(out_path.clone()),
+            export_format: super::super::args::ExportFormat::Rendered,
+        })
+        .unwrap();
+
+        let rendered = image::open(&out_path).unwrap().to_rgba8();
+        assert_eq!(
+            *rendered.get_pixel(3, 3),
+            Rgba([255, 0, 0, 255]),
+            "pixel inside the Image annotation region should be the asset's red, not the black base"
+        );
+    }
+}

@@ -63,3 +63,9 @@ impl TextRender {
         self.font_size * 1.2
     }
 }
+
+/// Break `content` into lines that fit within `max_width` at `font_size`.
+/// Moved to `nib_core::wrap_text` so nib-storage's flattened export wraps
+/// identically to the live GUI rendering that calls this; kept re-exported
+/// here since call sites already reference `elements::text::wrap_text`.
+pub use nib_core::wrap_text;

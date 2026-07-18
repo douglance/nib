@@ -7,6 +7,8 @@ use nib_core::{AnnotationId, Point, Region};
 
 use nib_core::AnnotationType;
 
+use crate::layout::{self, Guide};
+
 use super::{
     HandlePosition, MarqueeState, MouseButton, SelectDragState, Tool, ToolContext, ToolEvent,
     ToolId, ToolMode, ToolPreview, ToolResult,
@@ -34,6 +36,12 @@ pub struct SelectTool {
     marquee: MarqueeState,
     /// Drag state for move/resize operations
     drag: SelectDragState,
+    /// Whether ⌘ was held as of the most recent mouse event during the
+    /// current drag -- bypasses snapping while held. `ToolEvent::MouseUp`
+    /// carries no modifiers, so this is the last-known value from the most
+    /// recent `MouseMove`/`MouseDown`, which matches the near-universal case
+    /// of holding ⌘ through the whole drag-and-release.
+    snap_bypass: bool,
 }
 
 impl SelectTool {
@@ -45,6 +53,7 @@ impl SelectTool {
             last_click_id: None,
             marquee: MarqueeState::default(),
             drag: SelectDragState::default(),
+            snap_bypass: false,
         }
     }
 
@@ -53,24 +62,105 @@ impl SelectTool {
         &self.selected_ids
     }
 
-    /// Clear selection and select a single annotation
-    fn select(&mut self, id: AnnotationId) {
-        self.selected_ids.clear();
-        self.selected_ids.push(id);
-    }
-
-    /// Toggle an annotation in the selection (add if not present, remove if present)
-    fn toggle_selection(&mut self, id: AnnotationId) {
-        if let Some(position) = self.selected_ids.iter().position(|&selected| selected == id) {
-            self.selected_ids.remove(position);
-        } else {
-            self.selected_ids.push(id);
-        }
+    /// Replace the current selection wholesale. Used by duplicate (⌘D) to select
+    /// the new clones, and by undo/redo to drop ids that no longer exist.
+    pub fn set_selection(&mut self, ids: Vec<AnnotationId>) {
+        self.selected_ids = ids;
     }
 
     /// Clear all selections
     fn clear_selection(&mut self) {
         self.selected_ids.clear();
+    }
+
+    /// Replace the selection with `ids` (a whole group, or a single id when
+    /// ungrouped).
+    fn select_many(&mut self, ids: Vec<AnnotationId>) {
+        self.selected_ids = ids;
+    }
+
+    /// Toggle a whole group as one unit: if every id in `ids` is already
+    /// selected, deselect all of them; otherwise add every id not yet
+    /// selected. Used by shift-click so a group behaves as a single item.
+    fn toggle_selection_many(&mut self, ids: &[AnnotationId]) {
+        let all_selected = ids.iter().all(|id| self.is_selected(*id));
+        if all_selected {
+            self.selected_ids.retain(|id| !ids.contains(id));
+        } else {
+            for id in ids {
+                if !self.selected_ids.contains(id) {
+                    self.selected_ids.push(*id);
+                }
+            }
+        }
+    }
+
+    /// Ids to select when `id` is clicked: `id` alone if ungrouped, or every
+    /// annotation sharing its `group_id` otherwise (click-to-select-whole-group,
+    /// tldraw semantics -- grouping itself only lives on `Annotation::group_id`,
+    /// so expanding the click target here is the only place that needs to know
+    /// about it; move/duplicate/delete/align all just operate on whatever ends
+    /// up selected).
+    fn group_expand(id: AnnotationId, ctx: &ToolContext) -> Vec<AnnotationId> {
+        let group_id = ctx
+            .annotations
+            .iter()
+            .find(|a| a.id == id)
+            .and_then(|a| a.group_id);
+        match group_id {
+            Some(gid) => ctx
+                .annotations
+                .iter()
+                .filter(|a| a.group_id == Some(gid))
+                .map(|a| a.id)
+                .collect(),
+            None => vec![id],
+        }
+    }
+
+    /// Bounding box of the current selection, or `None` if empty/missing.
+    fn selection_bounds(&self, ctx: &ToolContext) -> Option<Region> {
+        let boxes: Vec<Region> = self
+            .selected_ids
+            .iter()
+            .filter_map(|id| {
+                ctx.annotations
+                    .iter()
+                    .find(|a| a.id == *id)
+                    .map(|a| a.bounds())
+            })
+            .collect();
+        layout::union(&boxes)
+    }
+
+    /// Snap a proposed move delta against every non-selected visible
+    /// annotation and the canvas bounds (see `layout::snap_delta`). Bypassed
+    /// while ⌘ is held. Returns the delta unchanged (no guides) if bypassed,
+    /// if nothing is selected, or if nothing is within snap distance.
+    fn snapped_move_delta(&self, ctx: &ToolContext, dx: f64, dy: f64) -> layout::SnapResult {
+        if self.snap_bypass {
+            return layout::SnapResult {
+                dx,
+                dy,
+                guides: Vec::new(),
+            };
+        }
+        let Some(moving) = self.selection_bounds(ctx) else {
+            return layout::SnapResult {
+                dx,
+                dy,
+                guides: Vec::new(),
+            };
+        };
+        let others: Vec<Region> = ctx
+            .annotations
+            .iter()
+            .filter(|a| a.visible && !self.selected_ids.contains(&a.id))
+            .map(|a| a.bounds())
+            .collect();
+        let canvas = (ctx.image_size.0 as f64, ctx.image_size.1 as f64);
+        let threshold = layout::SNAP_PX / (ctx.scale as f64).max(0.0001);
+        layout::snap_delta(moving, &others, canvas, dx, dy, threshold)
     }
 
     /// Check if an annotation is currently selected
@@ -257,9 +347,9 @@ impl Tool for SelectTool {
 
                     // Check for double-click on the same annotation
                     let is_double_click = self.last_click_id == Some(clicked_id)
-                        && self
-                            .last_click_time
-                            .map_or(false, |t| now.duration_since(t).as_millis() < DOUBLE_CLICK_THRESHOLD_MS);
+                        && self.last_click_time.is_some_and(|t| {
+                            now.duration_since(t).as_millis() < DOUBLE_CLICK_THRESHOLD_MS
+                        });
 
                     // Update click tracking for next potential double-click
                     self.last_click_time = Some(now);
@@ -277,21 +367,26 @@ impl Tool for SelectTool {
                                 position: *text_pos,
                                 initial_content: content.clone(),
                                 editing_annotation_id: Some(clicked_id),
+                                sticky_style: None,
                             });
                         }
                     }
 
-                    // Single click behavior: handle selection
+                    // Single click behavior: handle selection. Clicking any
+                    // member of a group selects/toggles the whole group.
                     let was_already_selected = self.is_selected(clicked_id);
+                    let group_ids = Self::group_expand(clicked_id, ctx);
 
                     if modifiers.shift {
-                        // Shift+click: toggle selection
-                        self.toggle_selection(clicked_id);
+                        // Shift+click: toggle the whole group as one unit
+                        self.toggle_selection_many(&group_ids);
                     } else if !was_already_selected {
-                        // Regular click on unselected annotation: select only this one
-                        self.select(clicked_id);
+                        // Regular click on an unselected annotation/group: select just it
+                        self.select_many(group_ids);
                     }
                     // If already selected without shift, keep current selection (for multi-drag)
+
+                    self.snap_bypass = modifiers.cmd;
 
                     // Start move drag if we have a selection
                     if !self.selected_ids.is_empty() {
@@ -325,7 +420,10 @@ impl Tool for SelectTool {
                     ToolResult::Handled
                 }
             }
-            ToolEvent::MouseMove { position, modifiers: _ } => {
+            ToolEvent::MouseMove {
+                position,
+                modifiers,
+            } => {
                 // If resize drag is active, update the drag position
                 if self.drag.is_resizing() {
                     self.drag.update(position);
@@ -334,6 +432,7 @@ impl Tool for SelectTool {
 
                 // If move drag is active, update the drag position
                 if self.drag.is_moving() {
+                    self.snap_bypass = modifiers.cmd;
                     self.drag.update(position);
                     return ToolResult::Handled;
                 }
@@ -366,13 +465,17 @@ impl Tool for SelectTool {
                 }
                 ToolResult::Ignored
             }
-            ToolEvent::MouseUp { position, button: MouseButton::Left } => {
+            ToolEvent::MouseUp {
+                position,
+                button: MouseButton::Left,
+            } => {
                 // If resize drag is active, commit the resize
                 if self.drag.is_resizing() {
                     self.drag.update(position);
 
                     // Get resize info and calculate final bounds
-                    if let Some((annotation_id, handle, original_bounds)) = self.drag.resize_info() {
+                    if let Some((annotation_id, handle, original_bounds)) = self.drag.resize_info()
+                    {
                         if let Some((delta_x, delta_y)) = self.drag.delta() {
                             // Only emit resize if there was actual movement
                             if delta_x.abs() > 0.5 || delta_y.abs() > 0.5 {
@@ -400,13 +503,14 @@ impl Tool for SelectTool {
                     if let Some((delta_x, delta_y)) = self.drag.delta() {
                         // Only emit move if there was actual movement
                         let moved_ids = self.selected_ids.clone();
+                        let snap = self.snapped_move_delta(ctx, delta_x, delta_y);
                         self.drag.reset();
 
-                        if delta_x.abs() > 0.5 || delta_y.abs() > 0.5 {
+                        if snap.dx.abs() > 0.5 || snap.dy.abs() > 0.5 {
                             return ToolResult::Moved {
                                 ids: moved_ids,
-                                delta_x,
-                                delta_y,
+                                delta_x: snap.dx,
+                                delta_y: snap.dy,
                             };
                         }
                     } else {
@@ -503,40 +607,53 @@ impl Tool for SelectTool {
                 return ToolPreview::Selection {
                     bounds: vec![new_bounds],
                     handles,
+                    guides: Vec::new(),
                 };
             } else {
                 // No delta yet, show original bounds
                 let bounds = vec![*original_bounds];
                 let handles = Some(self.generate_handles(original_bounds));
-                return ToolPreview::Selection { bounds, handles };
+                return ToolPreview::Selection {
+                    bounds,
+                    handles,
+                    guides: Vec::new(),
+                };
             }
         }
 
-        // Get the drag delta (if any) for offsetting bounds
-        let drag_delta = self.drag.delta();
+        // Get the drag delta (if any), snapped against other annotations/canvas
+        // bounds if we're moving, for offsetting bounds and drawing guides.
+        let (drag_delta, guides): (Option<(f64, f64)>, Vec<Guide>) = if self.drag.is_moving() {
+            match self.drag.delta() {
+                Some((dx, dy)) => {
+                    let snap = self.snapped_move_delta(ctx, dx, dy);
+                    (Some((snap.dx, snap.dy)), snap.guides)
+                }
+                None => (None, Vec::new()),
+            }
+        } else {
+            (self.drag.delta(), Vec::new())
+        };
 
         // Collect bounds for all selected annotations (offset by drag delta if moving)
         let bounds: Vec<Region> = self
             .selected_ids
             .iter()
             .filter_map(|&id| {
-                ctx.annotations
-                    .iter()
-                    .find(|a| a.id == id)
-                    .map(|a| {
-                        let base_bounds = a.bounds();
-                        // Apply drag delta if we're moving
-                        if let Some((delta_x, delta_y)) = drag_delta {
-                            Region::new(
-                                base_bounds.x + delta_x,
-                                base_bounds.y + delta_y,
-                                base_bounds.width,
-                                base_bounds.height,
-                            )
-                        } else {
-                            base_bounds
-                        }
-                    })
+                ctx.annotations.iter().find(|a| a.id == id).map(|a| {
+                    let base_bounds = a.bounds();
+                    // Apply drag delta if we're moving
+                    if let Some((delta_x, delta_y)) = drag_delta {
+                        Region::new(
+                            base_bounds.x + delta_x,
+                            base_bounds.y + delta_y,
+                            base_bounds.width,
+                            base_bounds.height,
+                        )
+                    } else {
+                        base_bounds
+                    }
+                })
             })
             .collect();
 
@@ -551,7 +668,11 @@ impl Tool for SelectTool {
             None
         };
 
-        ToolPreview::Selection { bounds, handles }
+        ToolPreview::Selection {
+            bounds,
+            handles,
+            guides,
+        }
     }
 
     fn reset(&mut self) {
@@ -561,6 +682,7 @@ impl Tool for SelectTool {
         self.last_click_id = None;
         self.marquee.reset();
         self.drag.reset();
+        self.snap_bypass = false;
     }
 
     fn is_active(&self) -> bool {

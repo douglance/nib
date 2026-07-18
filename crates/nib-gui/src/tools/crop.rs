@@ -4,7 +4,9 @@ use std::any::Any;
 
 use nib_core::{Annotation, AnnotationType, Region};
 
-use super::{DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult};
+use super::{
+    DragState, MouseButton, Tool, ToolContext, ToolEvent, ToolId, ToolPreview, ToolResult,
+};
 
 /// Tool for defining crop regions
 pub struct CropTool {
@@ -70,12 +72,13 @@ impl Tool for CropTool {
                     let region = Region::from_points(start, position);
 
                     // Reject degenerate shapes where both dimensions are too small
-                    if region.width < ctx.min_drag_distance && region.height < ctx.min_drag_distance {
+                    if region.width < ctx.min_drag_distance && region.height < ctx.min_drag_distance
+                    {
                         return ToolResult::Ignored;
                     }
 
-                    let annotation =
-                        Annotation::new(AnnotationType::Crop { region }).with_color(ctx.effective_color());
+                    let annotation = Annotation::new(AnnotationType::Crop { region })
+                        .with_color(ctx.effective_color());
 
                     return ToolResult::Created(annotation);
                 }

@@ -8,7 +8,9 @@ mod blur;
 mod context;
 mod crop;
 mod ellipse;
+mod eraser;
 mod highlight;
+mod image_tool;
 mod line;
 mod manager;
 mod number;
@@ -16,6 +18,7 @@ mod pencil;
 mod rectangle;
 mod select;
 mod state;
+mod sticky;
 mod text;
 mod r#trait;
 
@@ -27,16 +30,19 @@ pub use blur::*;
 pub use context::*;
 pub use crop::*;
 pub use ellipse::*;
+pub use eraser::*;
 pub use highlight::*;
+pub use image_tool::*;
 pub use line::*;
 pub use manager::*;
 pub use number::*;
 pub use pencil::*;
+pub use r#trait::*;
 pub use rectangle::*;
 pub use select::*;
 pub use state::*;
+pub use sticky::*;
 pub use text::*;
-pub use r#trait::*;
 
 use nib_core::{Annotation, AnnotationId, Color, Point, Region};
 
@@ -100,6 +106,16 @@ pub enum ToolResult {
     /// Tool created a new annotation
     Created(Annotation),
 
+    /// Tool created a new Image annotation that references an out-of-band
+    /// asset; the asset's bytes must be registered (e.g. into EditorView's
+    /// asset cache) before/alongside pushing the annotation, since an
+    /// `Annotation` only ever carries the asset's content-hash reference.
+    CreatedWithAsset {
+        annotation: Annotation,
+        asset_hash: String,
+        asset: nib_core::AssetData,
+    },
+
     /// Tool updated an existing annotation
     Updated(AnnotationId),
 
@@ -140,7 +156,21 @@ pub enum ToolMode {
         position: Point,
         initial_content: String,
         editing_annotation_id: Option<AnnotationId>,
+        /// Set by the Sticky tool to make the resulting Text annotation carry a
+        /// background/max_width (a "sticky note") instead of the plain default.
+        /// `None` for ordinary Text tool usage.
+        sticky_style: Option<StickyStyle>,
     },
+}
+
+/// Background/text color and wrap width for a sticky note, carried through
+/// `ToolMode::TextInput` so EditorView can seed the shared text-edit flow
+/// (see `TextTool::begin_sticky`) instead of duplicating it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StickyStyle {
+    pub background: Color,
+    pub text_color: Color,
+    pub max_width: f64,
 }
 
 /// Renderable preview during tool operation
@@ -151,7 +181,11 @@ pub enum ToolPreview {
     /// Rectangle outline
     Rectangle { region: Region, color: Color },
     /// Line between two points
-    Line { start: Point, end: Point, color: Color },
+    Line {
+        start: Point,
+        end: Point,
+        color: Color,
+    },
     /// Ellipse outline
     Ellipse {
         center: Point,
@@ -165,6 +199,8 @@ pub enum ToolPreview {
         bounds: Vec<Region>,
         /// Handle positions (point in image coords and handle type)
         handles: Option<Vec<(Point, HandlePosition)>>,
+        /// Snap guide lines to render while dragging (empty outside a move drag)
+        guides: Vec<crate::layout::Guide>,
     },
     /// Marquee selection rectangle (for drag-to-select)
     Marquee { region: Region },

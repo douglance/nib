@@ -45,9 +45,12 @@ nib feedback image.png \
 
 **Owner-based filtering:** Annotations passed via `-a` are tagged `owner: "claude"` and excluded from the response. Only the human's new annotations are returned.
 
-**Response format:**
+**Response format:** the human's decision, optional typed `comment`, and their new
+annotations. `decision` is `"approve"` (⇧⌘A), `"reject"` (⇧⌘R), or `"comment"`
+(⌘↵). Press Enter from the canvas to focus the response field, type immediately,
+then press ⌘↵ to send. Every response sends once and closes the GUI.
 ```json
-{"annotations": [{"id": "a1", "type": "rectangle", "at": [150, 200, 300, 100], "owner": "human"}]}
+{"decision": "comment", "comment": "Tighten this spacing", "annotations": [{"id": "a1", "type": "rectangle", "at": [150, 200, 300, 100], "owner": "human"}]}
 ```
 
 **Timeout response:**
@@ -64,6 +67,74 @@ Launch the GUI editor directly.
 ```bash
 nib gui image.png
 ```
+
+#### Keyboard shortcuts
+
+Every toolbar command has a shortcut, shown as a badge on its button.
+
+| Command | Shortcut |
+|---------|----------|
+| Select tool | `V` |
+| Arrow tool | `A` |
+| Rectangle tool | `R` |
+| Ellipse tool | `E` |
+| Line tool | `L` |
+| Pencil tool | `P` |
+| Text tool | `T` |
+| Number tool | `N` |
+| Highlight tool | `H` |
+| Blur tool | `B` |
+| Crop tool | `C` |
+| Eraser tool | `X` |
+| Sticky note tool | `K` |
+| Image tool (clipboard or file picker) | `I` |
+| Style picker (open/close) | `S` |
+| Undo | `⌘Z` |
+| Redo | `⇧⌘Z` |
+| Duplicate selection | `⌘D` |
+| Bring forward | `⌘]` |
+| Send backward | `⌘[` |
+| Group selection | `⌘G` |
+| Ungroup selection | `⇧⌘G` |
+| Zoom in | `⌘+` / `⌘=` |
+| Zoom out | `⌘-` |
+| Fit to view | `⌘0` |
+| 100% zoom | `⌘1` |
+| Focus response field | `↵` |
+| Send comment and close | `⌘↵` |
+| Return to canvas | `Esc` |
+| Approve | `⇧⌘A` |
+| Reject | `⇧⌘R` |
+
+Single-letter tool shortcuts are ignored while typing in a text annotation.
+Shape tools (Rectangle, Ellipse, Line, Pencil, Highlight) live behind the
+toolbar's shape flyout; their letter shortcuts still select them directly.
+
+#### Style panel
+
+`S` opens the style panel: color presets + custom color, stroke width
+(S/M/L), fill toggle, stroke style (solid/dashed/dotted), arrowhead
+(end/start/both/none), font size, blur intensity
+(light/medium/heavy/pixelate), and opacity. With a non-empty selection a
+control edits the selected annotations AND sets the default; with nothing
+selected it sets the default only. With 2+ annotations selected an Align
+row appears (left/center/right/top/middle/bottom), applied as one undo step.
+
+#### Editing behaviors
+
+- **Sticky notes** (`K`): click places a colored note; typing wraps at the
+  note's max width; click-away confirms.
+- **Text** (`T`): click for auto-width text, or drag horizontally to set an
+  invisible fixed wrap width like tldraw; the width is layout-only and renders
+  no box or background.
+- **Images** (`I`): clicking pastes a valid clipboard image; with no image on
+  the clipboard, the native multi-file picker opens. Finder drag-and-drop uses
+  the same insertion path. Images scale to ≤400px on the long side and resize
+  with the selection handles.
+- **Snapping**: dragging snaps to edges/centers of the canvas and other
+  annotations, with guide lines shown; hold `⌘` while dragging to bypass.
+- **Grouping**: `⌘G` groups the selection (flat, no nesting); clicking any
+  member selects the whole group; `⇧⌘G` ungroups.
 
 ### `nib annotation add`
 

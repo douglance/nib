@@ -11,7 +11,9 @@ pub struct AddAnnotationRequest {
     pub image_path: String,
 
     /// Type of annotation: arrow, rectangle, text, number, ellipse, line, highlight, blur
-    #[schemars(description = "Type of annotation: arrow, rectangle, text, number, ellipse, line, highlight, blur")]
+    #[schemars(
+        description = "Type of annotation: arrow, rectangle, text, number, ellipse, line, highlight, blur"
+    )]
     pub annotation_type: String,
 
     /// X coordinate (pixels from left)
@@ -47,7 +49,9 @@ pub struct AddAnnotationRequest {
     pub number: Option<u32>,
 
     /// Color in hex format (e.g., "#ff0000" for red)
-    #[schemars(description = "Color in hex format, e.g. '#ff0000' for red, '#00ff0080' with alpha")]
+    #[schemars(
+        description = "Color in hex format, e.g. '#ff0000' for red, '#00ff0080' with alpha"
+    )]
     pub color: Option<String>,
 
     /// Stroke width in pixels
@@ -95,24 +99,66 @@ pub struct RenderRequest {
     pub image_path: String,
 
     /// Output path (defaults to {stem}.rendered.{ext})
-    #[schemars(description = "Output path for rendered image (optional, defaults to {stem}.rendered.{ext})")]
+    #[schemars(
+        description = "Output path for rendered image (optional, defaults to {stem}.rendered.{ext})"
+    )]
     pub output_path: Option<String>,
 }
 
-/// Serialized annotation for JSON output
-#[derive(Debug, Serialize)]
-pub struct AnnotationInfo {
-    pub id: String,
-    pub annotation_type: String,
-    pub x: f64,
-    pub y: f64,
-    pub width: Option<f64>,
-    pub height: Option<f64>,
-    pub end_x: Option<f64>,
-    pub end_y: Option<f64>,
-    pub text: Option<String>,
-    pub number: Option<u32>,
-    pub color: String,
+/// Request to generate an image via the configured generator (default: imago)
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct GenerateImageRequest {
+    /// Text prompt describing the desired image
+    #[schemars(description = "Text prompt describing the desired image")]
+    pub prompt: String,
+
+    /// Image width in pixels
+    #[schemars(description = "Image width in pixels")]
+    pub width: u32,
+
+    /// Image height in pixels
+    #[schemars(description = "Image height in pixels")]
+    pub height: u32,
+
+    /// Output PNG path
+    #[schemars(
+        description = "Output PNG path (optional; defaults to a timestamped file in the nib captures directory)"
+    )]
+    pub out: Option<String>,
+
+    /// Reference image paths
+    #[schemars(description = "Reference image paths (optional, repeatable)")]
+    pub refs: Option<Vec<String>>,
+
+    /// Crop output to exact requested dimensions
+    #[schemars(description = "Crop output to exact requested dimensions (default: false)")]
+    pub crop: Option<bool>,
+
+    /// Timeout passed through to the generator
+    #[schemars(
+        description = "Timeout passed through to the generator, e.g. '12m'. Generation can legitimately take 12+ minutes."
+    )]
+    pub timeout: Option<String>,
+}
+
+/// Request to judge a pair of images via the configured judge tool (default: imago compare)
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct JudgePairRequest {
+    /// Path to the expected/reference image
+    #[schemars(description = "Absolute path to the expected/reference image")]
+    pub expected: String,
+
+    /// Path to the actual/generated image
+    #[schemars(description = "Absolute path to the actual/generated image")]
+    pub actual: String,
+
+    /// Timeout passed through to the judge tool
+    #[schemars(description = "Timeout passed through to the judge tool, e.g. '10m'")]
+    pub timeout: Option<String>,
+
+    /// Open the comparison in a viewer
+    #[schemars(description = "Open the comparison in a viewer (default: false)")]
+    pub open: Option<bool>,
 }
 
 // ============================================================================
@@ -127,11 +173,15 @@ pub struct WaitForEventsRequest {
     pub image_path: String,
 
     /// Timeout in milliseconds (default: 30000)
-    #[schemars(description = "Timeout in milliseconds. Returns empty events on timeout. Default: 30000")]
+    #[schemars(
+        description = "Timeout in milliseconds. Returns empty events on timeout. Default: 30000"
+    )]
     pub timeout_ms: Option<u64>,
 
     /// Only return events after this sequence number
-    #[schemars(description = "Only return events with sequence number greater than this value. Use the 'seq' from previous response to avoid duplicates.")]
+    #[schemars(
+        description = "Only return events with sequence number greater than this value. Use the 'seq' from previous response to avoid duplicates."
+    )]
     pub since_seq: Option<u64>,
 }
 

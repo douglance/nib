@@ -8,6 +8,8 @@ pub const MIN_ZOOM: f64 = 0.1;
 pub const MAX_ZOOM: f64 = 10.0;
 /// Zoom factor per scroll tick (1.1 = 10% per tick)
 pub const ZOOM_FACTOR: f64 = 1.1;
+/// Tight, even inset between a fitted image and every viewport edge.
+pub const FIT_PADDING: f64 = 12.0;
 
 /// Canvas viewport state with Figma-like zoom/pan
 #[derive(Debug, Clone)]
@@ -136,8 +138,10 @@ impl Canvas {
             return;
         }
 
-        let scale_x = self.viewport_width / self.image_width;
-        let scale_y = self.viewport_height / self.image_height;
+        let available_width = (self.viewport_width - FIT_PADDING * 2.0).max(1.0);
+        let available_height = (self.viewport_height - FIT_PADDING * 2.0).max(1.0);
+        let scale_x = available_width / self.image_width;
+        let scale_y = available_height / self.image_height;
         self.zoom = scale_x.min(scale_y);
 
         // Center the image
@@ -173,5 +177,18 @@ impl Canvas {
 impl Default for Canvas {
     fn default() -> Self {
         Self::new(1920, 1080)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fit_to_view_keeps_equal_padding_on_a_matching_aspect_ratio() {
+        let mut canvas = Canvas::new(100, 100);
+        canvas.set_viewport(224.0, 224.0);
+        assert_eq!(canvas.offset, Point::new(FIT_PADDING, FIT_PADDING));
+        assert_eq!(canvas.zoom, 2.0);
     }
 }

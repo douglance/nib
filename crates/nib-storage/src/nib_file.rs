@@ -10,8 +10,8 @@
 
 use crate::StorageResult;
 use nib_core::{
-    Annotation, AnnotationId, AnnotationType, ArrowHead, BlurIntensity, Color, Point, Region,
-    Severity, StorageError, StrokeStyle, TextAlign,
+    Annotation, AnnotationId, AnnotationType, ArrowHead, AssetData, BlurIntensity, Color, Point,
+    Region, Severity, StorageError, StrokeStyle, TextAlign,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,8 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Current schema version - increment when schema changes
-const CURRENT_SCHEMA_VERSION: i32 = 1;
+/// v2: added the `assets` table (out-of-band bytes for Image annotations)
+const CURRENT_SCHEMA_VERSION: i32 = 3;
 
 /// Image metadata returned alongside image data
 #[derive(Debug, Clone)]
@@ -178,15 +179,16 @@ impl NibFile {
         let z_index = annotation.z_index;
         let visible = annotation.visible as i32;
         let locked = annotation.locked as i32;
+        let group_id = annotation.group_id.map(|g| g as i64);
         let created_at = system_time_to_unix(annotation.created_at);
         let modified_at = system_time_to_unix(annotation.modified_at);
 
         self.conn.execute(
             r#"
-            INSERT INTO annotations (id, type, data, color, source, z_index, visible, locked, created_at, modified_at)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            INSERT INTO annotations (id, type, data, color, source, z_index, visible, locked, group_id, created_at, modified_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
             "#,
-            params![id, type_name, data_json, color_hex, source, z_index, visible, locked, created_at, modified_at],
+            params![id, type_name, data_json, color_hex, source, z_index, visible, locked, group_id, created_at, modified_at],
         )?;
 
         Ok(id)
@@ -198,7 +200,7 @@ impl NibFile {
             .conn
             .query_row(
                 r#"
-            SELECT id, type, data, color, source, z_index, visible, locked, created_at, modified_at
+            SELECT id, type, data, color, source, z_index, visible, locked, created_at, modified_at, group_id
             FROM annotations
             WHERE id = ?1
             "#,
@@ -215,6 +217,7 @@ impl NibFile {
                         locked: row.get(7)?,
                         created_at: row.get(8)?,
                         modified_at: row.get(9)?,
+                        group_id: row.get(10)?,
                     })
                 },
             )
@@ -230,7 +233,7 @@ impl NibFile {
     pub fn list_annotations(&self) -> StorageResult<Vec<Annotation>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, type, data, color, source, z_index, visible, locked, created_at, modified_at
+            SELECT id, type, data, color, source, z_index, visible, locked, created_at, modified_at, group_id
             FROM annotations
             ORDER BY z_index ASC, created_at ASC
             "#,
@@ -248,6 +251,7 @@ impl NibFile {
                 locked: row.get(7)?,
                 created_at: row.get(8)?,
                 modified_at: row.get(9)?,
+                group_id: row.get(10)?,
             })
         })?;
 
@@ -266,7 +270,7 @@ impl NibFile {
     pub fn list_annotations_since(&self, since_unix: i64) -> StorageResult<Vec<Annotation>> {
         let mut stmt = self.conn.prepare(
             r#"
-            SELECT id, type, data, color, source, z_index, visible, locked, created_at, modified_at
+            SELECT id, type, data, color, source, z_index, visible, locked, created_at, modified_at, group_id
             FROM annotations
             WHERE modified_at > ?1
             ORDER BY modified_at ASC
@@ -285,6 +289,7 @@ impl NibFile {
                 locked: row.get(7)?,
                 created_at: row.get(8)?,
                 modified_at: row.get(9)?,
+                group_id: row.get(10)?,
             })
         })?;
 
@@ -301,11 +306,9 @@ impl NibFile {
     pub fn latest_annotation_modified_at(&self) -> StorageResult<Option<i64>> {
         let result: Option<i64> = self
             .conn
-            .query_row(
-                "SELECT MAX(modified_at) FROM annotations",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT MAX(modified_at) FROM annotations", [], |row| {
+                row.get(0)
+            })
             .optional()?
             .flatten();
         Ok(result)
@@ -332,15 +335,16 @@ impl NibFile {
         let z_index = annotation.z_index;
         let visible = annotation.visible as i32;
         let locked = annotation.locked as i32;
+        let group_id = annotation.group_id.map(|g| g as i64);
         let modified_at = system_time_to_unix(SystemTime::now());
 
         let rows_affected = self.conn.execute(
             r#"
             UPDATE annotations
-            SET type = ?1, data = ?2, color = ?3, z_index = ?4, visible = ?5, locked = ?6, modified_at = ?7
-            WHERE id = ?8
+            SET type = ?1, data = ?2, color = ?3, z_index = ?4, visible = ?5, locked = ?6, group_id = ?7, modified_at = ?8
+            WHERE id = ?9
             "#,
-            params![type_name, data_json, color_hex, z_index, visible, locked, modified_at, id],
+            params![type_name, data_json, color_hex, z_index, visible, locked, group_id, modified_at, id],
         )?;
 
         if rows_affected == 0 {
@@ -477,7 +481,10 @@ impl NibFile {
     }
 
     /// Get cached OCR results for a region
-    pub fn get_cached_ocr(&self, region: Option<&str>) -> StorageResult<Option<Vec<OcrCacheEntry>>> {
+    pub fn get_cached_ocr(
+        &self,
+        region: Option<&str>,
+    ) -> StorageResult<Option<Vec<OcrCacheEntry>>> {
         let mut stmt = self.conn.prepare(
             r#"
             SELECT text, bounds, confidence
@@ -497,9 +504,8 @@ impl NibFile {
         for row_result in rows {
             let (text, bounds_json, confidence) = row_result?;
 
-            let bounds: serde_json::Value = serde_json::from_str(&bounds_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid bounds JSON: {}", e))
-            })?;
+            let bounds: serde_json::Value = serde_json::from_str(&bounds_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid bounds JSON: {}", e)))?;
 
             entries.push(OcrCacheEntry {
                 text,
@@ -610,10 +616,9 @@ impl NibFile {
 
         match result {
             Some(json_str) => {
-                let value: serde_json::Value =
-                    serde_json::from_str(&json_str).map_err(|e| {
-                        StorageError::InvalidFormat(format!("Invalid grid metadata JSON: {}", e))
-                    })?;
+                let value: serde_json::Value = serde_json::from_str(&json_str).map_err(|e| {
+                    StorageError::InvalidFormat(format!("Invalid grid metadata JSON: {}", e))
+                })?;
                 Ok(Some(value))
             }
             None => Ok(None),
@@ -760,6 +765,7 @@ impl NibFile {
                 z_index INTEGER DEFAULT 0,
                 visible INTEGER DEFAULT 1,
                 locked INTEGER DEFAULT 0,
+                group_id INTEGER,
                 created_at INTEGER NOT NULL,
                 modified_at INTEGER NOT NULL
             );
@@ -815,6 +821,17 @@ impl NibFile {
                 read INTEGER DEFAULT 0,
                 created_at INTEGER NOT NULL
             );
+
+            -- Out-of-band asset bytes (e.g. inserted images), keyed by content
+            -- hash; Image annotations reference a row here by hash instead of
+            -- inlining bytes in their own `data` JSON.
+            CREATE TABLE assets (
+                hash TEXT PRIMARY KEY,
+                bytes BLOB NOT NULL,
+                format TEXT NOT NULL,
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL
+            );
             "#,
         )?;
         Ok(())
@@ -844,9 +861,9 @@ impl NibFile {
 
     /// Migrate schema to latest version
     fn migrate(&self) -> StorageResult<()> {
-        let _version: i32 = self
-            .conn
-            .query_row("SELECT version FROM schema_version", [], |row| row.get(0))?;
+        let _version: i32 =
+            self.conn
+                .query_row("SELECT version FROM schema_version", [], |row| row.get(0))?;
 
         // Add messages table if not exists (for files created before messages feature)
         let has_messages: bool = self
@@ -871,7 +888,116 @@ impl NibFile {
             )?;
         }
 
+        // Add assets table if not exists (files created before Image annotations)
+        let has_assets: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='assets'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if !has_assets {
+            self.conn.execute(
+                r#"CREATE TABLE assets (
+                    hash TEXT PRIMARY KEY,
+                    bytes BLOB NOT NULL,
+                    format TEXT NOT NULL,
+                    width INTEGER NOT NULL,
+                    height INTEGER NOT NULL
+                )"#,
+                [],
+            )?;
+        }
+
+        // Add group_id column if not exists (files created before grouping).
+        // Guarded on the table itself existing: some pre-v1 synthetic/test
+        // databases have no `annotations` table yet, and `ALTER TABLE` on a
+        // missing table would error.
+        let has_annotations: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='annotations'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+
+        if has_annotations {
+            let has_group_id: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM pragma_table_info('annotations') WHERE name='group_id'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap_or(false);
+
+            if !has_group_id {
+                self.conn
+                    .execute("ALTER TABLE annotations ADD COLUMN group_id INTEGER", [])?;
+            }
+        }
+
         Ok(())
+    }
+
+    // --- Asset Methods (out-of-band bytes for Image annotations) ---
+
+    /// Store an asset's bytes, keyed by content hash. Idempotent: storing the
+    /// same hash again (identical bytes, by construction) overwrites in place.
+    pub fn add_asset(&self, hash: &str, data: &AssetData) -> StorageResult<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO assets (hash, bytes, format, width, height) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![hash, data.bytes, data.format, data.width, data.height],
+        )?;
+        Ok(())
+    }
+
+    /// Look up an asset's bytes by content hash.
+    pub fn get_asset(&self, hash: &str) -> StorageResult<Option<AssetData>> {
+        let result = self.conn.query_row(
+            "SELECT bytes, format, width, height FROM assets WHERE hash = ?1",
+            params![hash],
+            |row| {
+                Ok(AssetData {
+                    bytes: row.get(0)?,
+                    format: row.get(1)?,
+                    width: row.get(2)?,
+                    height: row.get(3)?,
+                })
+            },
+        );
+        match result {
+            Ok(data) => Ok(Some(data)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Load every asset referenced by this file's annotations, keyed by hash
+    /// (for building a `NibImage.assets` map, e.g. before export).
+    pub fn get_all_assets(&self) -> StorageResult<std::collections::HashMap<String, AssetData>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT hash, bytes, format, width, height FROM assets")?;
+        let assets = stmt
+            .query_map([], |row| {
+                let hash: String = row.get(0)?;
+                Ok((
+                    hash,
+                    AssetData {
+                        bytes: row.get(1)?,
+                        format: row.get(2)?,
+                        width: row.get(3)?,
+                        height: row.get(4)?,
+                    },
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(assets)
     }
 
     // --- Message Methods (for GUI/CLI communication) ---
@@ -918,6 +1044,7 @@ struct AnnotationRow {
     locked: i32,
     created_at: i64,
     modified_at: i64,
+    group_id: Option<i64>,
 }
 
 // --- JSON serialization structures for annotation data ---
@@ -1022,6 +1149,17 @@ struct PathData {
 struct PointData {
     x: f64,
     y: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ImageData {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    /// Content-hash reference; the actual bytes live in the `assets` table.
+    asset_hash: String,
+    opacity: f64,
 }
 
 // --- Helper functions ---
@@ -1175,21 +1313,32 @@ fn serialize_annotation_data(annotation_type: &AnnotationType) -> StorageResult<
             };
             serde_json::to_string(&data)
         }
+        AnnotationType::Image {
+            region,
+            asset,
+            opacity,
+        } => {
+            let data = ImageData {
+                x: region.x,
+                y: region.y,
+                width: region.width,
+                height: region.height,
+                asset_hash: asset.0.clone(),
+                opacity: *opacity,
+            };
+            serde_json::to_string(&data)
+        }
     }
     .map_err(|e| StorageError::InvalidFormat(format!("Failed to serialize annotation: {}", e)))?;
 
     Ok(json)
 }
 
-fn deserialize_annotation_data(
-    type_name: &str,
-    data_json: &str,
-) -> StorageResult<AnnotationType> {
+fn deserialize_annotation_data(type_name: &str, data_json: &str) -> StorageResult<AnnotationType> {
     let annotation_type = match type_name {
         "arrow" => {
-            let data: ArrowData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid arrow data: {}", e))
-            })?;
+            let data: ArrowData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid arrow data: {}", e)))?;
             AnnotationType::Arrow {
                 start: Point::new(data.start_x, data.start_y),
                 end: Point::new(data.end_x, data.end_y),
@@ -1198,9 +1347,8 @@ fn deserialize_annotation_data(
             }
         }
         "box" | "rectangle" => {
-            let data: BoxData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid box data: {}", e))
-            })?;
+            let data: BoxData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid box data: {}", e)))?;
             AnnotationType::Box {
                 region: Region::new(data.x, data.y, data.width, data.height),
                 stroke_width: data.stroke_width,
@@ -1210,9 +1358,8 @@ fn deserialize_annotation_data(
             }
         }
         "text" => {
-            let data: TextData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid text data: {}", e))
-            })?;
+            let data: TextData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid text data: {}", e)))?;
             AnnotationType::Text {
                 position: Point::new(data.x, data.y),
                 content: data.content,
@@ -1223,9 +1370,8 @@ fn deserialize_annotation_data(
             }
         }
         "number" => {
-            let data: NumberData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid number data: {}", e))
-            })?;
+            let data: NumberData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid number data: {}", e)))?;
             AnnotationType::Number {
                 position: Point::new(data.x, data.y),
                 value: data.value,
@@ -1242,18 +1388,16 @@ fn deserialize_annotation_data(
             }
         }
         "blur" => {
-            let data: BlurData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid blur data: {}", e))
-            })?;
+            let data: BlurData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid blur data: {}", e)))?;
             AnnotationType::Blur {
                 region: Region::new(data.x, data.y, data.width, data.height),
                 intensity: string_to_blur_intensity(&data.intensity),
             }
         }
         "line" => {
-            let data: LineData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid line data: {}", e))
-            })?;
+            let data: LineData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid line data: {}", e)))?;
             AnnotationType::Line {
                 start: Point::new(data.start_x, data.start_y),
                 end: Point::new(data.end_x, data.end_y),
@@ -1262,9 +1406,8 @@ fn deserialize_annotation_data(
             }
         }
         "ellipse" => {
-            let data: EllipseData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid ellipse data: {}", e))
-            })?;
+            let data: EllipseData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid ellipse data: {}", e)))?;
             AnnotationType::Ellipse {
                 center: Point::new(data.center_x, data.center_y),
                 radius_x: data.radius_x,
@@ -1274,21 +1417,28 @@ fn deserialize_annotation_data(
             }
         }
         "crop" => {
-            let data: CropData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid crop data: {}", e))
-            })?;
+            let data: CropData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid crop data: {}", e)))?;
             AnnotationType::Crop {
                 region: Region::new(data.x, data.y, data.width, data.height),
             }
         }
         "path" => {
-            let data: PathData = serde_json::from_str(data_json).map_err(|e| {
-                StorageError::InvalidFormat(format!("Invalid path data: {}", e))
-            })?;
+            let data: PathData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid path data: {}", e)))?;
             AnnotationType::Path {
                 points: data.points.iter().map(|p| Point::new(p.x, p.y)).collect(),
                 stroke_width: data.stroke_width,
                 stroke_style: string_to_stroke_style(&data.stroke_style),
+            }
+        }
+        "image" => {
+            let data: ImageData = serde_json::from_str(data_json)
+                .map_err(|e| StorageError::InvalidFormat(format!("Invalid image data: {}", e)))?;
+            AnnotationType::Image {
+                region: Region::new(data.x, data.y, data.width, data.height),
+                asset: nib_core::AssetRef(data.asset_hash),
+                opacity: data.opacity,
             }
         }
         _ => {
@@ -1323,13 +1473,17 @@ fn row_to_annotation(row: AnnotationRow) -> StorageResult<Annotation> {
         visible: row.visible != 0,
         locked: row.locked != 0,
         z_index: row.z_index,
+        group_id: row.group_id.map(|g| g as u64),
         created_at: unix_to_system_time(row.created_at),
         modified_at: unix_to_system_time(row.modified_at),
     })
 }
 
 fn color_to_hex(color: &Color) -> String {
-    format!("#{:02x}{:02x}{:02x}{:02x}", color.r, color.g, color.b, color.a)
+    format!(
+        "#{:02x}{:02x}{:02x}{:02x}",
+        color.r, color.g, color.b, color.a
+    )
 }
 
 fn hex_to_color(hex: &str) -> Color {
@@ -1489,8 +1643,248 @@ mod tests {
 
         // Retrieve it
         let retrieved = nib.get_annotation("a1").unwrap().unwrap();
-        assert!(matches!(retrieved.annotation_type, AnnotationType::Box { .. }));
+        assert!(matches!(
+            retrieved.annotation_type,
+            AnnotationType::Box { .. }
+        ));
         assert_eq!(retrieved.color.r, Color::RED.r);
+    }
+
+    #[test]
+    fn test_sticky_note_round_trip_through_sqlite() {
+        // A sticky note is a Text annotation with background/max_width set --
+        // not a new AnnotationType -- so it round-trips through the existing
+        // Text (de)serialization with no special-casing needed.
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.nib");
+        let image_data = create_test_image();
+
+        let nib = NibFile::create(&path, &image_data, "png", 100, 100).unwrap();
+
+        let annotation = Annotation::new(AnnotationType::Text {
+            position: Point::new(10.0, 20.0),
+            content: "Sticky note text".to_string(),
+            font_size: 16.0,
+            align: TextAlign::Left,
+            background: Some(Color::rgb(255, 220, 130)),
+            max_width: Some(200.0),
+        })
+        .with_color(Color::rgb(0, 0, 0));
+
+        let id = nib.add_annotation(&annotation).unwrap();
+        let retrieved = nib.get_annotation(&id).unwrap().unwrap();
+
+        match retrieved.annotation_type {
+            AnnotationType::Text {
+                background,
+                max_width,
+                content,
+                ..
+            } => {
+                assert_eq!(background, Some(Color::rgb(255, 220, 130)));
+                assert_eq!(max_width, Some(200.0));
+                assert_eq!(content, "Sticky note text");
+            }
+            other => panic!("expected Text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_add_asset_and_get_asset_round_trip_byte_identical() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.nib");
+        let nib = NibFile::create(&path, &create_test_image(), "png", 100, 100).unwrap();
+
+        let bytes = vec![1u8, 2, 3, 4, 5, 250, 251, 252, 253, 254, 255];
+        let data = AssetData {
+            bytes: bytes.clone(),
+            format: "png".to_string(),
+            width: 4,
+            height: 4,
+        };
+        nib.add_asset("deadbeef", &data).unwrap();
+
+        let retrieved = nib.get_asset("deadbeef").unwrap().unwrap();
+        assert_eq!(
+            retrieved.bytes, bytes,
+            "asset bytes must round-trip byte-identical"
+        );
+        assert_eq!(retrieved.format, "png");
+        assert_eq!(retrieved.width, 4);
+        assert_eq!(retrieved.height, 4);
+
+        assert!(nib.get_asset("not-a-real-hash").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_image_annotation_round_trip_through_sqlite() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("test.nib");
+        let nib = NibFile::create(&path, &create_test_image(), "png", 100, 100).unwrap();
+
+        let asset_bytes = vec![10u8, 20, 30, 40, 50, 60, 70, 80];
+        let asset = nib_core::AssetRef::from_bytes(&asset_bytes);
+        nib.add_asset(
+            &asset.0,
+            &AssetData {
+                bytes: asset_bytes.clone(),
+                format: "png".to_string(),
+                width: 2,
+                height: 2,
+            },
+        )
+        .unwrap();
+
+        let annotation = Annotation::new(AnnotationType::Image {
+            region: Region::new(5.0, 6.0, 40.0, 40.0),
+            asset: asset.clone(),
+            opacity: 0.75,
+        });
+        let id = nib.add_annotation(&annotation).unwrap();
+        let retrieved = nib.get_annotation(&id).unwrap().unwrap();
+
+        match retrieved.annotation_type {
+            AnnotationType::Image {
+                region,
+                asset: retrieved_asset,
+                opacity,
+            } => {
+                assert_eq!(region, Region::new(5.0, 6.0, 40.0, 40.0));
+                assert_eq!(retrieved_asset, asset);
+                assert_eq!(opacity, 0.75);
+            }
+            other => panic!("expected Image, got {other:?}"),
+        }
+
+        let retrieved_bytes = nib.get_asset(&asset.0).unwrap().unwrap();
+        assert_eq!(
+            retrieved_bytes.bytes, asset_bytes,
+            "asset bytes must be byte-identical"
+        );
+    }
+
+    #[test]
+    fn test_pre_assets_schema_file_still_opens_and_migrates() {
+        // Simulate a .nib file written before the `assets` table existed:
+        // only `schema_version` (v1) -- `NibFile::open` must still succeed
+        // and the migration must add `assets` so add_asset/get_asset work.
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("pre_assets.nib");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY)",
+                [],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO schema_version VALUES (1)", [])
+                .unwrap();
+        }
+
+        let nib = NibFile::open(&path).expect("pre-assets .nib file must still open");
+
+        let has_assets: bool = nib
+            .conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='assets'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            has_assets,
+            "migrate() must add the assets table to old files"
+        );
+
+        // And the table is actually usable post-migration.
+        nib.add_asset(
+            "h",
+            &AssetData {
+                bytes: vec![1, 2, 3],
+                format: "png".to_string(),
+                width: 1,
+                height: 1,
+            },
+        )
+        .unwrap();
+        assert!(nib.get_asset("h").unwrap().is_some());
+    }
+
+    #[test]
+    fn test_pre_group_id_schema_file_still_opens_and_migrates() {
+        // Simulate a .nib file written before grouping existed: an `annotations`
+        // table with every pre-Phase-5 column but no `group_id`. `NibFile::open`
+        // must still succeed, migrate() must add the column, and reading back an
+        // existing row must yield `group_id: None` rather than erroring.
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("pre_group_id.nib");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute(
+                "CREATE TABLE schema_version (version INTEGER PRIMARY KEY)",
+                [],
+            )
+            .unwrap();
+            conn.execute("INSERT INTO schema_version VALUES (2)", [])
+                .unwrap();
+            conn.execute(
+                r#"CREATE TABLE annotations (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    data JSON NOT NULL,
+                    color TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'human',
+                    z_index INTEGER DEFAULT 0,
+                    visible INTEGER DEFAULT 1,
+                    locked INTEGER DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    modified_at INTEGER NOT NULL
+                )"#,
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                r#"INSERT INTO annotations (id, type, data, color, source, z_index, visible, locked, created_at, modified_at)
+                   VALUES ('a1', 'box', '{"x":0,"y":0,"width":1,"height":1,"stroke_width":2.0,"stroke_style":"solid","filled":false,"corner_radius":0.0}', '#ff0000', 'human', 0, 1, 0, 0, 0)"#,
+                [],
+            )
+            .unwrap();
+        }
+
+        let nib = NibFile::open(&path).expect("pre-group_id .nib file must still open");
+
+        let has_group_id: bool = nib
+            .conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM pragma_table_info('annotations') WHERE name='group_id'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            has_group_id,
+            "migrate() must add the group_id column to old files"
+        );
+
+        // Existing pre-migration row reads back with group_id defaulted to None.
+        let existing = nib
+            .get_annotation("a1")
+            .unwrap()
+            .expect("existing annotation must still be readable");
+        assert_eq!(existing.group_id, None);
+
+        // And the column is actually usable post-migration.
+        let mut grouped = Annotation::new(AnnotationType::Box {
+            region: Region::new(0.0, 0.0, 1.0, 1.0),
+            stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
+            filled: false,
+            corner_radius: 0.0,
+        });
+        grouped.group_id = Some(42);
+        let new_id = nib.add_annotation(&grouped).unwrap();
+        let retrieved = nib.get_annotation(&new_id).unwrap().unwrap();
+        assert_eq!(retrieved.group_id, Some(42));
     }
 
     #[test]

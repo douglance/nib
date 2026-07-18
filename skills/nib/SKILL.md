@@ -100,11 +100,17 @@ nib feedback /tmp/nib_shot.png \
 
 ### Step 4: Parse Response
 
-Human draws annotations and hits Cmd+Enter. You get back only their annotations:
+Human draws annotations, then makes a decision: **Approve** (⇧⌘A), **Reject**
+(⇧⌘R), or **comment** (Enter focuses the compact response field; ⌘Enter sends).
+The GUI returns one payload and closes:
 
 ```json
-{"annotations": [{"id": "a1", "type": "arrow", "at": [150, 200, 300, 100], "owner": "human"}]}
+{"decision": "comment", "comment": "Move this closer", "annotations": [{"id": "a1", "type": "arrow", "at": [150, 200, 300, 100], "owner": "human"}]}
 ```
+
+- `"approve"` — accepted as-is; proceed. Annotations may be empty.
+- `"reject"` — not acceptable; act on the annotations, rework, re-ask with a fresh one-shot call.
+- `"comment"` — feedback without a verdict; act on the optional typed comment and annotations.
 
 Timeout returns `{"event": "timeout"}` (exit code 0, not an error).
 
@@ -129,6 +135,38 @@ Use the human's visual feedback to take action. Then capture again to verify.
 
 All types accept optional `"color"` (hex). Use blue `#3b82f6` for your annotations.
 
+The GUI editor the human sees is a full annotation workspace: style panel
+(stroke width/style, fill, arrowheads, font size, blur intensity, opacity),
+undo/redo, duplicate, eraser, z-order, sticky notes, fixed-width text drag,
+clipboard/file-picker/drag-and-drop image insertion,
+snapping with guides, alignment, and grouping — every command has a keyboard
+shortcut (see [full command reference](references/REFERENCE.md)).
+
+## Image Generation & Judging
+
+nib is also the front door for image generation — it shells out to the configured
+generator/judge (default: `imago`, set in `~/.config/nib/config.toml` or via
+`NIB_GENERATE_COMMAND`/`NIB_JUDGE_COMMAND`):
+
+```bash
+# Generate an image at exact pixel size (long-running: generation can take minutes)
+nib generate --width 1024 --height 1536 --out /tmp/hero.png --format json \
+  "a lighthouse at dusk, photorealistic"
+
+# Generate, then hand straight to the human for one-shot approval
+nib generate --width 1024 --height 768 --out /tmp/mock.png \
+  --feedback -m "Approve this expected target?" "toolbar redesign mockup"
+
+# Judge an implemented result against an approved target
+nib judge expected.png actual.png --format json
+# exit 0 = READY, exit 2 = BLOCKED, other = judge tool failure
+```
+
+`generate` passes the generator's JSON contract through (`{status, out, requested,
+actual, matched, ...}`); errors surface the tool's own envelope verbatim. `--nib`
+also imports the result to a `.nib`. `--feedback` is one-shot: GUI opens, human
+approves/rejects/comments, the decision payload returns, done.
+
 ## Headless Mode
 
 When you don't need human feedback, just annotate and render:
@@ -150,6 +188,9 @@ nib render image.png  # → image.rendered.png
 | `feedback` | `-a` | JSON annotations array |
 | `feedback` | `-m` | Message/question as toast |
 | `feedback` | `-t` | Timeout in seconds (default 60) |
+| `generate` | `--width/--height` | Exact output pixels (required) |
+| `generate` | `--feedback -m` | One-shot human approval after generation |
+| `judge` | `--format json` | Structured READY/BLOCKED verdict |
 | `find-text` | `-s` | Search string |
 | `find-text` | `--highlight --color` | Auto-highlight matches (NOT `-c`) |
 | `grid` | `--spacing` | Grid cell size in pixels |

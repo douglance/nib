@@ -13,7 +13,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use parking_lot::Mutex as SyncMutex;
 use tokio::sync::broadcast;
 
-use crate::{annotations_file_path, AnnotationsFile, AnnotationGeometry, SerializedAnnotation};
+use crate::{annotations_file_path, AnnotationGeometry, AnnotationsFile, SerializedAnnotation};
 
 use super::tools::{AnnotationEvent, EventAnnotation};
 
@@ -65,10 +65,10 @@ impl AnnotationWatcher {
 
                 for path in &event.paths {
                     // Check if this is an annotations file
-                    if path.extension().map_or(false, |ext| ext == "json")
+                    if path.extension().is_some_and(|ext| ext == "json")
                         && path
                             .file_name()
-                            .map_or(false, |n| n.to_string_lossy().contains(".annotations."))
+                            .is_some_and(|n| n.to_string_lossy().contains(".annotations."))
                     {
                         // Extract the image path from the annotations path
                         if let Some(image_path) = annotations_path_to_image(path) {
@@ -105,9 +105,15 @@ impl AnnotationWatcher {
     }
 
     /// Get events since a sequence number
-    pub async fn get_events_since(&self, image_path: &Path, since_seq: u64) -> Vec<AnnotationEvent> {
+    pub async fn get_events_since(
+        &self,
+        image_path: &Path,
+        since_seq: u64,
+    ) -> Vec<AnnotationEvent> {
         // Canonicalize path to handle symlinks
-        let image_path = image_path.canonicalize().unwrap_or_else(|_| image_path.to_path_buf());
+        let image_path = image_path
+            .canonicalize()
+            .unwrap_or_else(|_| image_path.to_path_buf());
         let stores = self.stores.lock();
         if let Some(store) = stores.get(&image_path) {
             store
@@ -134,7 +140,9 @@ impl AnnotationWatcher {
         since_seq: u64,
     ) -> (Vec<AnnotationEvent>, String) {
         // Canonicalize path to handle symlinks
-        let image_path = image_path.canonicalize().unwrap_or_else(|_| image_path.to_path_buf());
+        let image_path = image_path
+            .canonicalize()
+            .unwrap_or_else(|_| image_path.to_path_buf());
 
         // First check if there are already events
         let events = self.get_events_since(&image_path, since_seq).await;
@@ -176,16 +184,15 @@ impl AnnotationWatcher {
     /// Initialize the store with current annotations (call before watching)
     pub async fn init_store(&self, image_path: &Path) {
         // Canonicalize path to handle symlinks (e.g., /tmp -> /private/tmp on macOS)
-        let image_path = image_path.canonicalize().unwrap_or_else(|_| image_path.to_path_buf());
+        let image_path = image_path
+            .canonicalize()
+            .unwrap_or_else(|_| image_path.to_path_buf());
         let annotations_path = annotations_file_path(&image_path);
         let current = load_annotations(&annotations_path);
 
         let mut stores = self.stores.lock();
         let store = stores.entry(image_path).or_default();
-        store.last_known = current
-            .into_iter()
-            .map(|a| (a.id.clone(), a))
-            .collect();
+        store.last_known = current.into_iter().map(|a| (a.id.clone(), a)).collect();
     }
 }
 
@@ -288,9 +295,12 @@ fn process_annotation_change_sync(
 /// Convert SerializedAnnotation to EventAnnotation
 fn serialized_to_event(ann: &SerializedAnnotation) -> EventAnnotation {
     let (position, size, end_position, text, number) = match &ann.geometry {
-        AnnotationGeometry::Rectangle { x, y, width, height } => {
-            ([*x, *y], Some([*width, *height]), None, None, None)
-        }
+        AnnotationGeometry::Rectangle {
+            x,
+            y,
+            width,
+            height,
+        } => ([*x, *y], Some([*width, *height]), None, None, None),
         AnnotationGeometry::Line {
             start_x,
             start_y,
@@ -315,9 +325,12 @@ fn serialized_to_event(ann: &SerializedAnnotation) -> EventAnnotation {
             None,
             None,
         ),
-        AnnotationGeometry::Point { x, y, value, content } => {
-            ([*x, *y], None, None, content.clone(), *value)
-        }
+        AnnotationGeometry::Point {
+            x,
+            y,
+            value,
+            content,
+        } => ([*x, *y], None, None, content.clone(), *value),
         AnnotationGeometry::Path { points } => {
             let first = points.first().map(|p| [p.0, p.1]).unwrap_or([0.0, 0.0]);
             (first, None, None, None, None)
