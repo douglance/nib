@@ -2703,11 +2703,7 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
         args.file.clone()
     };
 
-    let timeout_duration = if args.timeout > 0 {
-        Duration::from_secs(args.timeout)
-    } else {
-        Duration::from_secs(3600) // 1 hour default
-    };
+    let timeout_duration = feedback_timeout(args.timeout);
 
     // Step 1: Try connecting to an existing GUI session first
     let session = match Session::connect(&nib_path, ClientType::Cli).await {
@@ -2828,12 +2824,22 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
     }
 }
 
+fn feedback_timeout(seconds: u64) -> Option<Duration> {
+    (seconds > 0).then(|| Duration::from_secs(seconds))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::{Annotation, AnnotationType, AssetData, AssetRef, Region};
     use image::{DynamicImage, Rgba, RgbaImage};
     use tempfile::TempDir;
+
+    #[test]
+    fn zero_feedback_timeout_waits_indefinitely() {
+        assert_eq!(feedback_timeout(0), None);
+        assert_eq!(feedback_timeout(60), Some(Duration::from_secs(60)));
+    }
 
     /// Encode a solid-color `width`x`height` RGBA image as PNG bytes.
     fn solid_png(width: u32, height: u32, color: [u8; 4]) -> Vec<u8> {
