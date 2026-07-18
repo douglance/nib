@@ -643,7 +643,7 @@ impl NibApp {
                     ..Default::default()
                 };
 
-                cx.open_window(options, |window, cx| {
+                let window_handle = cx.open_window(options, |window, cx| {
                     let view = cx.new(|cx| {
                         let view = EditorView::new(file_path.clone(), cx);
                         view.focus_handle.focus(window);
@@ -653,7 +653,14 @@ impl NibApp {
                     view
                 })
                 .expect("Failed to open window");
-                cx.activate(true);
+                // Defer native activation until the window exists in AppKit's
+                // event loop; activating during construction is ignored.
+                cx.defer(move |cx| {
+                    cx.activate(true);
+                    let _ = window_handle.update(cx, |_view, window, _cx| {
+                        window.activate_window();
+                    });
+                });
 
                 // Quit the app when the window is closed
                 cx.on_window_closed(|_cx| {
