@@ -39,5 +39,9 @@ tokio.workspace = true
 # Other
 anyhow.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSRunningApplication"] }
+
 [dev-dependencies]
 tempfile.workspace = true

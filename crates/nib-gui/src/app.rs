@@ -570,6 +570,20 @@ const DEFAULT_WINDOW_WIDTH: f32 = 1200.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
 const DISPLAY_MARGIN: f32 = 24.0;
 
+#[cfg(target_os = "macos")]
+fn force_frontmost_application() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSApplication, NSApplicationActivationOptions, NSRunningApplication};
+
+    let main_thread = MainThreadMarker::new().expect("nib GUI must launch on the main thread");
+    NSApplication::sharedApplication(main_thread).activate();
+    NSRunningApplication::currentApplication()
+        .activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn force_frontmost_application() {}
+
 fn centered_window_bounds(
     display_bounds: Option<Bounds<Pixels>>,
     desired_size: Size<Pixels>,
@@ -657,6 +671,7 @@ impl NibApp {
                 // event loop; activating during construction is ignored.
                 cx.defer(move |cx| {
                     cx.activate(true);
+                    force_frontmost_application();
                     let _ = window_handle.update(cx, |_view, window, _cx| {
                         window.activate_window();
                     });
