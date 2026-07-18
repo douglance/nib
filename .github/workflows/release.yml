@@ -52,10 +52,10 @@ jobs:
             libxcb-keysyms1-dev libxcb-render-util0-dev libxcb-util-dev \
             libxkbcommon-dev libxkbcommon-x11-dev \
             libssl-dev pkg-config \
-            libdbus-1-dev \
+            libdbus-1-dev libpipewire-0.3-dev \
             libfreetype6-dev libfontconfig1-dev \
             libwayland-dev libwayland-client0 libwayland-cursor0 libwayland-egl1 \
-            libegl1-mesa-dev libgles2-mesa-dev \
+            libegl1-mesa-dev libgles2-mesa-dev libgbm-dev \
             libvulkan-dev \
             clang mold
 
