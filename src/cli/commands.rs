@@ -2722,6 +2722,7 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
             let _child = std::process::Command::new(&exe_path)
                 .arg("gui")
                 .arg(&nib_path)
+                .stdout(std::process::Stdio::null())
                 .spawn()
                 .map_err(|e| {
                     crate::core::NibError::Other(format!("Failed to spawn GUI: {}", e))
