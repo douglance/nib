@@ -9,8 +9,11 @@
 //! - Coordinate with the GUI in real-time
 
 use crate::StorageResult;
+use fs2::FileExt;
 use nib_core::StorageError;
 use serde::{Deserialize, Serialize};
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -42,8 +45,10 @@ impl SessionRegistry {
     ///
     /// Creates the registry file if it doesn't exist.
     pub fn load() -> StorageResult<Self> {
-        let path = sessions_path();
+        Self::load_from(&sessions_path())
+    }
 
+    fn load_from(path: &Path) -> StorageResult<Self> {
         if !path.exists() {
             // Create empty registry
             return Ok(Self {
@@ -51,10 +56,17 @@ impl SessionRegistry {
             });
         }
 
-        let contents = std::fs::read_to_string(&path)?;
-        let file: SessionRegistryFile = serde_json::from_str(&contents).map_err(|e| {
-            StorageError::InvalidFormat(format!("Invalid sessions.json: {}", e))
-        })?;
+        let contents = std::fs::read_to_string(path)?;
+        let file = match serde_json::from_str(&contents) {
+            Ok(file) => file,
+            Err(_) => serde_json::Deserializer::from_str(&contents)
+                .into_iter::<SessionRegistryFile>()
+                .next()
+                .transpose()
+                .ok()
+                .flatten()
+                .unwrap_or_default(),
+        };
 
         Ok(Self {
             sessions: file.sessions,
@@ -64,7 +76,13 @@ impl SessionRegistry {
     /// Save the session registry to ~/.nib/sessions.json
     pub fn save(&self) -> StorageResult<()> {
         let path = sessions_path();
+        let lock = Self::lock(&path)?;
+        let result = self.save_to(&path);
+        let _ = FileExt::unlock(&lock);
+        result
+    }
 
+    fn save_to(&self, path: &Path) -> StorageResult<()> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -78,40 +96,70 @@ impl SessionRegistry {
             StorageError::InvalidFormat(format!("Failed to serialize sessions: {}", e))
         })?;
 
-        std::fs::write(&path, contents)?;
+        let parent = path.parent().unwrap_or_else(|| Path::new("."));
+        let mut temp = tempfile::NamedTempFile::new_in(parent)?;
+        temp.write_all(contents.as_bytes())?;
+        temp.as_file().sync_all()?;
+        temp.persist(path).map_err(|error| error.error)?;
         Ok(())
+    }
+
+    fn lock(path: &Path) -> StorageResult<File> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let lock_path = path.with_extension("lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock_path)?;
+        file.lock_exclusive()?;
+        Ok(file)
+    }
+
+    fn update_at<T>(
+        &mut self,
+        registry_path: &Path,
+        update: impl FnOnce(&mut Vec<Session>) -> T,
+    ) -> StorageResult<T> {
+        let lock = Self::lock(registry_path)?;
+        let mut latest = Self::load_from(registry_path)?;
+        let result = update(&mut latest.sessions);
+        latest.save_to(registry_path)?;
+        self.sessions = latest.sessions;
+        let _ = FileExt::unlock(&lock);
+        Ok(result)
     }
 
     /// Register a new session for a .nib file
     ///
     /// If a session already exists for this path, it will be replaced.
     pub fn register(&mut self, path: &Path, pid: u32) -> StorageResult<()> {
-        // Remove any existing session for this path
-        self.sessions.retain(|s| s.path != path);
+        self.register_at(&sessions_path(), path, pid)
+    }
 
-        let session = Session {
-            path: path.to_path_buf(),
-            pid,
-            opened_at: current_unix_timestamp(),
-        };
-
-        self.sessions.push(session);
-        self.save()
+    fn register_at(&mut self, registry_path: &Path, path: &Path, pid: u32) -> StorageResult<()> {
+        self.update_at(registry_path, |sessions| {
+            sessions.retain(|session| session.path != path);
+            sessions.push(Session {
+                path: path.to_path_buf(),
+                pid,
+                opened_at: current_unix_timestamp(),
+            });
+        })
     }
 
     /// Unregister a session for a .nib file
     ///
     /// Returns true if a session was removed, false if not found.
     pub fn unregister(&mut self, path: &Path) -> StorageResult<bool> {
-        let original_len = self.sessions.len();
-        self.sessions.retain(|s| s.path != path);
-        let removed = self.sessions.len() < original_len;
-
-        if removed {
-            self.save()?;
-        }
-
-        Ok(removed)
+        self.update_at(&sessions_path(), |sessions| {
+            let original_len = sessions.len();
+            sessions.retain(|session| session.path != path);
+            sessions.len() < original_len
+        })
     }
 
     /// List all active sessions (where the process is still alive)
@@ -130,15 +178,11 @@ impl SessionRegistry {
     ///
     /// Returns the number of sessions that were removed.
     pub fn cleanup(&mut self) -> StorageResult<usize> {
-        let original_len = self.sessions.len();
-        self.sessions.retain(|s| is_process_alive(s.pid));
-        let removed = original_len - self.sessions.len();
-
-        if removed > 0 {
-            self.save()?;
-        }
-
-        Ok(removed)
+        self.update_at(&sessions_path(), |sessions| {
+            let original_len = sessions.len();
+            sessions.retain(|session| is_process_alive(session.pid));
+            original_len - sessions.len()
+        })
     }
 
     /// Get all sessions (including potentially stale ones)
@@ -182,6 +226,7 @@ fn current_unix_timestamp() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
     use tempfile::TempDir;
 
     #[test]
@@ -199,59 +244,55 @@ mod tests {
     }
 
     #[test]
-    fn test_register_and_list() {
+    fn load_recovers_first_complete_registry_from_trailing_corruption() {
         let temp_dir = TempDir::new().unwrap();
-        let sessions_file = temp_dir.path().join(".nib").join("sessions.json");
+        let path = temp_dir.path().join("sessions.json");
+        std::fs::write(
+            &path,
+            r#"{"sessions":[{"path":"/tmp/recovered.nib","pid":42,"opened_at":7}]} ] }"#,
+        )
+        .unwrap();
 
-        // Create the registry directory
-        std::fs::create_dir_all(sessions_file.parent().unwrap()).unwrap();
-
-        // Write empty registry
-        std::fs::write(&sessions_file, r#"{"sessions":[]}"#).unwrap();
-
-        // Load and register
-        let mut registry = SessionRegistry {
-            sessions: Vec::new(),
-        };
-
-        let test_path = PathBuf::from("/tmp/test.nib");
-        let pid = std::process::id();
-
-        registry.sessions.push(Session {
-            path: test_path.clone(),
-            pid,
-            opened_at: current_unix_timestamp(),
-        });
-
-        assert_eq!(registry.sessions().len(), 1);
-        assert_eq!(registry.sessions()[0].path, test_path);
-        assert_eq!(registry.sessions()[0].pid, pid);
+        let registry = SessionRegistry::load_from(&path).unwrap();
+        assert_eq!(registry.sessions.len(), 1);
+        assert_eq!(
+            registry.sessions[0].path,
+            PathBuf::from("/tmp/recovered.nib")
+        );
     }
 
     #[test]
-    fn test_unregister() {
-        let mut registry = SessionRegistry {
-            sessions: vec![
-                Session {
-                    path: PathBuf::from("/tmp/file1.nib"),
-                    pid: 1234,
-                    opened_at: 1704067200,
-                },
-                Session {
-                    path: PathBuf::from("/tmp/file2.nib"),
-                    pid: 5678,
-                    opened_at: 1704067200,
-                },
-            ],
-        };
+    fn concurrent_registrations_remain_valid_and_preserve_every_session() {
+        const WRITERS: usize = 24;
+        let temp_dir = TempDir::new().unwrap();
+        let registry_path = Arc::new(temp_dir.path().join("sessions.json"));
+        let barrier = Arc::new(Barrier::new(WRITERS));
+        let mut threads = Vec::new();
 
-        // Remove first session (don't save to disk in test)
-        registry
-            .sessions
-            .retain(|s| s.path != PathBuf::from("/tmp/file1.nib"));
+        for index in 0..WRITERS {
+            let registry_path = Arc::clone(&registry_path);
+            let barrier = Arc::clone(&barrier);
+            threads.push(std::thread::spawn(move || {
+                let mut registry = SessionRegistry {
+                    sessions: Vec::new(),
+                };
+                barrier.wait();
+                registry
+                    .register_at(
+                        &registry_path,
+                        &PathBuf::from(format!("/tmp/concurrent-{index}.nib")),
+                        1000 + index as u32,
+                    )
+                    .unwrap();
+            }));
+        }
+        for thread in threads {
+            thread.join().unwrap();
+        }
 
-        assert_eq!(registry.sessions().len(), 1);
-        assert_eq!(registry.sessions()[0].path, PathBuf::from("/tmp/file2.nib"));
+        let contents = std::fs::read_to_string(registry_path.as_ref()).unwrap();
+        let parsed: SessionRegistryFile = serde_json::from_str(&contents).unwrap();
+        assert_eq!(parsed.sessions.len(), WRITERS);
     }
 
     #[test]
@@ -274,7 +315,9 @@ mod tests {
         let active = registry.list_active().unwrap();
 
         // Current process should be in active list
-        assert!(active.iter().any(|s| s.path == PathBuf::from("/tmp/current.nib")));
+        assert!(active
+            .iter()
+            .any(|s| s.path == PathBuf::from("/tmp/current.nib")));
 
         // Stale process should NOT be in active list (assuming PID 999999 doesn't exist)
         // Note: This test might be flaky if PID 999999 happens to exist
@@ -290,20 +333,21 @@ mod tests {
     #[test]
     fn test_serialization_roundtrip() {
         let original = SessionRegistryFile {
-            sessions: vec![
-                Session {
-                    path: PathBuf::from("/Users/doug/screenshot.nib"),
-                    pid: 12345,
-                    opened_at: 1704067200,
-                },
-            ],
+            sessions: vec![Session {
+                path: PathBuf::from("/Users/doug/screenshot.nib"),
+                pid: 12345,
+                opened_at: 1704067200,
+            }],
         };
 
         let json = serde_json::to_string(&original).unwrap();
         let parsed: SessionRegistryFile = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.sessions.len(), 1);
-        assert_eq!(parsed.sessions[0].path, PathBuf::from("/Users/doug/screenshot.nib"));
+        assert_eq!(
+            parsed.sessions[0].path,
+            PathBuf::from("/Users/doug/screenshot.nib")
+        );
         assert_eq!(parsed.sessions[0].pid, 12345);
         assert_eq!(parsed.sessions[0].opened_at, 1704067200);
     }
@@ -330,7 +374,10 @@ mod tests {
         registry.sessions.retain(|s| is_process_alive(s.pid));
 
         // Current process should still be in the list
-        assert!(registry.sessions.iter().any(|s| s.path == PathBuf::from("/tmp/current.nib")));
+        assert!(registry
+            .sessions
+            .iter()
+            .any(|s| s.path == PathBuf::from("/tmp/current.nib")));
 
         // Stale process (PID 999999) should be removed if it's not alive
         // Note: On some systems PID 999999 might exist, so we just verify the logic ran
