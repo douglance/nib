@@ -20,6 +20,7 @@ pub mod annotation_json;
 pub mod args;
 pub mod commands;
 pub mod fields;
+mod incurs_commands;
 pub mod sessions;
 
 pub use args::*;
@@ -34,7 +35,8 @@ pub use sessions::*;
 /// (`src/main_incurs.rs`) so the existing clap-based `nib` binary and its
 /// full test suite are unaffected while the migration is in progress.
 pub fn build_cli() -> incurs::cli::Cli {
-    incurs::cli::Cli::create("nib")
+    let cli = incurs::cli::Cli::create("nib")
         .description("Fast, native screenshot annotation tool with semantic visual communication")
-        .version(env!("CARGO_PKG_VERSION"))
+        .version(env!("CARGO_PKG_VERSION"));
+    incurs_commands::register(cli)
 }

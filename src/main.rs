@@ -76,6 +76,7 @@ async fn run() -> Result<()> {
         // Claude actions
         Command::Capture(args) => cli::run_capture(&args),
         Command::Feedback(args) => cli::run_feedback(&args).await,
+        Command::Review(args) => cli::run_review(&args).await,
         Command::AwaitSubmit(args) => cli::run_await_submit(&args).await,
         Command::Annotation(subcmd) => match subcmd {
             AnnotationCommand::Add(args) => cli::run_annotation_add(&args),

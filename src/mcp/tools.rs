@@ -3,6 +3,18 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Request to present an image inline in the current Codex thread
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PresentImageRequest {
+    /// PNG, JPEG, WebP, or .nib image to display
+    #[schemars(description = "Absolute path to a PNG, JPEG, WebP, or .nib image")]
+    pub image_path: String,
+
+    /// Complete feedback question to ask beside the image
+    #[schemars(description = "Question the human should answer in the current Codex thread")]
+    pub question: String,
+}
+
 /// Request to add an annotation to an image
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AddAnnotationRequest {

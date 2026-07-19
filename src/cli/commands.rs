@@ -1672,6 +1672,10 @@ pub async fn run_await_submit(args: &super::args::AwaitSubmitArgs) -> Result<()>
         )));
     }
 
+    if args.feedback {
+        return wait_for_feedback_file(args).await;
+    }
+
     // Open the .nib file to get initial state
     let nib = NibFile::open(&args.file)?;
     let mut last_modified_at = nib.latest_annotation_modified_at()?.unwrap_or(0);
@@ -1775,6 +1779,30 @@ pub async fn run_await_submit(args: &super::args::AwaitSubmitArgs) -> Result<()>
                 return Ok(());
             }
         }
+    }
+}
+
+async fn wait_for_feedback_file(args: &super::args::AwaitSubmitArgs) -> Result<()> {
+    let response_path = feedback_response_path(&args.file);
+    let started = std::time::Instant::now();
+    loop {
+        if let Ok(payload) = std::fs::read_to_string(&response_path) {
+            if !payload.trim().is_empty() {
+                print!("{payload}");
+                if !payload.ends_with('\n') {
+                    println!();
+                }
+                return Ok(());
+            }
+        }
+        if args.timeout > 0 && started.elapsed() >= Duration::from_secs(args.timeout) {
+            println!(
+                "{}",
+                serde_json::json!({"event":"timeout","reason":"no_feedback"})
+            );
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(args.interval)).await;
     }
 }
 
@@ -2577,6 +2605,8 @@ pub async fn run_generate(args: &super::args::GenerateArgs, format: &OutputForma
             message: args.message.clone(),
             annotations: None,
             timeout: 0,
+            ui: args.feedback_ui,
+            detach: false,
         };
         run_feedback(&feedback_args).await?;
     }
@@ -2702,6 +2732,18 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
     use super::annotation_json;
 
     tracing::info!(?args, "Running feedback");
+
+    let use_terminal = match args.ui {
+        FeedbackUi::Gui => false,
+        FeedbackUi::Terminal => true,
+        FeedbackUi::Auto => {
+            std::env::var_os("TMUX").is_some() && nib_tui::TerminalReport::detect().is_ok()
+        }
+    };
+
+    if use_terminal {
+        return run_terminal_feedback(args).await;
+    }
 
     // Verify file exists
     if !args.file.exists() {
@@ -2863,6 +2905,248 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
             }
         }
     }
+}
+
+/// Open the human-facing terminal review process. This command is normally
+/// launched in a temporary tmux window by `nib feedback --ui terminal`.
+pub async fn run_review(args: &super::args::ReviewArgs) -> Result<()> {
+    nib_tui::run_review(nib_tui::ReviewRequest {
+        file: args.session.clone(),
+        message: args.message.clone(),
+    })
+    .await
+    .map(|_| ())
+    .map_err(|e| crate::core::NibError::Other(e.to_string()))
+}
+
+async fn run_terminal_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
+    if !args.file.exists() {
+        return Err(crate::core::NibError::Storage(
+            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
+        ));
+    }
+    if std::env::var_os("TMUX").is_none() {
+        return Err(crate::core::NibError::Other(
+            "E_TMUX_REQUIRED: terminal feedback launches its reviewer in a temporary tmux window"
+                .into(),
+        ));
+    }
+    let terminal_report = nib_tui::TerminalReport::detect()
+        .map_err(|e| crate::core::NibError::Other(e.to_string()))?;
+
+    let nib_path = ensure_feedback_nib(&args.file)?;
+
+    if args.detach {
+        let response_path = feedback_response_path(&nib_path);
+        if let Some(parent) = response_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let response_file = std::fs::File::create(&response_path)?;
+        let exe = std::env::current_exe()
+            .map_err(|e| crate::core::NibError::Other(format!("Failed to locate nib: {e}")))?;
+        let mut child = std::process::Command::new(exe);
+        child.args([
+            "feedback",
+            nib_path.to_string_lossy().as_ref(),
+            "--ui",
+            "terminal",
+            "--timeout",
+            &args.timeout.to_string(),
+        ]);
+        if let Some(message) = &args.message {
+            child.args(["--message", message]);
+        }
+        if let Some(annotations) = &args.annotations {
+            child.args(["--annotations", annotations]);
+        }
+        let child = child
+            .stdout(response_file)
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| {
+                crate::core::NibError::Other(format!("Failed to detach feedback owner: {e}"))
+            })?;
+        let session_id = crate::collab::types::SessionId::from_file_path(&nib_path);
+        println!(
+            "{}",
+            serde_json::json!({
+                "event": "review_opening",
+                "session": session_id.to_string(),
+                "file": nib_path,
+                "response": response_path,
+                "owner_pid": child.id()
+            })
+        );
+        return Ok(());
+    }
+
+    let session = Session::open(&nib_path, ClientType::Cli)
+        .await
+        .map_err(crate::core::NibError::Other)?;
+
+    if let Some(ref annotations_json) = args.annotations {
+        let inputs = super::annotation_json::parse_annotations(annotations_json)
+            .map_err(crate::core::NibError::Other)?;
+        let data = inputs
+            .iter()
+            .map(|input| input.to_annotation_data())
+            .collect();
+        session
+            .send_annotations(data)
+            .map_err(crate::core::NibError::Other)?;
+    }
+
+    let exe = std::env::current_exe()
+        .map_err(|e| crate::core::NibError::Other(format!("Failed to locate nib: {e}")))?;
+    let mut command = format!(
+        "NIB_TMUX_BIN={} {} review {}",
+        shell_quote(&tmux_binary_path()),
+        shell_quote(&exe),
+        shell_quote(&nib_path)
+    );
+    if let Some(message) = &args.message {
+        command.push_str(" --message ");
+        command.push_str(&shell_quote_str(message));
+    }
+    let client_tty = terminal_report.client_tty.ok_or_else(|| {
+        crate::core::NibError::Other("E_TMUX_CLIENT: failed to identify current tmux client".into())
+    })?;
+    let client_session = terminal_report.client_session.ok_or_else(|| {
+        crate::core::NibError::Other(
+            "E_TMUX_CLIENT: failed to identify current tmux session".into(),
+        )
+    })?;
+    let window_target = format!("{client_session}:");
+    let window = std::process::Command::new(tmux_binary_path())
+        .args([
+            "new-window",
+            "-d",
+            "-P",
+            "-F",
+            "#{window_id}",
+            "-t",
+            &window_target,
+            "-n",
+            "nib-review",
+            &command,
+        ])
+        .output()
+        .map_err(|e| {
+            crate::core::NibError::Other(format!("Failed to create tmux review window: {e}"))
+        })?;
+    if !window.status.success() {
+        return Err(crate::core::NibError::Other(format!(
+            "Failed to create tmux review window: {}",
+            String::from_utf8_lossy(&window.stderr).trim()
+        )));
+    }
+    let review_window = String::from_utf8_lossy(&window.stdout).trim().to_string();
+    if review_window.is_empty() {
+        return Err(crate::core::NibError::Other(
+            "Failed to create tmux review window: tmux returned no window ID".into(),
+        ));
+    }
+    let switched = std::process::Command::new(tmux_binary_path())
+        .args(["switch-client", "-c", &client_tty, "-t", &review_window])
+        .output()
+        .map_err(|e| {
+            crate::core::NibError::Other(format!("Failed to show tmux review window: {e}"))
+        })?;
+    if !switched.status.success() {
+        let _ = std::process::Command::new(tmux_binary_path())
+            .args(["kill-window", "-t", &review_window])
+            .status();
+        return Err(crate::core::NibError::Other(format!(
+            "Failed to show tmux review window: {}",
+            String::from_utf8_lossy(&switched.stderr).trim()
+        )));
+    }
+
+    match session.wait_for_send(feedback_timeout(args.timeout)) {
+        Ok(payload) => {
+            println!("{payload}");
+            Ok(())
+        }
+        Err(error) if error.contains("Timeout") => {
+            let _ = std::process::Command::new(tmux_binary_path())
+                .args(["kill-window", "-t", &review_window])
+                .status();
+            println!("{}", serde_json::json!({"event":"timeout"}));
+            Ok(())
+        }
+        Err(error) => {
+            let _ = std::process::Command::new(tmux_binary_path())
+                .args(["kill-window", "-t", &review_window])
+                .status();
+            Err(crate::core::NibError::Other(format!(
+                "Wait failed: {error}"
+            )))
+        }
+    }
+}
+
+fn feedback_response_path(file: &Path) -> PathBuf {
+    let session = crate::collab::types::SessionId::from_file_path(&file.to_path_buf());
+    storage::storage_dir()
+        .join("reviews")
+        .join(format!("{}.json", session))
+}
+
+fn ensure_feedback_nib(file: &Path) -> Result<PathBuf> {
+    if file
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("nib"))
+    {
+        return Ok(file.to_path_buf());
+    }
+    let extension = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif") {
+        return Err(crate::core::NibError::Other(format!(
+            "Unsupported file type: {}",
+            file.display()
+        )));
+    }
+    let nib_path = file.with_extension("nib");
+    if !nib_path.exists() {
+        let image_data = std::fs::read(file)?;
+        let image = image::load_from_memory(&image_data).map_err(|e| {
+            crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+        })?;
+        NibFile::create(
+            &nib_path,
+            &image_data,
+            &extension,
+            image.width(),
+            image.height(),
+        )?;
+    }
+    Ok(nib_path)
+}
+
+fn shell_quote(path: &Path) -> String {
+    shell_quote_str(&path.to_string_lossy())
+}
+fn shell_quote_str(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn tmux_binary_path() -> PathBuf {
+    for path in [
+        "/opt/homebrew/bin/tmux",
+        "/usr/local/bin/tmux",
+        "/usr/bin/tmux",
+    ] {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return path;
+        }
+    }
+    PathBuf::from("tmux")
 }
 
 fn feedback_timeout(seconds: u64) -> Option<Duration> {

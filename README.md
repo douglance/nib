@@ -58,7 +58,8 @@ nib render image.png
 | `validate` | Check QML syntax validity |
 | `find-text` | OCR text search in image |
 | `grid` | Add coordinate grid overlay |
-| `feedback` | Wait for human annotation feedback (opens GUI, returns JSON) |
+| `feedback` | Wait for human feedback in GPUI or a full-color terminal review window |
+| `review` | Open an existing feedback session in the terminal reviewer |
 | `watch` | Watch a .nib file for annotation changes |
 | `list` | List recent captures |
 | `info` | Show image and annotation details |
@@ -89,12 +90,24 @@ nib clear-annotations shot.png
 Nib is designed for image-based communication. After each annotation event, the agent must inspect the image (zoom first, then full if unclear).
 
 ```bash
-# Wait for human feedback (opens GUI, exits on first annotation)
+# Wait for human feedback in the GUI
 nib feedback shot.png -t 120
+
+# Keep the agent pane noninteractive while review happens in a temporary tmux window
+nib feedback shot.png --ui terminal -m "Ship this image?" -t 0
+
+# Open without blocking, then await the same deterministic .nib session
+nib feedback shot.png --ui terminal --detach
+nib await-submit shot.nib --feedback -t 0 --json
 
 # Zoom in around the annotation (x1,y1,x2,y2)
 nib grid shot.rendered.png --region "1900,650,2300,850" -o shot.zoom.png
 ```
+
+Terminal review sends lossless Kitty/iTerm image data and deliberately has no
+character-art fallback. It supports true SSH, but rejects vmux/mosh because
+mosh synchronizes terminal cell state rather than forwarding graphics control
+sequences.
 
 ## Annotation Types
 
@@ -126,6 +139,19 @@ nib grid image.png --spacing 100 -o grid.png
 
 # JSON metadata output
 nib grid image.png --spacing 100 --json
+```
+
+## Inline Codex Feedback
+
+Build Nib with the `mcp` feature and configure its MCP server in Codex. The
+`present_image` tool returns lossless image bytes as first-class MCP image
+content, so Codex displays the image inside the current thread and collects the
+human's next message as feedback. It does not depend on terminal graphics or a
+machine-local file link.
+
+```bash
+cargo build --release --features mcp
+codex mcp add nib -- /absolute/path/to/nib mcp-server
 ```
 
 ## File Format
