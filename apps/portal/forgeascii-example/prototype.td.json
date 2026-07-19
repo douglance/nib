@@ -1,0 +1,152 @@
+{
+  "schema": "forgeascii.termdraw-export",
+  "sourceSchema": "forgeascii.spec",
+  "version": 1,
+  "title": "Checkout Interaction For Failed Payment",
+  "revision": 1,
+  "screens": [
+    {
+      "id": "main",
+      "title": "Checkout Interaction For Failed Payment",
+      "width": 100,
+      "height": 34,
+      "objects": [
+        {
+          "id": "obj-1",
+          "z": 1,
+          "parentId": null,
+          "color": "white",
+          "type": "box",
+          "left": 0,
+          "top": 0,
+          "right": 99,
+          "bottom": 33,
+          "style": "light"
+        },
+        {
+          "id": "obj-2",
+          "z": 2,
+          "parentId": null,
+          "color": "white",
+          "type": "text",
+          "x": 2,
+          "y": 1,
+          "content": "CHECKOUT INTERACTION FOR FAILED PAYMENT",
+          "border": "none"
+        },
+        {
+          "id": "obj-3",
+          "z": 3,
+          "parentId": null,
+          "color": "white",
+          "type": "line",
+          "x1": 1,
+          "y1": 3,
+          "x2": 98,
+          "y2": 3,
+          "style": "light"
+        },
+        {
+          "id": "obj-4",
+          "z": 4,
+          "parentId": null,
+          "color": "white",
+          "type": "text",
+          "x": 0,
+          "y": 3,
+          "content": "+",
+          "border": "none"
+        },
+        {
+          "id": "obj-5",
+          "z": 5,
+          "parentId": null,
+          "color": "white",
+          "type": "text",
+          "x": 99,
+          "y": 3,
+          "content": "+",
+          "border": "none"
+        },
+        {
+          "id": "obj-6",
+          "z": 6,
+          "parentId": null,
+          "color": "white",
+          "type": "text",
+          "x": 2,
+          "y": 32,
+          "content": "[Tab] Focus   [Enter] Activate   [q] Quit",
+          "border": "none"
+        },
+        {
+          "id": "obj-7",
+          "z": 7,
+          "parentId": null,
+          "color": "white",
+          "type": "box",
+          "left": 4,
+          "top": 5,
+          "right": 95,
+          "bottom": 29,
+          "style": "light"
+        },
+        {
+          "id": "obj-8",
+          "z": 8,
+          "parentId": null,
+          "color": "white",
+          "type": "text",
+          "x": 7,
+          "y": 7,
+          "content": "Payment recovery",
+          "border": "none"
+        },
+        {
+          "id": "obj-9",
+          "z": 9,
+          "parentId": null,
+          "color": "white",
+          "type": "text",
+          "x": 7,
+          "y": 10,
+          "content": "Card failed. Keep the user in flow with one clear next action.",
+          "border": "none"
+        },
+        {
+          "id": "obj-10",
+          "z": 10,
+          "parentId": null,
+          "color": "white",
+          "type": "text",
+          "x": 7,
+          "y": 14,
+          "content": "[ Try again ]",
+          "border": "none"
+        },
+        {
+          "id": "obj-11",
+          "z": 11,
+          "parentId": null,
+          "color": "white",
+          "type": "text",
+          "x": 21,
+          "y": 14,
+          "content": "[ Use saved card ]",
+          "border": "none"
+        },
+        {
+          "id": "obj-12",
+          "z": 12,
+          "parentId": null,
+          "color": "white",
+          "type": "text",
+          "x": 40,
+          "y": 14,
+          "content": "[ Contact support ]",
+          "border": "none"
+        }
+      ]
+    }
+  ]
+}

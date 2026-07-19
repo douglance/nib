@@ -1,0 +1,84 @@
+name: Prtl
+options:
+  bundleIdPrefix: com.douglance
+  deploymentTarget:
+    iOS: "18.0"
+    watchOS: "11.0"
+settings:
+  base:
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1.0
+    SWIFT_VERSION: 6.0
+    DEVELOPMENT_TEAM: ""
+targets:
+  Prtl:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/PrtlModels.swift
+      - path: Sources/PrtlClient.swift
+      - path: Sources/PrtlApp.swift
+    dependencies:
+      - target: PrtlNotificationService
+        embed: true
+    info:
+      path: Prtl-Info.plist
+      properties:
+        CFBundleDisplayName: Prtl
+        CFBundleURLTypes:
+          - CFBundleURLName: com.douglance.prtl
+            CFBundleURLSchemes:
+              - prtl
+        UILaunchScreen: {}
+        NSCameraUsageDescription: Prtl attaches photos to requests so agents can see what you see.
+        NSPhotoLibraryUsageDescription: Prtl attaches selected images to requests.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.vmux.remotesigner
+    entitlements:
+      path: Prtl.entitlements
+      properties:
+        aps-environment: development
+  PrtlNotificationService:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/PrtlNotificationService.swift
+    info:
+      path: PrtlNotificationService-Info.plist
+      properties:
+        CFBundleDisplayName: Prtl rich notifications
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: app.vmux.remotesigner.NotificationService
+        SKIP_INSTALL: YES
+  PrtlWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - path: Sources/PrtlModels.swift
+      - path: Sources/PrtlClient.swift
+      - path: Sources/PrtlWatchApp.swift
+    info:
+      path: PrtlWatch-Info.plist
+      properties:
+        CFBundleDisplayName: Prtl
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: com.douglance.prtl
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.prtl.watchkitapp
+    entitlements:
+      path: PrtlWatch.entitlements
+      properties:
+        aps-environment: development

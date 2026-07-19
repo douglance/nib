@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
+PORTLESS_CA="${HOME}/.portless/ca.pem"
+if [[ -z "${NODE_EXTRA_CA_CERTS:-}" && -f "$PORTLESS_CA" ]]; then
+  export NODE_EXTRA_CA_CERTS="$PORTLESS_CA"
+fi
+exec "$ROOT/node_modules/.bin/tsx" "$ROOT/src/cli/index.ts" "$@"
