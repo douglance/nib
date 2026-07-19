@@ -43,7 +43,7 @@ import {
   measureNativeFrame,
   nativeFeedbackSurfaceUrl,
   nativeTargetUrl,
-  prtlFetch
+  nibFetch
 } from "../native";
 
 const viewportIcons = {
@@ -52,7 +52,7 @@ const viewportIcons = {
   desktop: Monitor
 };
 
-const FEEDBACK_SYNC_EVENT = "prtl:feedback-sync";
+const FEEDBACK_SYNC_EVENT = "nib:feedback-sync";
 
 interface FeedbackSyncDetail {
   removeId?: string;
@@ -87,7 +87,7 @@ export function App() {
     setLoading(true);
     setError(null);
     try {
-      const response = await prtlFetch(`/api/projects${refresh ? "?refresh=1" : ""}`);
+      const response = await nibFetch(`/api/projects${refresh ? "?refresh=1" : ""}`);
       if (!response.ok) throw new Error(`Discovery failed: ${response.status}`);
       setData(await response.json());
       void loadHealth();
@@ -101,7 +101,7 @@ export function App() {
 
   async function loadHealth() {
     try {
-      const response = await prtlFetch("/api/health");
+      const response = await nibFetch("/api/health");
       if (response.ok) setHealth(await response.json());
     } catch {
       setHealth(null);
@@ -110,7 +110,7 @@ export function App() {
 
   async function loadArtifacts() {
     try {
-      const response = await prtlFetch("/api/html/artifacts");
+      const response = await nibFetch("/api/html/artifacts");
       if (response.ok) {
         const payload = await response.json() as { artifacts: HtmlArtifactSummary[] };
         setArtifacts(payload.artifacts);
@@ -148,7 +148,7 @@ export function App() {
   async function refreshScreenshots(projectId: string) {
     setRefreshingId(projectId);
     try {
-      const response = await prtlFetch(`/api/projects/${encodeURIComponent(projectId)}/screenshots`, {
+      const response = await nibFetch(`/api/projects/${encodeURIComponent(projectId)}/screenshots`, {
         method: "POST"
       });
       if (!response.ok) throw new Error(`Screenshot failed: ${response.status}`);
@@ -173,7 +173,7 @@ export function App() {
     setKillingId(projectId);
     setError(null);
     try {
-      const response = await prtlFetch(`/api/projects/${encodeURIComponent(projectId)}/kill`, {
+      const response = await nibFetch(`/api/projects/${encodeURIComponent(projectId)}/kill`, {
         method: "POST"
       });
       if (!response.ok) {
@@ -190,7 +190,7 @@ export function App() {
 
   async function setPreferredRoute(projectId: string, mode: RouteMode) {
     try {
-      const response = await prtlFetch(`/api/projects/${encodeURIComponent(projectId)}/preferred-route`, {
+      const response = await nibFetch(`/api/projects/${encodeURIComponent(projectId)}/preferred-route`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ mode })
@@ -260,7 +260,7 @@ export function App() {
     <main className="appShell">
       <header className="topBar">
         <div>
-          <h1>prtl</h1>
+          <h1>nib</h1>
           <p>{health?.publicBaseUrl ?? data?.publicBaseUrl ?? "Scanning local project servers"}</p>
           <div className="topMeta">
             <span className={health?.ok ? "healthPill good" : "healthPill warn"}>
@@ -405,7 +405,7 @@ function WaitingPanel({ open, onToggle, onClose }: { open: boolean; onToggle: ()
   async function loadWaiting() {
     setLoading(true);
     try {
-      const response = await prtlFetch("/api/waiting");
+      const response = await nibFetch("/api/waiting");
       if (response.ok) setWaiting(await response.json() as WaitingPane[]);
     } finally {
       setLoading(false);
@@ -616,7 +616,7 @@ function RequestInbox({ open, onToggle, onClose }: { open: boolean; onToggle: ()
   async function loadRequests() {
     setLoading(true);
     try {
-      const response = await prtlFetch("/api/requests");
+      const response = await nibFetch("/api/requests");
       if (response.ok) {
         const payload = await response.json() as RequestRecord[];
         setRequests(payload);
@@ -645,7 +645,7 @@ function RequestInbox({ open, onToggle, onClose }: { open: boolean; onToggle: ()
 
   async function respond(request: RequestRecord, payload: { text?: string; choice?: string; choiceIndex?: number }) {
     setMessage(null);
-    const response = await prtlFetch(`/api/requests/${encodeURIComponent(request.id)}/respond`, {
+    const response = await nibFetch(`/api/requests/${encodeURIComponent(request.id)}/respond`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload)
@@ -783,7 +783,7 @@ function FeedbackInbox({ compact = false }: { compact?: boolean }) {
   async function loadFeedback() {
     setLoading(true);
     try {
-      const response = await prtlFetch("/api/feedback");
+      const response = await nibFetch("/api/feedback");
       if (response.ok) setFeedback(await response.json());
     } finally {
       setLoading(false);
@@ -856,7 +856,7 @@ function FeedbackInbox({ compact = false }: { compact?: boolean }) {
         return;
       }
       const [{ publicKey }, registration] = await Promise.all([
-        prtlFetch("/api/notifications/vapid-public-key").then((response) => response.json() as Promise<{ publicKey: string }>),
+        nibFetch("/api/notifications/vapid-public-key").then((response) => response.json() as Promise<{ publicKey: string }>),
         navigator.serviceWorker.ready
       ]);
       const existing = await registration.pushManager.getSubscription();
@@ -866,12 +866,12 @@ function FeedbackInbox({ compact = false }: { compact?: boolean }) {
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToArrayBuffer(publicKey)
         }));
-      await prtlFetch("/api/notifications/subscribe", {
+      await nibFetch("/api/notifications/subscribe", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ subscription: subscription.toJSON() })
       });
-      const testResponse = await prtlFetch("/api/notifications/test", { method: "POST" });
+      const testResponse = await nibFetch("/api/notifications/test", { method: "POST" });
       const testPayload = await testResponse.json();
       setNotificationReady(true);
       setNotificationMessage(testPayload.sent ? "Notifications enabled. Latest request sent." : "Notifications enabled.");
@@ -881,7 +881,7 @@ function FeedbackInbox({ compact = false }: { compact?: boolean }) {
   }
 
   async function testNotification() {
-    const response = await prtlFetch("/api/notifications/test", { method: "POST" });
+    const response = await nibFetch("/api/notifications/test", { method: "POST" });
     const payload = await response.json();
     setNotificationMessage(payload.sent ? "Test notification sent." : "No subscription is available yet.");
   }
@@ -1021,7 +1021,7 @@ function ProjectViewer({
   loading
 }: ProjectViewerProps) {
   const [workspace, setWorkspace] = useState<ProjectWorkspace | null>(null);
-  const [feedbackRequests, setFeedbackRequests] = useState<FeedbackRequest[]>([]);
+  const [, setFeedbackRequests] = useState<FeedbackRequest[]>([]);
   const [activeFeedback, setActiveFeedback] = useState<FeedbackRequest | null>(null);
   const [feedbackText, setFeedbackText] = useState("");
   const [feedbackFocused, setFeedbackFocused] = useState(false);
@@ -1116,10 +1116,10 @@ function ProjectViewer({
 
   async function loadViewerData(projectId: string) {
     const [workspaceResponse, feedbackResponse] = await Promise.all([
-      prtlFetch(`/api/projects/${encodeURIComponent(projectId)}/workspace`),
+      nibFetch(`/api/projects/${encodeURIComponent(projectId)}/workspace`),
       requestedFeedbackId
-        ? prtlFetch(`/api/feedback/${encodeURIComponent(requestedFeedbackId)}?viewed=1`)
-        : prtlFetch(`/api/feedback?projectId=${encodeURIComponent(projectId)}`)
+        ? nibFetch(`/api/feedback/${encodeURIComponent(requestedFeedbackId)}?viewed=1`)
+        : nibFetch(`/api/feedback?projectId=${encodeURIComponent(projectId)}`)
     ]);
     if (workspaceResponse.ok) {
       const nextWorkspace = await workspaceResponse.json();
@@ -1138,7 +1138,7 @@ function ProjectViewer({
   }
 
   async function loadProjectFeedback(projectId: string) {
-    const response = await prtlFetch(`/api/feedback?projectId=${encodeURIComponent(projectId)}`);
+    const response = await nibFetch(`/api/feedback?projectId=${encodeURIComponent(projectId)}`);
     if (!response.ok) return;
     applyFeedbackPayload(await response.json());
   }
@@ -1156,7 +1156,7 @@ function ProjectViewer({
 
   async function saveViewerState(patch: Partial<ViewerState>) {
     if (!project || !workspace) return;
-    const response = await prtlFetch(`/api/projects/${encodeURIComponent(project.id)}/workspace`, {
+    const response = await nibFetch(`/api/projects/${encodeURIComponent(project.id)}/workspace`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ viewer: patch })
@@ -1187,7 +1187,7 @@ function ProjectViewer({
     });
     broadcastFeedbackSync({ removeId: request.id });
     try {
-      const response = await prtlFetch(`/api/feedback/${encodeURIComponent(request.id)}/respond`, {
+      const response = await nibFetch(`/api/feedback/${encodeURIComponent(request.id)}/respond`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ kind, text, choice, data })
@@ -1215,22 +1215,7 @@ function ProjectViewer({
 
   async function captureFeedback() {
     if (!activeFeedback) return;
-    const response = await prtlFetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/capture`, { method: "POST" });
-    if (response.ok) {
-      const next = await response.json();
-      setActiveFeedback(next);
-      setFeedbackRequests((current) => [next, ...current.filter((item) => item.id !== next.id)]);
-      broadcastFeedbackSync();
-    }
-  }
-
-  async function updateFeedbackStatus(status: FeedbackRequest["status"]) {
-    if (!activeFeedback) return;
-    const response = await prtlFetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ status })
-    });
+    const response = await nibFetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/capture`, { method: "POST" });
     if (response.ok) {
       const next = await response.json();
       setActiveFeedback(next);
@@ -1268,7 +1253,7 @@ function ProjectViewer({
 
   async function recordTargetEdit(edit: TargetEditMessage) {
     if (!activeFeedback) return;
-    const response = await prtlFetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/edit`, {
+    const response = await nibFetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/edit`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(edit)
@@ -1318,7 +1303,6 @@ function ProjectViewer({
     if (!drag) return;
     event.currentTarget.releasePointerCapture(event.pointerId);
     const delta = event.clientY - drag.startY;
-    const currentOffset = Math.min(drag.maxOffset, Math.max(0, drag.startOffset + delta));
     const nextCollapsed = drag.moved ? delta > 10 : !sheetCollapsed;
     const nextOffset = nextCollapsed ? drag.maxOffset : 0;
     sheetDrag.current = null;
@@ -1597,7 +1581,7 @@ function useNativeWebViewSlot(options: NativeWebViewSlotOptions) {
 }
 
 interface TargetEditMessage {
-  type: "prtl.target.edit";
+  type: "nib.target.edit";
   targetId: string;
   selector: string;
   tagName: string;
@@ -1608,10 +1592,10 @@ interface TargetEditMessage {
 function normalizeTargetEditMessage(value: unknown): TargetEditMessage | null {
   if (!value || typeof value !== "object") return null;
   const message = value as Partial<TargetEditMessage>;
-  if (message.type !== "prtl.target.edit") return null;
+  if (message.type !== "nib.target.edit") return null;
   if (typeof message.targetId !== "string" || typeof message.after !== "string") return null;
   return {
-    type: "prtl.target.edit",
+    type: "nib.target.edit",
     targetId: message.targetId,
     selector: typeof message.selector === "string" ? message.selector : "",
     tagName: typeof message.tagName === "string" ? message.tagName : "unknown",
@@ -1623,28 +1607,28 @@ function normalizeTargetEditMessage(value: unknown): TargetEditMessage | null {
 function installEditableTargetBridge(targetWindow: Window | null, doc: Document): void {
   if (!targetWindow || !doc.body) throw new Error("Target frame is not ready");
   const root = doc.documentElement;
-  if (root.dataset.prtlEditableInstalled === "1") return;
-  root.dataset.prtlEditableInstalled = "1";
+  if (root.dataset.nibEditableInstalled === "1") return;
+  root.dataset.nibEditableInstalled = "1";
   const script = doc.createElement("script");
-  script.id = "prtl-editable-script";
+  script.id = "nib-editable-script";
   script.textContent = `(${editableTargetScript.toString()})();`;
   (doc.body ?? doc.documentElement).appendChild(script);
 }
 
 function editableTargetScript() {
-  const editableWindow = window as Window & { __prtlEditableInstalled?: boolean };
-  if (editableWindow.__prtlEditableInstalled) return;
-  editableWindow.__prtlEditableInstalled = true;
+  const editableWindow = window as Window & { __nibEditableInstalled?: boolean };
+  if (editableWindow.__nibEditableInstalled) return;
+  editableWindow.__nibEditableInstalled = true;
 
   const style = document.createElement("style");
-  style.id = "prtl-editable-style";
+  style.id = "nib-editable-style";
   style.textContent = `
-    [data-prtl-edit-id] {
+    [data-nib-edit-id] {
       outline: 1px dashed rgba(79, 140, 255, 0.48);
       outline-offset: 2px;
       cursor: text !important;
     }
-    [data-prtl-edit-id]:focus {
+    [data-nib-edit-id]:focus {
       outline: 2px solid rgba(79, 140, 255, 0.92);
       background-color: rgba(79, 140, 255, 0.08);
     }
@@ -1664,35 +1648,35 @@ function editableTargetScript() {
     if (editable.closest("script, style, svg, canvas, input, textarea, select")) return;
     const text = normalizeEditText(editable.textContent ?? "");
     if (!text) return;
-    editable.dataset.prtlEditId ||= `edit-${index}`;
-    editable.dataset.prtlOriginal ??= text;
+    editable.dataset.nibEditId ||= `edit-${index}`;
+    editable.dataset.nibOriginal ??= text;
     editable.setAttribute("contenteditable", "plaintext-only");
     editable.setAttribute("spellcheck", "false");
   });
 
   function editableFromEvent(event: Event): HTMLElement | null {
     const target = event.target as { closest?: (selector: string) => Element | null } | null;
-    return (typeof target?.closest === "function" ? target.closest("[data-prtl-edit-id]") : null) as HTMLElement | null;
+    return (typeof target?.closest === "function" ? target.closest("[data-nib-edit-id]") : null) as HTMLElement | null;
   }
 
   function flush(element: HTMLElement): void {
-    const targetId = element.dataset.prtlEditId ?? "unknown";
-    const before = element.dataset.prtlOriginal ?? "";
+    const targetId = element.dataset.nibEditId ?? "unknown";
+    const before = element.dataset.nibOriginal ?? "";
     const after = normalizeEditText(element.textContent ?? "");
     if (before === after) return;
     window.parent.postMessage({
-      type: "prtl.target.edit",
+      type: "nib.target.edit",
       targetId,
       selector: targetSelector(element),
       tagName: element.tagName.toLowerCase(),
       before,
       after
     }, "*");
-    element.dataset.prtlOriginal = after;
+    element.dataset.nibOriginal = after;
   }
 
   function scheduleFlush(element: HTMLElement): void {
-    const targetId = element.dataset.prtlEditId ?? "unknown";
+    const targetId = element.dataset.nibEditId ?? "unknown";
     const existing = timers.get(targetId);
     if (existing) window.clearTimeout(existing);
     timers.set(targetId, window.setTimeout(() => flush(element), 350));
@@ -1726,9 +1710,9 @@ function editableTargetScript() {
       };
       const element =
         typeof node.closest === "function"
-          ? node.closest("[data-prtl-edit-id]")
+          ? node.closest("[data-nib-edit-id]")
           : node.parentElement && typeof node.parentElement.closest === "function"
-            ? node.parentElement.closest("[data-prtl-edit-id]")
+            ? node.parentElement.closest("[data-nib-edit-id]")
             : null;
       if (element) scheduleFlush(element as HTMLElement);
     }
@@ -1792,20 +1776,20 @@ function FeedbackSurfaceFrame({ request, nativeMode, onCapture, onSubmit }: Feed
       if (!frameRef.current?.contentWindow || event.source !== frameRef.current.contentWindow) return;
       const message = normalizeFeedbackSurfaceMessage(event.data);
       if (!message) return;
-      if (message.type === "prtl.feedback.ready") {
+      if (message.type === "nib.feedback.ready") {
         setReady(true);
         if (message.height) setHeight(clampFeedbackSurfaceHeight(message.height));
         return;
       }
-      if (message.type === "prtl.feedback.resize") {
+      if (message.type === "nib.feedback.resize") {
         if (message.height) setHeight(clampFeedbackSurfaceHeight(message.height));
         return;
       }
-      if (message.type === "prtl.feedback.capture") {
+      if (message.type === "nib.feedback.capture") {
         onCapture();
         return;
       }
-      if (message.type === "prtl.feedback.submit") {
+      if (message.type === "nib.feedback.submit") {
         onSubmit({
           kind: normalizeFeedbackKind(message.kind),
           text: message.text || message.choice || "Feedback submitted",
@@ -1835,7 +1819,7 @@ function FeedbackSurfaceFrame({ request, nativeMode, onCapture, onSubmit }: Feed
       <iframe
         ref={frameRef}
         title={surface.title ?? request.prompt}
-        srcDoc={withPrtlFeedbackBridge(surface.html)}
+        srcDoc={withNibFeedbackBridge(surface.html)}
         sandbox="allow-scripts allow-forms"
         style={{ height }}
       />
@@ -1843,17 +1827,17 @@ function FeedbackSurfaceFrame({ request, nativeMode, onCapture, onSubmit }: Feed
   );
 }
 
-function withPrtlFeedbackBridge(html: string): string {
-  const bridge = `<script id="prtl-feedback-bridge">
+function withNibFeedbackBridge(html: string): string {
+  const bridge = `<script id="nib-feedback-bridge">
 (() => {
-  if (window.prtl && window.prtl.feedback) return;
+  if (window.nib && window.nib.feedback) return;
   const send = (message) => window.parent.postMessage(message, "*");
-  window.prtl = Object.assign(window.prtl || {}, {
+  window.nib = Object.assign(window.nib || {}, {
     feedback: {
-      ready: (detail = {}) => send({ type: "prtl.feedback.ready", ...detail }),
-      resize: (height) => send({ type: "prtl.feedback.resize", height }),
-      capture: () => send({ type: "prtl.feedback.capture" }),
-      submit: (payload = {}) => send({ type: "prtl.feedback.submit", ...payload })
+      ready: (detail = {}) => send({ type: "nib.feedback.ready", ...detail }),
+      resize: (height) => send({ type: "nib.feedback.resize", height }),
+      capture: () => send({ type: "nib.feedback.capture" }),
+      submit: (payload = {}) => send({ type: "nib.feedback.submit", ...payload })
     }
   });
 })();
@@ -1875,7 +1859,7 @@ interface FeedbackSurfaceMessage {
 function normalizeFeedbackSurfaceMessage(value: unknown): FeedbackSurfaceMessage | null {
   if (!value || typeof value !== "object" || !("type" in value)) return null;
   const message = value as FeedbackSurfaceMessage;
-  if (typeof message.type !== "string" || !message.type.startsWith("prtl.feedback.")) return null;
+  if (typeof message.type !== "string" || !message.type.startsWith("nib.feedback.")) return null;
   return message;
 }
 

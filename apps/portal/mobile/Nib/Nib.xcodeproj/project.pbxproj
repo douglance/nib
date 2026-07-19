@@ -7,34 +7,34 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0D634CFDB89A891F5ECA8629 /* PrtlWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8014E0F538E745EB43F27DF4 /* PrtlWatchApp.swift */; };
-		234F7E55CC4D29EC6662165D /* PrtlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E32DC3A92E4940C9112DA5F /* PrtlClient.swift */; };
-		572C4400F7EA8F3945B2AE68 /* PrtlModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 357B0B956B747E29D89A7CBF /* PrtlModels.swift */; };
-		741B6F1CFFBABBF6D958B5C2 /* PrtlApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 692963AFB66A0987CFCAEC13 /* PrtlApp.swift */; };
-		749FBFDEB6E95ED68ADBE955 /* PrtlModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 357B0B956B747E29D89A7CBF /* PrtlModels.swift */; };
-		C23E53942C5B5A7F650DFA09 /* PrtlNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81EEDB3B3BCC60327B941CA5 /* PrtlNotificationService.swift */; };
-		DD32FCB40608E2A12280DE1A /* PrtlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E32DC3A92E4940C9112DA5F /* PrtlClient.swift */; };
-		FA88E763D582D307E61C38D5 /* PrtlNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = CC35DE59443365D7DA3B31C3 /* PrtlNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		37F822AF467694674AC36EA1 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
+		4B438EC7D7A3493230078A0F /* NibNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		8BEA52BEE9EDD618F946DE28 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
+		8E9478F05C959AB8BAD64249 /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
+		CA1430F5410E7E744F84DB92 /* NibWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */; };
+		E253523F19968EEF08FEA4C4 /* NibApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71EE9945059B827CA14650BA /* NibApp.swift */; };
+		F240C4B0F79FC092B68766D8 /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
+		FD0C0CA9CB4F264679BABDC9 /* NibNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		223DE71FC38E92EAA88229FA /* PBXContainerItemProxy */ = {
+		6785C00143E26B4442C48ED1 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
-			containerPortal = 283C1FDD74712C8B25A77BBF /* Project object */;
+			containerPortal = DE190AA07A7FBA8D7BC434E9 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = 2D0AE74838AEB3AFA06C176B;
-			remoteInfo = PrtlNotificationService;
+			remoteGlobalIDString = 9982A9051D627A814D37131A;
+			remoteInfo = NibNotificationService;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-		19F89B3CD4580FEF387DCE59 /* Embed Foundation Extensions */ = {
+		D383732B9572964C7F01868A /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				FA88E763D582D307E61C38D5 /* PrtlNotificationService.appex in Embed Foundation Extensions */,
+				4B438EC7D7A3493230078A0F /* NibNotificationService.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -42,247 +42,215 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		12EEAA98F8BD0B996A30F7AE /* Prtl.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Prtl.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		1398D166E8A2E6B7B6859065 /* PrtlWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PrtlWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		357B0B956B747E29D89A7CBF /* PrtlModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrtlModels.swift; sourceTree = "<group>"; };
-		5E32DC3A92E4940C9112DA5F /* PrtlClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrtlClient.swift; sourceTree = "<group>"; };
-		692963AFB66A0987CFCAEC13 /* PrtlApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrtlApp.swift; sourceTree = "<group>"; };
-		8014E0F538E745EB43F27DF4 /* PrtlWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrtlWatchApp.swift; sourceTree = "<group>"; };
-		81EEDB3B3BCC60327B941CA5 /* PrtlNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrtlNotificationService.swift; sourceTree = "<group>"; };
-		CC35DE59443365D7DA3B31C3 /* PrtlNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = PrtlNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		07765833BEFC7FA59A4738B2 /* NibClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibClient.swift; sourceTree = "<group>"; };
+		1461BAB1131EA851E89E5D76 /* NibModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibModels.swift; sourceTree = "<group>"; };
+		2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibNotificationService.swift; sourceTree = "<group>"; };
+		336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = NibNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		52933EB23EA0231EF0204C9E /* NibWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NibWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6B7405E10F9BFBDBF72AC385 /* Nib.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Nib.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		71EE9945059B827CA14650BA /* NibApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibApp.swift; sourceTree = "<group>"; };
+		A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibWatchApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
-		328CFD649C6095C47DB4869F /* Sources */ = {
+		27B2721DA17FDD6803048B2B /* Sources */ = {
 			isa = PBXGroup;
 			children = (
-				692963AFB66A0987CFCAEC13 /* PrtlApp.swift */,
-				5E32DC3A92E4940C9112DA5F /* PrtlClient.swift */,
-				357B0B956B747E29D89A7CBF /* PrtlModels.swift */,
-				81EEDB3B3BCC60327B941CA5 /* PrtlNotificationService.swift */,
-				8014E0F538E745EB43F27DF4 /* PrtlWatchApp.swift */,
+				71EE9945059B827CA14650BA /* NibApp.swift */,
+				07765833BEFC7FA59A4738B2 /* NibClient.swift */,
+				1461BAB1131EA851E89E5D76 /* NibModels.swift */,
+				2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */,
+				A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
 		};
-		7CA0BC05FC3DF553DF3ACC5F = {
+		3C409D27FA4E25C19389555F /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				328CFD649C6095C47DB4869F /* Sources */,
-				DFF25047318CE9947B54D20B /* Products */,
-			);
-			sourceTree = "<group>";
-		};
-		DFF25047318CE9947B54D20B /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				12EEAA98F8BD0B996A30F7AE /* Prtl.app */,
-				CC35DE59443365D7DA3B31C3 /* PrtlNotificationService.appex */,
-				1398D166E8A2E6B7B6859065 /* PrtlWatch.app */,
+				6B7405E10F9BFBDBF72AC385 /* Nib.app */,
+				336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */,
+				52933EB23EA0231EF0204C9E /* NibWatch.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		58251BB91F1BCC484FBC9342 = {
+			isa = PBXGroup;
+			children = (
+				27B2721DA17FDD6803048B2B /* Sources */,
+				3C409D27FA4E25C19389555F /* Products */,
+			);
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		2D0AE74838AEB3AFA06C176B /* PrtlNotificationService */ = {
+		9982A9051D627A814D37131A /* NibNotificationService */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 1C44A546A4B3FA263A6BED7F /* Build configuration list for PBXNativeTarget "PrtlNotificationService" */;
+			buildConfigurationList = 88218B242E9D49980E925E08 /* Build configuration list for PBXNativeTarget "NibNotificationService" */;
 			buildPhases = (
-				71CCEB677AC1A8F4C35BA8DF /* Sources */,
+				9F10BB3E63C7A2AF7206C082 /* Sources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = PrtlNotificationService;
+			name = NibNotificationService;
 			packageProductDependencies = (
 			);
-			productName = PrtlNotificationService;
-			productReference = CC35DE59443365D7DA3B31C3 /* PrtlNotificationService.appex */;
+			productName = NibNotificationService;
+			productReference = 336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
-		A119FC20976D72B86A535C19 /* Prtl */ = {
+		C15769AED6F15C320C8DC4B3 /* Nib */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = F47B9F8A291D013A9F2E98C1 /* Build configuration list for PBXNativeTarget "Prtl" */;
+			buildConfigurationList = 1359862000C9CB3750885AD8 /* Build configuration list for PBXNativeTarget "Nib" */;
 			buildPhases = (
-				DC2C65BAEE8960AB28F2EA2D /* Sources */,
-				19F89B3CD4580FEF387DCE59 /* Embed Foundation Extensions */,
+				CFD6067CD8549F2097C3AE7E /* Sources */,
+				D383732B9572964C7F01868A /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				A1AD7A0A4B370A662DEE7ED9 /* PBXTargetDependency */,
+				3D86699877AD2B690B442A76 /* PBXTargetDependency */,
 			);
-			name = Prtl;
+			name = Nib;
 			packageProductDependencies = (
 			);
-			productName = Prtl;
-			productReference = 12EEAA98F8BD0B996A30F7AE /* Prtl.app */;
+			productName = Nib;
+			productReference = 6B7405E10F9BFBDBF72AC385 /* Nib.app */;
 			productType = "com.apple.product-type.application";
 		};
-		C713D765F48237088FA94B69 /* PrtlWatch */ = {
+		E8F5C2720E0225B25CC638C0 /* NibWatch */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = C7E9B5F92227613155BD1DC3 /* Build configuration list for PBXNativeTarget "PrtlWatch" */;
+			buildConfigurationList = EF2E5AF735A0ED33BBC9C7DF /* Build configuration list for PBXNativeTarget "NibWatch" */;
 			buildPhases = (
-				E372495D15BA0F70DA8C6A54 /* Sources */,
+				44EF127FE4FB47F34890A255 /* Sources */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = PrtlWatch;
+			name = NibWatch;
 			packageProductDependencies = (
 			);
-			productName = PrtlWatch;
-			productReference = 1398D166E8A2E6B7B6859065 /* PrtlWatch.app */;
+			productName = NibWatch;
+			productReference = 52933EB23EA0231EF0204C9E /* NibWatch.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		283C1FDD74712C8B25A77BBF /* Project object */ = {
+		DE190AA07A7FBA8D7BC434E9 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
-					2D0AE74838AEB3AFA06C176B = {
+					9982A9051D627A814D37131A = {
 						DevelopmentTeam = "";
 					};
-					A119FC20976D72B86A535C19 = {
+					C15769AED6F15C320C8DC4B3 = {
 						DevelopmentTeam = "";
 					};
-					C713D765F48237088FA94B69 = {
+					E8F5C2720E0225B25CC638C0 = {
 						DevelopmentTeam = "";
 					};
 				};
 			};
-			buildConfigurationList = 8F3B9A2DF1606AF12FDA5205 /* Build configuration list for PBXProject "Prtl" */;
+			buildConfigurationList = 0CED075021F6DBA547911651 /* Build configuration list for PBXProject "Nib" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				Base,
 				en,
 			);
-			mainGroup = 7CA0BC05FC3DF553DF3ACC5F;
+			mainGroup = 58251BB91F1BCC484FBC9342;
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
-			productRefGroup = DFF25047318CE9947B54D20B /* Products */;
+			productRefGroup = 3C409D27FA4E25C19389555F /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				A119FC20976D72B86A535C19 /* Prtl */,
-				2D0AE74838AEB3AFA06C176B /* PrtlNotificationService */,
-				C713D765F48237088FA94B69 /* PrtlWatch */,
+				C15769AED6F15C320C8DC4B3 /* Nib */,
+				9982A9051D627A814D37131A /* NibNotificationService */,
+				E8F5C2720E0225B25CC638C0 /* NibWatch */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXSourcesBuildPhase section */
-		71CCEB677AC1A8F4C35BA8DF /* Sources */ = {
+		44EF127FE4FB47F34890A255 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				C23E53942C5B5A7F650DFA09 /* PrtlNotificationService.swift in Sources */,
+				8E9478F05C959AB8BAD64249 /* NibClient.swift in Sources */,
+				37F822AF467694674AC36EA1 /* NibModels.swift in Sources */,
+				CA1430F5410E7E744F84DB92 /* NibWatchApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		DC2C65BAEE8960AB28F2EA2D /* Sources */ = {
+		9F10BB3E63C7A2AF7206C082 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				741B6F1CFFBABBF6D958B5C2 /* PrtlApp.swift in Sources */,
-				234F7E55CC4D29EC6662165D /* PrtlClient.swift in Sources */,
-				749FBFDEB6E95ED68ADBE955 /* PrtlModels.swift in Sources */,
+				FD0C0CA9CB4F264679BABDC9 /* NibNotificationService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		E372495D15BA0F70DA8C6A54 /* Sources */ = {
+		CFD6067CD8549F2097C3AE7E /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				DD32FCB40608E2A12280DE1A /* PrtlClient.swift in Sources */,
-				572C4400F7EA8F3945B2AE68 /* PrtlModels.swift in Sources */,
-				0D634CFDB89A891F5ECA8629 /* PrtlWatchApp.swift in Sources */,
+				E253523F19968EEF08FEA4C4 /* NibApp.swift in Sources */,
+				F240C4B0F79FC092B68766D8 /* NibClient.swift in Sources */,
+				8BEA52BEE9EDD618F946DE28 /* NibModels.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		A1AD7A0A4B370A662DEE7ED9 /* PBXTargetDependency */ = {
+		3D86699877AD2B690B442A76 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 2D0AE74838AEB3AFA06C176B /* PrtlNotificationService */;
-			targetProxy = 223DE71FC38E92EAA88229FA /* PBXContainerItemProxy */;
+			target = 9982A9051D627A814D37131A /* NibNotificationService */;
+			targetProxy = 6785C00143E26B4442C48ED1 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
-		0B622DCDC6439E6959F235AD /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				INFOPLIST_FILE = "PrtlNotificationService-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = app.vmux.remotesigner.NotificationService;
-				SDKROOT = iphoneos;
-				SKIP_INSTALL = YES;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Release;
-		};
-		0F961C7E79074F2DD285CCA5 /* Release */ = {
+		4F3633DFC3A98AB4A665EB53 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = PrtlWatch.entitlements;
-				INFOPLIST_FILE = "PrtlWatch-Info.plist";
-				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.prtl.watchkitapp;
+				CODE_SIGN_ENTITLEMENTS = NibWatch.entitlements;
+				INFOPLIST_FILE = "NibWatch-Info.plist";
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib.watchkitapp;
 				SDKROOT = watchos;
 				SKIP_INSTALL = YES;
 				TARGETED_DEVICE_FAMILY = 4;
 			};
-			name = Release;
+			name = Debug;
 		};
-		3F22F7587063AAB57D5882D2 /* Release */ = {
+		51354063BCD8539DDCCC302B /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Prtl.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Nib.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				INFOPLIST_FILE = "Prtl-Info.plist";
+				INFOPLIST_FILE = "Nib-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = app.vmux.remotesigner;
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
-		A8B77CE6D8EC96CE356A2EB0 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				INFOPLIST_FILE = "PrtlNotificationService-Info.plist";
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@executable_path/../../Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = app.vmux.remotesigner.NotificationService;
-				SDKROOT = iphoneos;
-				SKIP_INSTALL = YES;
-				TARGETED_DEVICE_FAMILY = "1,2";
-			};
-			name = Debug;
-		};
-		ADE13E597F5F0FE5FEADE3A5 /* Release */ = {
+		6B1A84871DD3A3777E5BFFC8 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -341,37 +309,56 @@
 			};
 			name = Release;
 		};
-		BD071A146DC96563CCD6B9FA /* Debug */ = {
+		9A32E55E9ECBCBC750C42252 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = PrtlWatch.entitlements;
-				INFOPLIST_FILE = "PrtlWatch-Info.plist";
-				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.prtl.watchkitapp;
-				SDKROOT = watchos;
+				INFOPLIST_FILE = "NibNotificationService-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib.NotificationService;
+				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
-				TARGETED_DEVICE_FAMILY = 4;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
-		E8BF1DB608A43B7303A62176 /* Debug */ = {
+		B6E0116376357E15C55867A6 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Prtl.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Nib.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
-				INFOPLIST_FILE = "Prtl-Info.plist";
+				INFOPLIST_FILE = "Nib-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = app.vmux.remotesigner;
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib;
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
-		F5BB0B837D515EAEE964DE44 /* Debug */ = {
+		BDD3BA802813B51F30E01819 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = "NibNotificationService-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib.NotificationService;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		DE43AA37DAD54A200810DB03 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -437,46 +424,59 @@
 			};
 			name = Debug;
 		};
+		E20754C5F394051509995A18 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = NibWatch.entitlements;
+				INFOPLIST_FILE = "NibWatch-Info.plist";
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib.watchkitapp;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		1C44A546A4B3FA263A6BED7F /* Build configuration list for PBXNativeTarget "PrtlNotificationService" */ = {
+		0CED075021F6DBA547911651 /* Build configuration list for PBXProject "Nib" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				A8B77CE6D8EC96CE356A2EB0 /* Debug */,
-				0B622DCDC6439E6959F235AD /* Release */,
+				DE43AA37DAD54A200810DB03 /* Debug */,
+				6B1A84871DD3A3777E5BFFC8 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		8F3B9A2DF1606AF12FDA5205 /* Build configuration list for PBXProject "Prtl" */ = {
+		1359862000C9CB3750885AD8 /* Build configuration list for PBXNativeTarget "Nib" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				F5BB0B837D515EAEE964DE44 /* Debug */,
-				ADE13E597F5F0FE5FEADE3A5 /* Release */,
+				B6E0116376357E15C55867A6 /* Debug */,
+				51354063BCD8539DDCCC302B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		C7E9B5F92227613155BD1DC3 /* Build configuration list for PBXNativeTarget "PrtlWatch" */ = {
+		88218B242E9D49980E925E08 /* Build configuration list for PBXNativeTarget "NibNotificationService" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				BD071A146DC96563CCD6B9FA /* Debug */,
-				0F961C7E79074F2DD285CCA5 /* Release */,
+				9A32E55E9ECBCBC750C42252 /* Debug */,
+				BDD3BA802813B51F30E01819 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
-		F47B9F8A291D013A9F2E98C1 /* Build configuration list for PBXNativeTarget "Prtl" */ = {
+		EF2E5AF735A0ED33BBC9C7DF /* Build configuration list for PBXNativeTarget "NibWatch" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				E8BF1DB608A43B7303A62176 /* Debug */,
-				3F22F7587063AAB57D5882D2 /* Release */,
+				4F3633DFC3A98AB4A665EB53 /* Debug */,
+				E20754C5F394051509995A18 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = 283C1FDD74712C8B25A77BBF /* Project object */;
+	rootObject = DE190AA07A7FBA8D7BC434E9 /* Project object */;
 }

@@ -4,13 +4,13 @@
 panes is blocked waiting for human input (plan-approval gates, "Enter to select" menus,
 confirm prompts), plus a generic trigger so any agent/script can push me too.
 
-## What already exists in prtl (DO NOT rebuild)
+## What already exists in nib (DO NOT rebuild)
 
-prtl is already a PWA with a **complete web-push pipeline**, served over HTTPS via Tailscale
-(`PUBLIC_BASE_URL = https://doug-mm.tail5d92b4.ts.net`, `serve:tailscale` = `tailscale serve --bg 4070`),
+nib is already a PWA with a **complete web-push pipeline**, served over HTTPS via Tailscale
+(`PUBLIC_BASE_URL = https://dave.tail5d92b4.ts.net`, `serve:tailscale` = `tailscale serve --bg http://127.0.0.1:4070`),
 so push to the phone works today. Reuse all of it:
 
-- `src/server/notifications.ts` — VAPID keygen/persist (`.prtl/push.json`), `subscribeNotifications`,
+- `src/server/notifications.ts` — VAPID keygen/persist (`.nib/push.json`), `subscribeNotifications`,
   `unsubscribeNotifications`, **`sendPushPayload(payload)`** (generic: loops all subs, prunes 404/410),
   `notificationStatus`. The payload shape is already free-form `{type,title,body,url,createdAt,...}`.
 - `src/server/index.ts` — routes `/api/notifications/{vapid-public-key,status,subscribe,unsubscribe,test}`
@@ -32,8 +32,8 @@ project becomes redundant once this lands and can be deleted separately (not in 
 ## Design
 
 Three additions, all riding the existing `sendPushPayload`:
-1. **Generic push trigger** — `POST /api/notify` + `prtl notify` CLI (smallest useful win; lets anything ping me).
-2. **tmux waiting-watcher** — opt-in producer (`prtl watch`) that detects blocked panes and calls the trigger.
+1. **Generic push trigger** — `POST /api/notify` + `nib notify` CLI (smallest useful win; lets anything ping me).
+2. **tmux waiting-watcher** — opt-in producer (`nib watch`) that detects blocked panes and calls the trigger.
 3. **Waiting surface** — `GET /api/waiting` snapshot + a small panel in the portal, and `sw.js` support for the generic payload.
 
 Keys: PORT 4070, session `0`, dev `npm run server` (tsx) / `NODE_ENV=production npm run preview`.
@@ -55,7 +55,7 @@ choice + a question). NOT waiting: actively working (`Working (`, `Analyzing…`
 
 **Verify (CODE TEST):**
 ```
-cd /Users/douglance/Developer/lv/prtl
+cd /Users/douglance/Developer/lv/nib
 npx tsx src/server/waiting/detect.test.ts   # prints "ok 9/9", exit 0
 npm run typecheck                            # tsc --noEmit stays green
 ```
@@ -90,7 +90,7 @@ PORT=4070 npm run server &        # tsx src/server/index.ts
 sleep 2
 curl -s -XPOST localhost:4070/api/notify -H 'content-type: application/json' \
   -d '{"title":"t","body":"b"}'   # -> {"sent":N} (N=0 with no device, no crash)
-prtl notify --title t --body b     # -> { sent: N }
+nib notify --title t --body b     # -> { sent: N }
 npm run typecheck
 ```
 
@@ -102,18 +102,18 @@ npm run typecheck
 
 - **Edit** `public/sw.js` `push` handler so non-feedback payloads (`type: "notice"|"waiting"`) use
   `data.tag` (distinct per source so multiple waiting alerts don't collapse), `data.url`,
-  `requireInteraction`/`renotify` from data, and the prtl icon. Keep the existing feedback branch
-  (`data.feedbackId`) unchanged. Bump `CACHE_NAME` to `prtl-shell-v4`.
+  `requireInteraction`/`renotify` from data, and the nib icon. Keep the existing feedback branch
+  (`data.feedbackId`) unchanged. Bump `CACHE_NAME` to `nib-shell-v4`.
 
 **Verify (CODE TEST):**
 ```
 node --check public/sw.js                     # syntax ok
 # agent-browser (per AGENTS.md dev workflow):
-agent-browser open https://doug-mm.tail5d92b4.ts.net
+agent-browser open https://dave.tail5d92b4.ts.net
 agent-browser eval "navigator.serviceWorker.getRegistration().then(r=>r&&r.active&&r.active.state)"  # "activated"
-agent-browser eval "caches.keys()"            # includes "prtl-shell-v4"
+agent-browser eval "caches.keys()"            # includes "nib-shell-v4"
 ```
-Then end-to-end: with the phone subscribed, `prtl notify --title hi --body works` → notification on lock screen.
+Then end-to-end: with the phone subscribed, `nib notify --title hi --body works` → notification on lock screen.
 
 **out_of_scope:** don't change `fetch`/`activate` caching beyond the version bump.
 
@@ -133,13 +133,13 @@ Then end-to-end: with the phone subscribed, `prtl notify --title hi --body works
 - **Edit** `src/cli/index.ts` — add `watch` command: `options: { session=default "0", interval=default 20000,
   once?: boolean, json?: boolean }`. `--once` scans a single pass; `--once --json` prints the detected
   waiting panes and exits WITHOUT pushing (dry detection); plain `watch` runs the loop and pushes.
-- Document a launchd/tmux-tab way to keep `prtl watch` running (mirror `scripts/install-launchd.sh`); not required for this plan.
+- Document a launchd/tmux-tab way to keep `nib watch` running (mirror `scripts/install-launchd.sh`); not required for this plan.
 
 **Verify (CODE TEST):** (run against the live session `0`, which has known blocked panes)
 ```
-prtl watch --session 0 --once --json
+nib watch --session 0 --once --json
 # -> JSON array of currently-waiting panes; asserts ≥1 (e.g. plan-approval panes 1.1/1.2/3.1/4.1, menu 5.1)
-prtl watch --session 0 --once          # actually pushes; prints { notified: M }
+nib watch --session 0 --once          # actually pushes; prints { notified: M }
 ```
 
 **out_of_scope:** do NOT auto-start the scanner inside the always-on server (opt-in only, no surprise
@@ -158,7 +158,7 @@ background scanning); tmux via `child_process` only; idle empty-`❯` panes neve
 ```
 curl -s localhost:4070/api/waiting              # JSON array (or [])
 npm run build                                   # typecheck + vite build succeeds
-agent-browser open https://doug-mm.tail5d92b4.ts.net
+agent-browser open https://dave.tail5d92b4.ts.net
 agent-browser snapshot                          # the "Waiting" panel renders
 ```
 
@@ -170,9 +170,9 @@ agent-browser snapshot                          # the "Waiting" panel renders
 
 - Reuse the existing VAPID/subscribe/`sendPushPayload`/manifest/icons — do not reimplement push core.
 - Do not modify feedback-request notification behavior (`sendFeedbackNotification`, feedback payload/tags).
-- Do not auto-run the tmux scanner from the default server; it is opt-in via `prtl watch`.
+- Do not auto-run the tmux scanner from the default server; it is opt-in via `nib watch`.
 - Notify on strong selection/confirm gates only (the Step-1 classifier); never on idle empty prompts.
-- No new heavy deps, no DB, no auth layer. Don't touch `native/` (zig), Tailscale config, launchd defaults, or any repo outside `/Users/douglance/Developer/lv/prtl`.
+- No new heavy deps, no DB, no auth layer. Don't touch `native/` (zig), Tailscale config, launchd defaults, or any repo outside `/Users/douglance/Developer/lv/nib`.
 - Keep `npm run typecheck` green at every step; keep diffs surgical.
 
-## Done = all five verify blocks pass + one real push lands on the phone from `prtl notify` and from a live blocked pane via `prtl watch`.
+## Done = all five verify blocks pass + one real push lands on the phone from `nib notify` and from a live blocked pane via `nib watch`.

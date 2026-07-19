@@ -372,8 +372,8 @@ async function sendTmuxResponse(session: string, paneId: string, request: Reques
     return;
   }
   if (response.text.trim()) {
-    await execFileAsync("tmux", ["set-buffer", "-b", "prtl-response", response.text]);
-    await execFileAsync("tmux", ["paste-buffer", "-b", "prtl-response", "-t", target]);
+    await execFileAsync("tmux", ["set-buffer", "-b", "nib-response", response.text]);
+    await execFileAsync("tmux", ["paste-buffer", "-b", "nib-response", "-t", target]);
     await execFileAsync("tmux", ["send-keys", "-t", target, "Enter"]);
     return;
   }

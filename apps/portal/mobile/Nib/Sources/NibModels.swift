@@ -1,6 +1,6 @@
 import Foundation
 
-struct PrtlRequest: Identifiable, Codable, Hashable {
+struct NibRequest: Identifiable, Codable, Hashable {
     struct Target: Codable, Hashable {
         var projectId: String?
         var projectName: String?
@@ -60,7 +60,7 @@ struct PrtlRequest: Identifiable, Codable, Hashable {
     }
 }
 
-struct PrtlDevice: Identifiable, Codable, Hashable {
+struct NibDevice: Identifiable, Codable, Hashable {
     var id: String
     var name: String
     var platform: String
@@ -73,11 +73,11 @@ struct PrtlDevice: Identifiable, Codable, Hashable {
     var updatedAt: String
 }
 
-struct PrtlDevicesResponse: Codable {
-    var devices: [PrtlDevice]
+struct NibDevicesResponse: Codable {
+    var devices: [NibDevice]
 }
 
-struct PrtlNotificationStatus: Codable, Hashable {
+struct NibNotificationStatus: Codable, Hashable {
     var subscriptionCount: Int
     var deviceCount: Int
     var webPushDeviceCount: Int?
@@ -95,14 +95,14 @@ struct PrtlNotificationStatus: Codable, Hashable {
     var nativeReady: Bool?
 }
 
-struct PrtlNotificationTestResult: Codable, Hashable {
+struct NibNotificationTestResult: Codable, Hashable {
     var sent: Int
     var requestId: String?
     var feedbackId: String?
     var type: String
 }
 
-struct PrtlActivityEvent: Identifiable, Codable, Hashable {
+struct NibActivityEvent: Identifiable, Codable, Hashable {
     var id: String
     var projectId: String?
     var kind: String
@@ -110,7 +110,7 @@ struct PrtlActivityEvent: Identifiable, Codable, Hashable {
     var createdAt: String
 }
 
-struct PrtlWaitingPane: Identifiable, Codable, Hashable {
+struct NibWaitingPane: Identifiable, Codable, Hashable {
     var session: String
     var paneId: String
     var window: String
@@ -123,34 +123,34 @@ struct PrtlWaitingPane: Identifiable, Codable, Hashable {
     }
 }
 
-struct PrtlViewerState: Codable, Hashable {
+struct NibViewerState: Codable, Hashable {
     var drawer: String
     var activeTab: String
     var viewport: String
 }
 
-struct PrtlWorkspaceNote: Identifiable, Codable, Hashable {
+struct NibWorkspaceNote: Identifiable, Codable, Hashable {
     var id: String
     var text: String
     var createdAt: String
     var screenshotUrl: String?
 }
 
-struct PrtlProjectWorkspace: Codable, Hashable {
+struct NibProjectWorkspace: Codable, Hashable {
     var projectId: String
-    var notes: [PrtlWorkspaceNote]
-    var viewer: PrtlViewerState
+    var notes: [NibWorkspaceNote]
+    var viewer: NibViewerState
     var updatedAt: String
 }
 
-struct PrtlCommandPreset: Identifiable, Codable, Hashable {
+struct NibCommandPreset: Identifiable, Codable, Hashable {
     var id: String
     var label: String
     var command: String
     var cwd: String?
 }
 
-struct PrtlCommandRun: Identifiable, Codable, Hashable {
+struct NibCommandRun: Identifiable, Codable, Hashable {
     var id: String
     var projectId: String
     var command: String
@@ -165,16 +165,16 @@ struct PrtlCommandRun: Identifiable, Codable, Hashable {
     var stderrTail: String
 }
 
-struct PrtlCommandEvent: Codable, Hashable {
+struct NibCommandEvent: Codable, Hashable {
     var commandId: String
     var type: String
-    var data: PrtlCommandEventData
+    var data: NibCommandEventData
     var createdAt: String
 }
 
-enum PrtlCommandEventData: Codable, Hashable {
+enum NibCommandEventData: Codable, Hashable {
     case text(String)
-    case run(PrtlCommandRun)
+    case run(NibCommandRun)
     case message(String)
     case unknown
 
@@ -184,7 +184,7 @@ enum PrtlCommandEventData: Codable, Hashable {
             self = .text(text)
             return
         }
-        if let run = try? container.decode(PrtlCommandRun.self) {
+        if let run = try? container.decode(NibCommandRun.self) {
             self = .run(run)
             return
         }
@@ -211,11 +211,11 @@ enum PrtlCommandEventData: Codable, Hashable {
     }
 }
 
-struct PrtlProjectsResponse: Codable {
-    var projects: [PrtlProject]
+struct NibProjectsResponse: Codable {
+    var projects: [NibProject]
 }
 
-struct PrtlScreenshotInfo: Codable, Hashable {
+struct NibScreenshotInfo: Codable, Hashable {
     var viewport: String
     var url: String?
     var capturedAt: String?
@@ -224,17 +224,17 @@ struct PrtlScreenshotInfo: Codable, Hashable {
     var height: Int
 }
 
-struct PrtlCompatibilityInfo: Codable, Hashable {
+struct NibCompatibilityInfo: Codable, Hashable {
     var level: String
     var updatedAt: String
 }
 
-struct PrtlProjectScreenshotsResponse: Codable, Hashable {
+struct NibProjectScreenshotsResponse: Codable, Hashable {
     var projectId: String
-    var screenshots: [String: PrtlScreenshotInfo]
+    var screenshots: [String: NibScreenshotInfo]
 }
 
-struct PrtlRouteInfo: Codable, Hashable {
+struct NibRouteInfo: Codable, Hashable {
     var mode: String
     var url: String
     var available: Bool
@@ -243,13 +243,13 @@ struct PrtlRouteInfo: Codable, Hashable {
     var message: String?
 }
 
-struct PrtlKillResult: Codable, Hashable {
+struct NibKillResult: Codable, Hashable {
     var projectId: String
     var name: String
     var killed: Bool
 }
 
-struct PrtlProject: Identifiable, Codable, Hashable {
+struct NibProject: Identifiable, Codable, Hashable {
     var id: String
     var name: String
     var targetKind: String
@@ -265,9 +265,9 @@ struct PrtlProject: Identifiable, Codable, Hashable {
     var contentType: String?
     var openPath: String
     var directUrl: String
-    var routes: [String: PrtlRouteInfo]?
+    var routes: [String: NibRouteInfo]?
     var preferredRoute: String?
-    var compatibility: PrtlCompatibilityInfo?
+    var compatibility: NibCompatibilityInfo?
     var lastSeenAt: String?
-    var screenshots: [String: PrtlScreenshotInfo]?
+    var screenshots: [String: NibScreenshotInfo]?
 }

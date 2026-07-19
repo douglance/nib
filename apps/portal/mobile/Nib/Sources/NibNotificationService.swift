@@ -30,7 +30,7 @@ final class NotificationService: UNNotificationServiceExtension {
                 attachment: attachment
                ),
                let notificationAttachment = try? UNNotificationAttachment(
-                identifier: "prtl-rich-attachment",
+                identifier: "nib-rich-attachment",
                 url: localURL,
                 options: nil
                ) {
@@ -59,8 +59,8 @@ private struct RichAttachment {
 }
 
 private func richAttachment(from userInfo: [AnyHashable: Any]) -> RichAttachment? {
-    guard let prtl = userInfo["prtl"] as? [AnyHashable: Any],
-          let attachment = prtl["richAttachment"] as? [AnyHashable: Any],
+    guard let nib = userInfo["nib"] as? [AnyHashable: Any],
+          let attachment = nib["richAttachment"] as? [AnyHashable: Any],
           let rawURL = attachment["url"] as? String,
           let url = URL(string: rawURL) else {
         return nil

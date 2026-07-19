@@ -16,7 +16,7 @@ export function requestBuffer(url: URL, timeoutMs = 3000): Promise<Buffer> {
         method: "GET",
         timeout: timeoutMs,
         headers: {
-          "User-Agent": "prtl/0.1"
+          "User-Agent": "nib/0.1"
         }
       },
       (res) => {
@@ -41,7 +41,7 @@ export function probeHttp(url: URL, timeoutMs = 1500): Promise<ProbeResult> {
         timeout: timeoutMs,
         headers: {
           Accept: "text/html,*/*;q=0.8",
-          "User-Agent": "prtl/0.1"
+          "User-Agent": "nib/0.1"
         }
       },
       (res) => {

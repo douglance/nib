@@ -1,16 +1,11 @@
 {
-  "name": "prtl",
+  "name": "@douglance/nib-portal",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "bin": {
-    "prtl": "./bin/prtl"
-  },
   "scripts": {
     "dev": "node scripts/dev.mjs",
     "build": "npm run typecheck && vite build",
-    "build:cli": "npm run typecheck",
-    "cli": "bin/prtl",
     "test": "npm run test:server && npm run test:web",
     "test:server": "node --import tsx --test src/server/index.test.ts src/server/devices.test.ts src/server/requests.test.ts src/server/retention.test.ts src/server/notifications.test.ts src/server/waiting/detect.test.ts src/server/waiting/watcher.test.ts",
     "test:web": "node --test src/client/sw.test.mjs",
@@ -19,22 +14,16 @@
     "server": "tsx src/server/index.ts",
     "preview": "npm run build && NODE_ENV=production tsx src/server/index.ts",
     "mobile:build": "npm run mobile:build:ios && npm run mobile:build:watch",
-    "mobile:build:ios": "xcodebuild -project mobile/Prtl/Prtl.xcodeproj -scheme Prtl -destination 'generic/platform=iOS Simulator' build",
-    "mobile:build:watch": "xcodebuild -project mobile/Prtl/Prtl.xcodeproj -scheme PrtlWatch -destination 'generic/platform=watchOS Simulator' build",
-    "native:manifest": "node scripts/generate-native-manifest.mjs",
-    "native:doctor": "npm run native:manifest && node scripts/check-native-toolchain.mjs && cd native && ../node_modules/.bin/zero-native doctor --manifest app.zon --web-engine system",
-    "native:build": "npm run native:manifest && node scripts/check-native-toolchain.mjs && cd native && zig build -Dzero-native-path=../node_modules/zero-native",
-    "native:run": "npm run native:manifest && node scripts/check-native-toolchain.mjs && cd native && zig build run -Dzero-native-path=../node_modules/zero-native",
-    "serve:tailscale": "tailscale serve --bg 4070",
+    "mobile:build:ios": "xcodebuild -project mobile/Nib/Nib.xcodeproj -scheme Nib -destination 'generic/platform=iOS Simulator' build",
+    "mobile:build:watch": "xcodebuild -project mobile/Nib/Nib.xcodeproj -scheme NibWatch -destination 'generic/platform=watchOS Simulator' build",
+    "serve:tailscale": "tailscale serve --bg http://127.0.0.1:4070",
     "apns:configure": "bash scripts/configure-apns-env.sh",
-    "install:global": "bash scripts/install-global.sh",
     "launchd:install": "bash scripts/install-launchd.sh",
-    "launchd:uninstall": "launchctl bootout gui/$UID ~/Library/LaunchAgents/com.douglance.prtl.plist 2>/dev/null || true; rm -f ~/Library/LaunchAgents/com.douglance.prtl.plist"
+    "launchd:uninstall": "launchctl bootout gui/$UID ~/Library/LaunchAgents/com.douglance.nib.plist 2>/dev/null || true; rm -f ~/Library/LaunchAgents/com.douglance.nib.plist"
   },
   "dependencies": {
     "@types/web-push": "^3.6.4",
     "@vitejs/plugin-react": "^5.0.4",
-    "incur": "file:../incur",
     "lucide-react": "^0.542.0",
     "playwright": "^1.59.1",
     "react": "^19.2.0",
@@ -47,7 +36,6 @@
   "devDependencies": {
     "@types/node": "^24.6.0",
     "@types/react": "^19.2.2",
-    "@types/react-dom": "^19.2.2",
-    "zero-native": "^0.2.0"
+    "@types/react-dom": "^19.2.2"
   }
 }

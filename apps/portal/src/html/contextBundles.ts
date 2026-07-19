@@ -28,9 +28,9 @@ export async function buildHtmlContextBundle(kind: BundleKind, cwd: string): Pro
     discoverTestHints(root)
   ]);
   return [
-    `# Prtl ${titleCase(kind)} Context Bundle`,
+    `# Nib ${titleCase(kind)} Context Bundle`,
     "",
-    `Context for an existing agent/user-authored ${kind} HTML artifact. Prtl supplies the chrome, libraries, feedback bridge, screenshots, and exports; it does not generate the HTML.`,
+    `Context for an existing agent/user-authored ${kind} HTML artifact. Nib supplies the chrome, libraries, feedback bridge, screenshots, and exports; it does not generate the HTML.`,
     "",
     "## Repository",
     "",

@@ -5,14 +5,14 @@ cd "$(dirname "$0")/.."
 
 export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PATH:-}"
 export NODE_ENV=production
-export HOST="${HOST:-0.0.0.0}"
+export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-4070}"
-export PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://doug-mm.tail5d92b4.ts.net}"
+export PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://dave.tail5d92b4.ts.net}"
 
-if [[ -f .prtl/server.env ]]; then
+if [[ -f .nib/server.env ]]; then
   set -a
   # shellcheck source=/dev/null
-  source .prtl/server.env
+  source .nib/server.env
   set +a
 fi
 

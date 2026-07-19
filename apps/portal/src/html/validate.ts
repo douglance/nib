@@ -28,21 +28,21 @@ export function validateFeedbackSurfaceHtml(html: string, file = "inline-feedbac
   const result = validateHtmlContent(html, file, bytes);
   const issues = result.issues.filter((issue) => issue.code !== "missing_export_path");
 
-  const usesFeedbackSubmit = /prtl\.feedback\.submit/.test(html);
+  const usesFeedbackSubmit = /nib\.feedback\.submit/.test(html);
   const usesRawBridge = /postMessage\s*\(/.test(html);
 
   if (!usesFeedbackSubmit) {
     issues.push({
-      code: "missing_prtl_feedback_submit",
+      code: "missing_nib_feedback_submit",
       severity: "error",
-      message: "Feedback surfaces must call window.prtl.feedback.submit(...) or post a prtl.feedback.submit message to the parent chrome."
+      message: "Feedback surfaces must call window.nib.feedback.submit(...) or post a nib.feedback.submit message to the parent chrome."
     });
   }
-  if (!usesRawBridge && !/window\.prtl\.feedback/.test(html)) {
+  if (!usesRawBridge && !/window\.nib\.feedback/.test(html)) {
     issues.push({
-      code: "missing_prtl_bridge",
+      code: "missing_nib_bridge",
       severity: "error",
-      message: "Feedback surfaces must use the injected window.prtl.feedback helper or raw window.parent.postMessage."
+      message: "Feedback surfaces must use the injected window.nib.feedback helper or raw window.parent.postMessage."
     });
   }
   if (/<form\b/i.test(html) && !/<button\b[^>]*type=["']submit["']/i.test(html)) {
@@ -88,7 +88,7 @@ function validateHtmlContent(html: string, file: string, bytes: number): HtmlVal
     issues.push({ code: "broken_anchor", severity: "error", message: `Internal link points to missing id "#${anchor}".` });
   }
   if (/<(?:input|textarea|select|button)\b/i.test(html) && !/\b(copy|export|download|clipboard)\b/i.test(html)) {
-    issues.push({ code: "missing_export_path", severity: "warning", message: "Interactive artifacts should include copy/export when they are not purely for prtl feedback." });
+    issues.push({ code: "missing_export_path", severity: "warning", message: "Interactive artifacts should include copy/export when they are not purely for nib feedback." });
   }
 
   return {

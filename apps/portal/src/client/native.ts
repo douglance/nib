@@ -1,6 +1,6 @@
 import type { ProjectInfo } from "../shared/types";
 
-export const PRTL_SERVER_BASE = "http://127.0.0.1:4070";
+export const NIB_SERVER_BASE = "http://127.0.0.1:4070";
 
 export interface NativeFrame {
   x: number;
@@ -53,7 +53,7 @@ export function isNativeShell(): boolean {
 export function apiUrl(pathOrUrl: string): string {
   if (/^https?:\/\//i.test(pathOrUrl)) return pathOrUrl;
   const path = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
-  return isNativeShell() ? `${PRTL_SERVER_BASE}${path}` : path;
+  return isNativeShell() ? `${NIB_SERVER_BASE}${path}` : path;
 }
 
 export function assetUrl(pathOrUrl: string | null): string | null {
@@ -61,12 +61,12 @@ export function assetUrl(pathOrUrl: string | null): string | null {
   return apiUrl(pathOrUrl);
 }
 
-export function prtlFetch(input: string, init?: RequestInit): Promise<Response> {
+export function nibFetch(input: string, init?: RequestInit): Promise<Response> {
   return fetch(apiUrl(input), init);
 }
 
 export function serverUrl(path: string): string {
-  return `${PRTL_SERVER_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+  return `${NIB_SERVER_BASE}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
 export function nativeWebViews(): NativeWebViewsApi | null {

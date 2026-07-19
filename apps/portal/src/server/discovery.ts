@@ -73,7 +73,9 @@ export async function discoverProjects(force = false): Promise<ProjectInfo[]> {
     const name = stored?.name ?? baseName;
     const publicDirectUrl = `http://${TAILSCALE_HOSTNAME}:${listener.port}/`;
     const directProbeUrl = `http://${TAILSCALE_IP}:${listener.port}/`;
-    const directProbe = shouldTryDirect(listener) ? await probeHttp(new URL(directProbeUrl), 900) : null;
+    const directProbe = shouldTryDirect(listener) && TAILSCALE_IP
+      ? await probeHttp(new URL(directProbeUrl), 900)
+      : null;
     const routes = buildRoutes(id, listener.port, publicDirectUrl, directProbe);
     const preferredRoute = pickPreferredRoute(stored?.preferredRoute, routes);
     const compatibility = buildCompatibility(listener, command, routes, probe.contentType);
@@ -126,7 +128,7 @@ export async function discoverProjects(force = false): Promise<ProjectInfo[]> {
 }
 
 async function createFeedbackLabProject(now: number): Promise<ProjectInfo> {
-  const id = "prtl-feedback-lab";
+  const id = "nib-feedback-lab";
   const route: RouteInfo = {
     mode: "pathProxy",
     url: "/lab/feedback/",
@@ -142,8 +144,8 @@ async function createFeedbackLabProject(now: number): Promise<ProjectInfo> {
     port: PORT,
     host: HOST,
     sourcePath: process.cwd(),
-    command: "prtl built-in feedback lab",
-    framework: "prtl",
+    command: "nib built-in feedback lab",
+    framework: "nib",
     status: "online",
     statusCode: 200,
     contentType: "text/html",
@@ -158,7 +160,7 @@ async function createFeedbackLabProject(now: number): Promise<ProjectInfo> {
           id: "lab",
           label: "Feedback Lab",
           status: "pass",
-          message: "Always available inside prtl for feedback workflow testing."
+          message: "Always available inside nib for feedback workflow testing."
         }
       ],
       updatedAt: new Date(now).toISOString()

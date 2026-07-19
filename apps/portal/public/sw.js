@@ -1,5 +1,5 @@
-const CACHE_NAME = "prtl-shell-v4";
-const SHELL_ASSETS = ["/", "/manifest.webmanifest", "/icons/prtl.svg", "/icons/prtl-192.png", "/icons/prtl-512.png"];
+const CACHE_NAME = "nib-shell-v4";
+const SHELL_ASSETS = ["/", "/manifest.webmanifest", "/icons/nib.svg", "/icons/nib-192.png", "/icons/nib-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_ASSETS)));
@@ -41,9 +41,9 @@ self.addEventListener("push", (event) => {
   } catch {
     data = {};
   }
-  const title = data.title || (data.projectName ? `Feedback: ${data.projectName}` : "prtl request");
+  const title = data.title || (data.projectName ? `Feedback: ${data.projectName}` : "nib request");
   const body = data.request || data.body || "Tap to give feedback.";
-  const tag = data.feedbackId ? `feedback:${data.feedbackId}` : data.tag || (data.requestId ? `request:${data.requestId}` : "prtl-request");
+  const tag = data.feedbackId ? `feedback:${data.feedbackId}` : data.tag || (data.requestId ? `request:${data.requestId}` : "nib-request");
   const actions = notificationActions(data);
   const options = {
     body,
@@ -52,8 +52,8 @@ self.addEventListener("push", (event) => {
     requireInteraction: data.requireInteraction !== undefined ? Boolean(data.requireInteraction) : Boolean(data.feedbackId || data.requestId),
     timestamp: data.createdAt ? new Date(data.createdAt).getTime() : Date.now(),
     data,
-    icon: "/icons/prtl-192.png",
-    badge: "/icons/prtl-192.png",
+    icon: "/icons/nib-192.png",
+    badge: "/icons/nib-192.png",
     actions
   };
   event.waitUntil(self.registration.showNotification(title, options));

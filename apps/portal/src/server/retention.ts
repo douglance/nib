@@ -18,12 +18,12 @@ export interface RetentionSweepSummary {
 }
 
 export function retentionDays(): number {
-  const parsed = Number(process.env.PRTL_RETENTION_DAYS);
+  const parsed = Number(process.env.NIB_RETENTION_DAYS);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 7;
 }
 
 export function openStaleDays(): number {
-  const parsed = Number(process.env.PRTL_OPEN_STALE_DAYS);
+  const parsed = Number(process.env.NIB_OPEN_STALE_DAYS);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 21;
 }
 

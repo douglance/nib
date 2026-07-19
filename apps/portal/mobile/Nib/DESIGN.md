@@ -1,10 +1,10 @@
-# Prtl native design rules
+# Nib native design rules
 
 Build every native screen as a premium utility, not a dashboard.
 
 ## Visual thesis
 
-Prtl should feel like a crafted object: quiet, precise, trustworthy, tactile,
+Nib should feel like a crafted object: quiet, precise, trustworthy, tactile,
 and useful. It should look like something a discerning person keeps open on
 purpose.
 

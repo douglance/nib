@@ -27,7 +27,7 @@ async function loadWorker() {
   };
   const context = {
     self: {
-      location: new URL("https://prtl.test/"),
+      location: new URL("https://nib.test/"),
       clients: clientsApi,
       registration: {
         showNotification: async (title, options) => {

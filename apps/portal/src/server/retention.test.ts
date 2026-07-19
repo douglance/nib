@@ -5,8 +5,8 @@ import path from "node:path";
 import { test } from "node:test";
 import type { RequestAttachment, RequestRecord, RequestStatus } from "../shared/types";
 
-const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "prtl-retention-"));
-process.env.PRTL_DATA_DIR = dataDir;
+const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "nib-retention-"));
+process.env.NIB_DATA_DIR = dataDir;
 const attachmentDir = path.join(dataDir, "attachments");
 const storePath = path.join(dataDir, "store.json");
 const { runRetentionSweep } = await import("./retention");
@@ -65,7 +65,7 @@ test("still removes answered requests older than the answered retention", async 
   assert.equal(store.requests["answered-ten"], undefined);
 });
 
-test("defaults the open-stale threshold to 21 days and honors PRTL_OPEN_STALE_DAYS", async () => {
+test("defaults the open-stale threshold to 21 days and honors NIB_OPEN_STALE_DAYS", async () => {
   await seedStore({
     requests: {
       "twenty-days": makeRequest({ id: "twenty-days", status: "open", updatedAt: daysAgo(20) }),
@@ -79,7 +79,7 @@ test("defaults the open-stale threshold to 21 days and honors PRTL_OPEN_STALE_DA
   assert.ok(store.requests["twenty-days"], "20-day open request survives the 21-day default");
   assert.equal(store.requests["twenty-two-days"], undefined, "22-day open request is swept by the 21-day default");
 
-  process.env.PRTL_OPEN_STALE_DAYS = "45";
+  process.env.NIB_OPEN_STALE_DAYS = "45";
   try {
     await seedStore({
       requests: { "thirty-days": makeRequest({ id: "thirty-days", status: "open", updatedAt: daysAgo(30) }) }
@@ -90,7 +90,7 @@ test("defaults the open-stale threshold to 21 days and honors PRTL_OPEN_STALE_DA
     store = await readStoreFile();
     assert.ok(store.requests["thirty-days"], "override lengthens the threshold so a 30-day open request survives");
   } finally {
-    delete process.env.PRTL_OPEN_STALE_DAYS;
+    delete process.env.NIB_OPEN_STALE_DAYS;
   }
 });
 
@@ -161,8 +161,8 @@ test("applies the same age rules to legacy feedback records", async () => {
   assert.ok(store.feedback["fresh-feedback"]);
 });
 
-test("respects PRTL_RETENTION_DAYS override", async () => {
-  process.env.PRTL_RETENTION_DAYS = "60";
+test("respects NIB_RETENTION_DAYS override", async () => {
+  process.env.NIB_RETENTION_DAYS = "60";
   try {
     await seedStore({
       requests: { "month-old": makeRequest({ id: "month-old", status: "answered", updatedAt: daysAgo(30) }) }
@@ -173,7 +173,7 @@ test("respects PRTL_RETENTION_DAYS override", async () => {
     const store = await readStoreFile();
     assert.ok(store.requests["month-old"]);
   } finally {
-    delete process.env.PRTL_RETENTION_DAYS;
+    delete process.env.NIB_RETENTION_DAYS;
   }
 });
 

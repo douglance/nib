@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PLIST="$HOME/Library/LaunchAgents/com.douglance.prtl.plist"
-LOG_DIR="$ROOT/.prtl/logs"
+PLIST="$HOME/Library/LaunchAgents/com.douglance.nib.plist"
+LOG_DIR="$ROOT/.nib/logs"
 
 mkdir -p "$HOME/Library/LaunchAgents" "$LOG_DIR"
 
@@ -13,7 +13,7 @@ cat > "$PLIST" <<PLIST
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.douglance.prtl</string>
+  <string>com.douglance.nib</string>
   <key>ProgramArguments</key>
   <array>
     <string>$ROOT/scripts/start-production.sh</string>
@@ -35,8 +35,8 @@ PLIST
 chmod +x "$ROOT/scripts/start-production.sh"
 launchctl bootout "gui/$UID" "$PLIST" 2>/dev/null || true
 launchctl bootstrap "gui/$UID" "$PLIST"
-launchctl enable "gui/$UID/com.douglance.prtl"
+launchctl enable "gui/$UID/com.douglance.nib"
 
-tailscale serve --bg 4070
+tailscale serve --bg http://127.0.0.1:4070
 
-echo "prtl installed at https://doug-mm.tail5d92b4.ts.net/"
+echo "Nib installed at https://dave.tail5d92b4.ts.net/"

@@ -1,15 +1,15 @@
 import Foundation
 
-enum PrtlDefaults {
-    static let defaultBaseURLString = "https://doug-mm.tail5d92b4.ts.net"
+enum NibDefaults {
+    static let defaultBaseURLString = "https://dave.tail5d92b4.ts.net"
 }
 
 @MainActor
-final class PrtlClient: ObservableObject {
+final class NibClient: ObservableObject {
     var baseURL: URL
     private let session: URLSession
 
-    init(baseURL: URL = URL(string: PrtlDefaults.defaultBaseURLString)!, session: URLSession = .shared) {
+    init(baseURL: URL = URL(string: NibDefaults.defaultBaseURLString)!, session: URLSession = .shared) {
         self.baseURL = baseURL
         self.session = session
     }
@@ -21,69 +21,69 @@ final class PrtlClient: ObservableObject {
         baseURL = next
     }
 
-    func requests() async throws -> [PrtlRequest] {
+    func requests() async throws -> [NibRequest] {
         try await get("/api/requests")
     }
 
-    func request(id: String) async throws -> PrtlRequest {
+    func request(id: String) async throws -> NibRequest {
         try await get("/api/requests/\(id)")
     }
 
-    func projects() async throws -> [PrtlProject] {
-        let response: PrtlProjectsResponse = try await get("/api/projects")
+    func projects() async throws -> [NibProject] {
+        let response: NibProjectsResponse = try await get("/api/projects")
         return response.projects
     }
 
-    func project(id: String) async throws -> PrtlProject? {
+    func project(id: String) async throws -> NibProject? {
         try await projects().first { $0.id == id }
     }
 
-    func workspace(projectId: String) async throws -> PrtlProjectWorkspace {
+    func workspace(projectId: String) async throws -> NibProjectWorkspace {
         try await get("/api/projects/\(projectId)/workspace")
     }
 
-    func addWorkspaceNote(projectId: String, text: String, screenshotUrl: String? = nil) async throws -> PrtlProjectWorkspace {
+    func addWorkspaceNote(projectId: String, text: String, screenshotUrl: String? = nil) async throws -> NibProjectWorkspace {
         try await patch(
             "/api/projects/\(projectId)/workspace",
             body: WorkspacePatchBody(note: text, screenshotUrl: screenshotUrl)
         )
     }
 
-    func captureScreenshots(projectId: String) async throws -> PrtlProjectScreenshotsResponse {
+    func captureScreenshots(projectId: String) async throws -> NibProjectScreenshotsResponse {
         try await post("/api/projects/\(projectId)/screenshots", body: EmptyBody())
     }
 
-    func recheckProject(projectId: String) async throws -> PrtlProject {
+    func recheckProject(projectId: String) async throws -> NibProject {
         try await post("/api/projects/\(projectId)/recheck", body: EmptyBody())
     }
 
-    func setPreferredRoute(projectId: String, mode: String) async throws -> PrtlProject {
+    func setPreferredRoute(projectId: String, mode: String) async throws -> NibProject {
         try await post(
             "/api/projects/\(projectId)/preferred-route",
             body: RouteBody(mode: mode)
         )
     }
 
-    func killProject(projectId: String) async throws -> PrtlKillResult {
+    func killProject(projectId: String) async throws -> NibKillResult {
         try await post("/api/projects/\(projectId)/kill", body: EmptyBody())
     }
 
-    func commandPresets(projectId: String) async throws -> [PrtlCommandPreset] {
+    func commandPresets(projectId: String) async throws -> [NibCommandPreset] {
         try await get("/api/projects/\(projectId)/command-presets")
     }
 
-    func commandRuns(projectId: String) async throws -> [PrtlCommandRun] {
+    func commandRuns(projectId: String) async throws -> [NibCommandRun] {
         try await get("/api/projects/\(projectId)/commands")
     }
 
-    func runCommand(projectId: String, command: String, cwd: String? = nil) async throws -> PrtlCommandRun {
+    func runCommand(projectId: String, command: String, cwd: String? = nil) async throws -> NibCommandRun {
         try await post(
             "/api/projects/\(projectId)/commands",
             body: CommandBody(command: command, cwd: cwd)
         )
     }
 
-    func commandEvents(projectId: String, commandId: String) -> AsyncThrowingStream<PrtlCommandEvent, Error> {
+    func commandEvents(projectId: String, commandId: String) -> AsyncThrowingStream<NibCommandEvent, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
@@ -91,7 +91,7 @@ final class PrtlClient: ObservableObject {
                     request.setValue("text/event-stream", forHTTPHeaderField: "accept")
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-                        throw NSError(domain: "PrtlClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Command event stream failed"])
+                        throw NSError(domain: "NibClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Command event stream failed"])
                     }
 
                     var dataLines: [String] = []
@@ -120,31 +120,31 @@ final class PrtlClient: ObservableObject {
         }
     }
 
-    func devices() async throws -> [PrtlDevice] {
-        let response: PrtlDevicesResponse = try await get("/api/devices")
+    func devices() async throws -> [NibDevice] {
+        let response: NibDevicesResponse = try await get("/api/devices")
         return response.devices
     }
 
-    func notificationStatus() async throws -> PrtlNotificationStatus {
+    func notificationStatus() async throws -> NibNotificationStatus {
         try await get("/api/notifications/status")
     }
 
-    func sendTestNotification() async throws -> PrtlNotificationTestResult {
+    func sendTestNotification() async throws -> NibNotificationTestResult {
         try await post("/api/notifications/test", body: EmptyBody())
     }
 
-    func activity(projectId: String? = nil) async throws -> [PrtlActivityEvent] {
+    func activity(projectId: String? = nil) async throws -> [NibActivityEvent] {
         if let projectId {
             return try await get("/api/activity?projectId=\(Self.escapePathComponent(projectId))")
         }
         return try await get("/api/activity")
     }
 
-    func waiting() async throws -> [PrtlWaitingPane] {
+    func waiting() async throws -> [NibWaitingPane] {
         try await get("/api/waiting")
     }
 
-    func respond(requestId: String, text: String? = nil, choice: String? = nil, choiceIndex: Int? = nil) async throws -> PrtlRequest {
+    func respond(requestId: String, text: String? = nil, choice: String? = nil, choiceIndex: Int? = nil) async throws -> NibRequest {
         try await post(
             "/api/requests/\(requestId)/respond",
             body: ResponseBody(text: text, choice: choice, choiceIndex: choiceIndex)
@@ -157,7 +157,7 @@ final class PrtlClient: ObservableObject {
         platform: String,
         apnsTopic: String?,
         capabilities: [String]
-    ) async throws -> PrtlDevice {
+    ) async throws -> NibDevice {
         try await post(
             "/api/devices",
             body: DeviceBody(
@@ -171,7 +171,7 @@ final class PrtlClient: ObservableObject {
         )
     }
 
-    func uploadImage(requestId: String, name: String, contentType: String, data: Data) async throws -> PrtlRequest.Attachment {
+    func uploadImage(requestId: String, name: String, contentType: String, data: Data) async throws -> NibRequest.Attachment {
         try await post(
             "/api/requests/\(requestId)/attachments",
             body: AttachmentBody(name: name, contentType: contentType, contentBase64: data.base64EncodedString())
@@ -216,7 +216,7 @@ final class PrtlClient: ObservableObject {
     private func validate(response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             let text = String(data: data, encoding: .utf8) ?? "Request failed"
-            throw NSError(domain: "PrtlClient", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+            throw NSError(domain: "NibClient", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
         }
     }
 
@@ -226,17 +226,17 @@ final class PrtlClient: ObservableObject {
 
     private func yieldCommandEvent(
         dataLines: [String],
-        continuation: AsyncThrowingStream<PrtlCommandEvent, Error>.Continuation
+        continuation: AsyncThrowingStream<NibCommandEvent, Error>.Continuation
     ) throws {
         let payload = dataLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !payload.isEmpty else { return }
-        if let event = try? JSONDecoder().decode(PrtlCommandEvent.self, from: Data(payload.utf8)) {
+        if let event = try? JSONDecoder().decode(NibCommandEvent.self, from: Data(payload.utf8)) {
             continuation.yield(event)
             return
         }
         if let object = try? JSONDecoder().decode([String: String].self, from: Data(payload.utf8)),
            let message = object["message"] {
-            throw NSError(domain: "PrtlClient", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+            throw NSError(domain: "NibClient", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
         }
     }
 }

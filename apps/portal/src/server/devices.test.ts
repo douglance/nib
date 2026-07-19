@@ -5,7 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 
 test("registerDevice stores APNs topic for native devices", async () => {
-  process.env.PRTL_DATA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "prtl-devices-"));
+  process.env.NIB_DATA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "nib-devices-"));
   const { registerDevice } = await import("./devices");
 
   const device = await registerDevice({
@@ -13,15 +13,15 @@ test("registerDevice stores APNs topic for native devices", async () => {
     platform: "watchos",
     pushKind: "apns",
     token: "watch-token",
-    apnsTopic: "com.example.prtl.watchkitapp",
+    apnsTopic: "com.example.nib.watchkitapp",
     capabilities: ["alert", "actions"]
   });
 
-  assert.equal(device.apnsTopic, "com.example.prtl.watchkitapp");
+  assert.equal(device.apnsTopic, "com.example.nib.watchkitapp");
 });
 
 test("registerDevice leaves web push APNs topic empty", async () => {
-  process.env.PRTL_DATA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "prtl-devices-"));
+  process.env.NIB_DATA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "nib-devices-"));
   const { registerDevice } = await import("./devices");
 
   const device = await registerDevice({
@@ -29,7 +29,7 @@ test("registerDevice leaves web push APNs topic empty", async () => {
     platform: "web",
     pushKind: "webpush",
     token: "https://push.example/device",
-    apnsTopic: "com.example.prtl",
+    apnsTopic: "com.example.nib",
     capabilities: ["alert"]
   });
 

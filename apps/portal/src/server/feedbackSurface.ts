@@ -35,9 +35,9 @@ export function createFeedbackSurface(input: FeedbackSurfaceInput): FeedbackSurf
 export function feedbackSurfaceHtmlForNative(request: FeedbackRequest): string {
   const html = request.feedbackSurface?.html;
   if (!html) return "<!doctype html><html><body></body></html>";
-  const bridge = `<script id="prtl-feedback-native-bridge">
+  const bridge = `<script id="nib-feedback-native-bridge">
 (() => {
-  if (window.prtl && window.prtl.feedback) return;
+  if (window.nib && window.nib.feedback) return;
   const requestId = ${JSON.stringify(request.id)};
   const endpoint = (suffix) => "/api/feedback/" + encodeURIComponent(requestId) + suffix;
   async function send(path, payload = {}) {
@@ -46,17 +46,17 @@ export function feedbackSurfaceHtmlForNative(request: FeedbackRequest): string {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(payload)
     });
-    if (!response.ok) throw new Error("prtl feedback failed: " + response.status);
+    if (!response.ok) throw new Error("nib feedback failed: " + response.status);
     return response.json();
   }
-  window.prtl = Object.assign(window.prtl || {}, {
+  window.nib = Object.assign(window.nib || {}, {
     feedback: {
       ready(detail = {}) {
-        document.documentElement.dataset.prtlFeedbackReady = "1";
+        document.documentElement.dataset.nibFeedbackReady = "1";
         if (typeof detail.height === "number") this.resize(detail.height);
       },
       resize(height) {
-        document.documentElement.dataset.prtlFeedbackHeight = String(height || "");
+        document.documentElement.dataset.nibFeedbackHeight = String(height || "");
       },
       capture() {
         return send("/capture");
@@ -73,12 +73,12 @@ export function feedbackSurfaceHtmlForNative(request: FeedbackRequest): string {
   });
   function handleFeedbackMessage(message) {
     if (!message || typeof message !== "object" || typeof message.type !== "string") return;
-    if (message.type === "prtl.feedback.capture") {
-      window.prtl.feedback.capture();
+    if (message.type === "nib.feedback.capture") {
+      window.nib.feedback.capture();
       return;
     }
-    if (message.type === "prtl.feedback.submit") {
-      window.prtl.feedback.submit({
+    if (message.type === "nib.feedback.submit") {
+      window.nib.feedback.submit({
         kind: message.kind || "note",
         text: message.text || message.choice || "Feedback submitted",
         choice: message.choice,
@@ -109,7 +109,7 @@ function defaultFeedbackSurfaceHtml(input: FeedbackSurfaceInput): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Prtl feedback</title>
+  <title>Nib feedback</title>
   <style>
     :root {
       color-scheme: dark;
@@ -241,21 +241,21 @@ function defaultFeedbackSurfaceHtml(input: FeedbackSurfaceInput): string {
 
     function post(type, payload = {}) {
       const message = { type, ...payload };
-      if (window.prtl && window.prtl.feedback) {
-        if (type === "prtl.feedback.submit") {
-          window.prtl.feedback.submit(payload);
+      if (window.nib && window.nib.feedback) {
+        if (type === "nib.feedback.submit") {
+          window.nib.feedback.submit(payload);
           return;
         }
-        if (type === "prtl.feedback.capture") {
-          window.prtl.feedback.capture();
+        if (type === "nib.feedback.capture") {
+          window.nib.feedback.capture();
           return;
         }
-        if (type === "prtl.feedback.resize") {
-          window.prtl.feedback.resize(payload.height);
+        if (type === "nib.feedback.resize") {
+          window.nib.feedback.resize(payload.height);
           return;
         }
-        if (type === "prtl.feedback.ready") {
-          window.prtl.feedback.ready(payload);
+        if (type === "nib.feedback.ready") {
+          window.nib.feedback.ready(payload);
           return;
         }
       }
@@ -273,7 +273,7 @@ function defaultFeedbackSurfaceHtml(input: FeedbackSurfaceInput): string {
     function submit(choice = selectedChoice) {
       const value = text.value.trim();
       const data = collectData();
-      post("prtl.feedback.submit", {
+      post("nib.feedback.submit", {
         kind: "note",
         text: value || choice || "Feedback submitted",
         choice: choice || undefined,
@@ -286,9 +286,9 @@ function defaultFeedbackSurfaceHtml(input: FeedbackSurfaceInput): string {
       button.addEventListener("click", () => submit(button.dataset.choice || ""));
     });
     document.getElementById("send").addEventListener("click", () => submit());
-    document.getElementById("capture").addEventListener("click", () => post("prtl.feedback.capture"));
-    new ResizeObserver(() => post("prtl.feedback.resize", { height: document.documentElement.scrollHeight })).observe(document.body);
-    post("prtl.feedback.ready", { height: document.documentElement.scrollHeight });
+    document.getElementById("capture").addEventListener("click", () => post("nib.feedback.capture"));
+    new ResizeObserver(() => post("nib.feedback.resize", { height: document.documentElement.scrollHeight })).observe(document.body);
+    post("nib.feedback.ready", { height: document.documentElement.scrollHeight });
   </script>
 </body>
 </html>`;

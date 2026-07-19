@@ -111,8 +111,8 @@ export async function sendTestNotification(): Promise<{ sent: number; requestId?
   }
   const sent = await sendUnifiedPayload({
     type: "test",
-    title: "prtl",
-    body: "No active requests. Tap to open prtl.",
+    title: "nib",
+    body: "No active requests. Tap to open nib.",
     url: "/",
     createdAt: new Date().toISOString()
   });
@@ -173,7 +173,7 @@ export async function probeApnsDelivery(): Promise<{
       try {
         await sendApnsToDevice(config, device, {
           type: "apns-probe",
-          title: "prtl",
+          title: "nib",
           body: "APNs delivery probe",
           url: "/",
           tag: "apns-probe",
@@ -403,30 +403,30 @@ interface ApnsReadiness {
 }
 
 export async function apnsReadiness(): Promise<ApnsReadiness> {
-  const env = process.env.PRTL_APNS_ENV;
+  const env = process.env.NIB_APNS_ENV;
   const environment = env === "production" ? "production" : "sandbox";
-  const apnsMissing = ["PRTL_APNS_TEAM_ID", "PRTL_APNS_KEY_ID", "PRTL_APNS_KEY_PATH", "PRTL_APNS_TOPIC"]
+  const apnsMissing = ["NIB_APNS_TEAM_ID", "NIB_APNS_KEY_ID", "NIB_APNS_KEY_PATH", "NIB_APNS_TOPIC"]
     .filter((key) => !process.env[key]);
   const apnsIssues = [...apnsMissing];
   if (env && env !== "sandbox" && env !== "production") {
-    apnsIssues.push("PRTL_APNS_ENV must be sandbox or production");
+    apnsIssues.push("NIB_APNS_ENV must be sandbox or production");
   }
 
   let apnsKeyReadable = false;
-  if (process.env.PRTL_APNS_KEY_PATH) {
+  if (process.env.NIB_APNS_KEY_PATH) {
     try {
-      await fs.access(process.env.PRTL_APNS_KEY_PATH);
+      await fs.access(process.env.NIB_APNS_KEY_PATH);
       apnsKeyReadable = true;
     } catch {
-      apnsIssues.push("PRTL_APNS_KEY_PATH is not readable");
+      apnsIssues.push("NIB_APNS_KEY_PATH is not readable");
     }
   }
 
   return {
     apnsConfigured: apnsIssues.length === 0,
     apnsEnvironment: environment,
-    apnsTopic: process.env.PRTL_APNS_TOPIC ?? null,
-    apnsKeyConfigured: Boolean(process.env.PRTL_APNS_KEY_PATH),
+    apnsTopic: process.env.NIB_APNS_TOPIC ?? null,
+    apnsKeyConfigured: Boolean(process.env.NIB_APNS_KEY_PATH),
     apnsKeyReadable,
     apnsMissing,
     apnsIssues
@@ -434,11 +434,11 @@ export async function apnsReadiness(): Promise<ApnsReadiness> {
 }
 
 async function apnsConfig(): Promise<ApnsConfig | null> {
-  const teamId = process.env.PRTL_APNS_TEAM_ID;
-  const keyId = process.env.PRTL_APNS_KEY_ID;
-  const keyPath = process.env.PRTL_APNS_KEY_PATH;
-  const topic = process.env.PRTL_APNS_TOPIC;
-  const env = process.env.PRTL_APNS_ENV ?? "sandbox";
+  const teamId = process.env.NIB_APNS_TEAM_ID;
+  const keyId = process.env.NIB_APNS_KEY_ID;
+  const keyPath = process.env.NIB_APNS_KEY_PATH;
+  const topic = process.env.NIB_APNS_TOPIC;
+  const env = process.env.NIB_APNS_ENV ?? "sandbox";
   if (!teamId || !keyId || !keyPath || !topic || !["sandbox", "production"].includes(env)) return null;
   let key: string;
   try {
@@ -459,19 +459,19 @@ async function sendApnsToDevice(config: ApnsConfig, device: DeviceRecord, payloa
   const token = apnsJwt(config);
   const aps: Record<string, unknown> = {
     alert: {
-      title: String(payload.title ?? "prtl"),
-      body: String(payload.body ?? payload.request ?? "Open prtl")
+      title: String(payload.title ?? "nib"),
+      body: String(payload.body ?? payload.request ?? "Open nib")
     },
     sound: "default",
     category: apnsCategory(payload),
-    "thread-id": String(payload.tag ?? payload.requestId ?? "prtl")
+    "thread-id": String(payload.tag ?? payload.requestId ?? "nib")
   };
   if (payload.richAttachment) {
     aps["mutable-content"] = 1;
   }
   const body = JSON.stringify({
     aps,
-    prtl: payload
+    nib: payload
   });
   await new Promise<void>((resolve, reject) => {
     const client = http2.connect(`https://${config.host}`);
@@ -526,8 +526,8 @@ export function apnsCategory(payload: Record<string, unknown>): string {
   if (Array.isArray(payload.choices) && payload.choices.length) {
     return apnsChoiceCategory(payload.choices);
   }
-  if (payload.allowText) return "PRTL_TEXT";
-  return "PRTL_OPEN";
+  if (payload.allowText) return "NIB_TEXT";
+  return "NIB_OPEN";
 }
 
 export function apnsTopicForDevice(config: { topic: string }, device: Pick<DeviceRecord, "apnsTopic">): string {
@@ -536,14 +536,14 @@ export function apnsTopicForDevice(config: { topic: string }, device: Pick<Devic
 
 function apnsChoiceCategory(choices: unknown[]): string {
   const [first = "", second = ""] = choices.map((choice) => normalizeChoiceTitle(String(choice)));
-  if (first === "approve" && second === "hold") return "PRTL_APPROVE_HOLD";
-  if (first === "approve" && second === "reject") return "PRTL_APPROVE_REJECT";
-  if (first === "allow" && second === "deny") return "PRTL_ALLOW_DENY";
-  if (first === "yes" && second === "no") return "PRTL_YES_NO";
-  if (first === "ship" && second === "hold" && normalizeChoiceTitle(String(choices[2] ?? "")) === "revise") return "PRTL_SHIP_HOLD_REVISE";
-  if (first === "ship" && second === "hold") return "PRTL_SHIP_HOLD";
-  if ((first === "use" || first === "use it") && second === "revise") return "PRTL_USE_REVISE";
-  return "PRTL_CHOICE";
+  if (first === "approve" && second === "hold") return "NIB_APPROVE_HOLD";
+  if (first === "approve" && second === "reject") return "NIB_APPROVE_REJECT";
+  if (first === "allow" && second === "deny") return "NIB_ALLOW_DENY";
+  if (first === "yes" && second === "no") return "NIB_YES_NO";
+  if (first === "ship" && second === "hold" && normalizeChoiceTitle(String(choices[2] ?? "")) === "revise") return "NIB_SHIP_HOLD_REVISE";
+  if (first === "ship" && second === "hold") return "NIB_SHIP_HOLD";
+  if ((first === "use" || first === "use it") && second === "revise") return "NIB_USE_REVISE";
+  return "NIB_CHOICE";
 }
 
 function normalizeChoiceTitle(value: string): string {

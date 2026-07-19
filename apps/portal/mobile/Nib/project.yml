@@ -1,4 +1,4 @@
-name: Prtl
+name: Nib
 options:
   bundleIdPrefix: com.douglance
   deploymentTarget:
@@ -11,45 +11,45 @@ settings:
     SWIFT_VERSION: 6.0
     DEVELOPMENT_TEAM: ""
 targets:
-  Prtl:
+  Nib:
     type: application
     platform: iOS
     sources:
-      - path: Sources/PrtlModels.swift
-      - path: Sources/PrtlClient.swift
-      - path: Sources/PrtlApp.swift
+      - path: Sources/NibModels.swift
+      - path: Sources/NibClient.swift
+      - path: Sources/NibApp.swift
     dependencies:
-      - target: PrtlNotificationService
+      - target: NibNotificationService
         embed: true
     info:
-      path: Prtl-Info.plist
+      path: Nib-Info.plist
       properties:
-        CFBundleDisplayName: Prtl
+        CFBundleDisplayName: Nib
         CFBundleURLTypes:
-          - CFBundleURLName: com.douglance.prtl
+          - CFBundleURLName: com.douglance.nib
             CFBundleURLSchemes:
-              - prtl
+              - nib
         UILaunchScreen: {}
-        NSCameraUsageDescription: Prtl attaches photos to requests so agents can see what you see.
-        NSPhotoLibraryUsageDescription: Prtl attaches selected images to requests.
+        NSCameraUsageDescription: Nib attaches photos to requests so agents can see what you see.
+        NSPhotoLibraryUsageDescription: Nib attaches selected images to requests.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: app.vmux.remotesigner
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib
     entitlements:
-      path: Prtl.entitlements
+      path: Nib.entitlements
       properties:
         aps-environment: development
-  PrtlNotificationService:
+  NibNotificationService:
     type: app-extension
     platform: iOS
     sources:
-      - path: Sources/PrtlNotificationService.swift
+      - path: Sources/NibNotificationService.swift
     info:
-      path: PrtlNotificationService-Info.plist
+      path: NibNotificationService-Info.plist
       properties:
-        CFBundleDisplayName: Prtl rich notifications
+        CFBundleDisplayName: Nib rich notifications
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
@@ -58,27 +58,27 @@ targets:
           NSAllowsLocalNetworking: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: app.vmux.remotesigner.NotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.NotificationService
         SKIP_INSTALL: YES
-  PrtlWatch:
+  NibWatch:
     type: application
     platform: watchOS
     sources:
-      - path: Sources/PrtlModels.swift
-      - path: Sources/PrtlClient.swift
-      - path: Sources/PrtlWatchApp.swift
+      - path: Sources/NibModels.swift
+      - path: Sources/NibClient.swift
+      - path: Sources/NibWatchApp.swift
     info:
-      path: PrtlWatch-Info.plist
+      path: NibWatch-Info.plist
       properties:
-        CFBundleDisplayName: Prtl
+        CFBundleDisplayName: Nib
         WKApplication: true
-        WKCompanionAppBundleIdentifier: com.douglance.prtl
+        WKCompanionAppBundleIdentifier: com.douglance.nib
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.prtl.watchkitapp
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.watchkitapp
     entitlements:
-      path: PrtlWatch.entitlements
+      path: NibWatch.entitlements
       properties:
         aps-environment: development

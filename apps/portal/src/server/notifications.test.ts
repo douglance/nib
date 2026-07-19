@@ -7,50 +7,50 @@ import { test } from "node:test";
 import { apnsCategory, apnsJwt, apnsReadiness, apnsTopicForDevice } from "./notifications";
 
 test("maps common first-two request choices to native APNs categories", () => {
-  assert.equal(apnsCategory({ choices: ["Approve", "Hold"] }), "PRTL_APPROVE_HOLD");
-  assert.equal(apnsCategory({ choices: ["Approve", "Reject"] }), "PRTL_APPROVE_REJECT");
-  assert.equal(apnsCategory({ choices: ["Allow", "Deny"] }), "PRTL_ALLOW_DENY");
-  assert.equal(apnsCategory({ choices: ["Yes", "No"] }), "PRTL_YES_NO");
-  assert.equal(apnsCategory({ choices: ["Ship", "Hold"] }), "PRTL_SHIP_HOLD");
-  assert.equal(apnsCategory({ choices: ["Ship", "Hold", "Revise"] }), "PRTL_SHIP_HOLD_REVISE");
-  assert.equal(apnsCategory({ choices: ["Use it", "Revise"] }), "PRTL_USE_REVISE");
+  assert.equal(apnsCategory({ choices: ["Approve", "Hold"] }), "NIB_APPROVE_HOLD");
+  assert.equal(apnsCategory({ choices: ["Approve", "Reject"] }), "NIB_APPROVE_REJECT");
+  assert.equal(apnsCategory({ choices: ["Allow", "Deny"] }), "NIB_ALLOW_DENY");
+  assert.equal(apnsCategory({ choices: ["Yes", "No"] }), "NIB_YES_NO");
+  assert.equal(apnsCategory({ choices: ["Ship", "Hold"] }), "NIB_SHIP_HOLD");
+  assert.equal(apnsCategory({ choices: ["Ship", "Hold", "Revise"] }), "NIB_SHIP_HOLD_REVISE");
+  assert.equal(apnsCategory({ choices: ["Use it", "Revise"] }), "NIB_USE_REVISE");
 });
 
 test("falls back to generic choice, text, and open categories", () => {
-  assert.equal(apnsCategory({ choices: ["Alpha", "Beta"] }), "PRTL_CHOICE");
-  assert.equal(apnsCategory({ allowText: true }), "PRTL_TEXT");
-  assert.equal(apnsCategory({}), "PRTL_OPEN");
+  assert.equal(apnsCategory({ choices: ["Alpha", "Beta"] }), "NIB_CHOICE");
+  assert.equal(apnsCategory({ allowText: true }), "NIB_TEXT");
+  assert.equal(apnsCategory({}), "NIB_OPEN");
 });
 
 test("uses per-device APNs topics when available", () => {
-  const config = { topic: "com.example.prtl" };
-  assert.equal(apnsTopicForDevice(config, { apnsTopic: "com.example.prtl.watchkitapp" }), "com.example.prtl.watchkitapp");
-  assert.equal(apnsTopicForDevice(config, { apnsTopic: null }), "com.example.prtl");
+  const config = { topic: "com.example.nib" };
+  assert.equal(apnsTopicForDevice(config, { apnsTopic: "com.example.nib.watchkitapp" }), "com.example.nib.watchkitapp");
+  assert.equal(apnsTopicForDevice(config, { apnsTopic: null }), "com.example.nib");
 });
 
 test("reports APNs readiness issues without requiring a send attempt", async () => {
-  const keys = ["PRTL_APNS_TEAM_ID", "PRTL_APNS_KEY_ID", "PRTL_APNS_KEY_PATH", "PRTL_APNS_TOPIC", "PRTL_APNS_ENV"] as const;
+  const keys = ["NIB_APNS_TEAM_ID", "NIB_APNS_KEY_ID", "NIB_APNS_KEY_PATH", "NIB_APNS_TOPIC", "NIB_APNS_ENV"] as const;
   const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
   try {
     for (const key of keys) delete process.env[key];
 
     const missing = await apnsReadiness();
     assert.equal(missing.apnsConfigured, false);
-    assert.deepEqual(missing.apnsMissing, ["PRTL_APNS_TEAM_ID", "PRTL_APNS_KEY_ID", "PRTL_APNS_KEY_PATH", "PRTL_APNS_TOPIC"]);
+    assert.deepEqual(missing.apnsMissing, ["NIB_APNS_TEAM_ID", "NIB_APNS_KEY_ID", "NIB_APNS_KEY_PATH", "NIB_APNS_TOPIC"]);
 
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "prtl-apns-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "nib-apns-"));
     const keyPath = path.join(dir, "AuthKey_TEST.p8");
     await fs.writeFile(keyPath, "test-key", "utf8");
-    process.env.PRTL_APNS_TEAM_ID = "TEAMID";
-    process.env.PRTL_APNS_KEY_ID = "KEYID";
-    process.env.PRTL_APNS_KEY_PATH = keyPath;
-    process.env.PRTL_APNS_TOPIC = "com.example.prtl";
-    process.env.PRTL_APNS_ENV = "production";
+    process.env.NIB_APNS_TEAM_ID = "TEAMID";
+    process.env.NIB_APNS_KEY_ID = "KEYID";
+    process.env.NIB_APNS_KEY_PATH = keyPath;
+    process.env.NIB_APNS_TOPIC = "com.example.nib";
+    process.env.NIB_APNS_ENV = "production";
 
     const ready = await apnsReadiness();
     assert.equal(ready.apnsConfigured, true);
     assert.equal(ready.apnsEnvironment, "production");
-    assert.equal(ready.apnsTopic, "com.example.prtl");
+    assert.equal(ready.apnsTopic, "com.example.nib");
     assert.equal(ready.apnsKeyReadable, true);
     assert.deepEqual(ready.apnsIssues, []);
   } finally {

@@ -23,7 +23,7 @@ export async function proxyHttp(req: http.IncomingMessage, res: http.ServerRespo
     return;
   }
 
-  const upstreamPath = `${match[2] ?? "/"}${new URL(req.url ?? "/", "http://prtl.local").search}`;
+  const upstreamPath = `${match[2] ?? "/"}${new URL(req.url ?? "/", "http://nib.local").search}`;
   const headers = buildProxyRequestHeaders(req, project.host, project.port, upstreamPath);
 
   const upstream = http.request(
@@ -84,7 +84,7 @@ export async function proxyUpgrade(
     return;
   }
 
-  const upstreamPath = `${match[2] ?? "/"}${new URL(req.url ?? "/", "http://prtl.local").search}`;
+  const upstreamPath = `${match[2] ?? "/"}${new URL(req.url ?? "/", "http://nib.local").search}`;
   const upstream = net.connect(project.port, project.host === "::1" ? "::1" : project.host);
 
   upstream.on("connect", () => {

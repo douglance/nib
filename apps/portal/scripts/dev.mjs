@@ -3,7 +3,7 @@ import process from "node:process";
 
 const env = {
   ...process.env,
-  HOST: process.env.HOST ?? "0.0.0.0",
+  HOST: process.env.HOST ?? "127.0.0.1",
   PORT: process.env.PORT ?? "4070",
   CLIENT_PORT: process.env.CLIENT_PORT ?? "4071",
   NODE_ENV: "development"

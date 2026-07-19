@@ -8,14 +8,14 @@ import { test } from "node:test";
 
 test("preferred route update returns 404 instead of partial project for missing projects", async () => {
   const port = await freePort();
-  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "prtl-server-"));
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "nib-server-"));
   const server = spawn(process.execPath, ["--import", "tsx", "src/server/index.ts"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       PORT: String(port),
       CLIENT_PORT: String(port + 1),
-      PRTL_DATA_DIR: dataDir,
+      NIB_DATA_DIR: dataDir,
       PUBLIC_BASE_URL: `http://127.0.0.1:${port}`,
       LOCAL_BASE_URL: `http://127.0.0.1:${port}`
     },

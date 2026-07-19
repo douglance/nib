@@ -3,10 +3,10 @@ import UserNotifications
 import WatchKit
 
 @main
-struct PrtlWatchApp: App {
-    @WKExtensionDelegateAdaptor(PrtlWatchDelegate.self) private var delegate
-    @StateObject private var client = PrtlClient()
-    @AppStorage("prtl.baseURL") private var baseURLString = PrtlDefaults.defaultBaseURLString
+struct NibWatchApp: App {
+    @WKExtensionDelegateAdaptor(NibWatchDelegate.self) private var delegate
+    @StateObject private var client = NibClient()
+    @AppStorage("nib.baseURL") private var baseURLString = NibDefaults.defaultBaseURLString
 
     var body: some Scene {
         WindowGroup {
@@ -22,19 +22,19 @@ struct PrtlWatchApp: App {
     }
 }
 
-final class PrtlWatchDelegate: NSObject, WKExtensionDelegate, @preconcurrency UNUserNotificationCenterDelegate {
+final class NibWatchDelegate: NSObject, WKExtensionDelegate, @preconcurrency UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching() {
-        PrtlWatchNotificationActions.register()
+        NibWatchNotificationActions.register()
         UNUserNotificationCenter.current().delegate = self
     }
 
     func didRegisterForRemoteNotifications(withDeviceToken deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        NotificationCenter.default.post(name: .prtlWatchDeviceToken, object: token)
+        NotificationCenter.default.post(name: .nibWatchDeviceToken, object: token)
     }
 
     func didFailToRegisterForRemoteNotificationsWithError(_ error: Error) {
-        NotificationCenter.default.post(name: .prtlWatchDeviceRegistrationFailed, object: error.localizedDescription)
+        NotificationCenter.default.post(name: .nibWatchDeviceRegistrationFailed, object: error.localizedDescription)
     }
 
     func userNotificationCenter(
@@ -43,17 +43,17 @@ final class PrtlWatchDelegate: NSObject, WKExtensionDelegate, @preconcurrency UN
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         Task {
-            await PrtlWatchNotificationActions.handle(response: response)
+            await NibWatchNotificationActions.handle(response: response)
             completionHandler()
         }
     }
 }
 
 extension Notification.Name {
-    static let prtlWatchDeviceToken = Notification.Name("prtlWatchDeviceToken")
-    static let prtlWatchDeviceRegistrationFailed = Notification.Name("prtlWatchDeviceRegistrationFailed")
-    static let prtlWatchOpenRequest = Notification.Name("prtlWatchOpenRequest")
-    static let prtlWatchOpenProject = Notification.Name("prtlWatchOpenProject")
+    static let nibWatchDeviceToken = Notification.Name("nibWatchDeviceToken")
+    static let nibWatchDeviceRegistrationFailed = Notification.Name("nibWatchDeviceRegistrationFailed")
+    static let nibWatchOpenRequest = Notification.Name("nibWatchOpenRequest")
+    static let nibWatchOpenProject = Notification.Name("nibWatchOpenProject")
 }
 
 enum WatchTheme {
@@ -69,23 +69,23 @@ enum WatchTheme {
 }
 
 struct WatchRequestListView: View {
-    @EnvironmentObject private var client: PrtlClient
+    @EnvironmentObject private var client: NibClient
     @Binding var baseURLString: String
-    @State private var projects: [PrtlProject] = []
-    @State private var requests: [PrtlRequest] = []
-    @State private var waitingPanes: [PrtlWaitingPane] = []
+    @State private var projects: [NibProject] = []
+    @State private var requests: [NibRequest] = []
+    @State private var waitingPanes: [NibWaitingPane] = []
     @State private var error: String?
     @State private var notice: String?
     @State private var showingSettings = false
     @State private var loading = false
-    @State private var navigationPath: [PrtlRequest] = []
-    @State private var selectedProject: PrtlProject?
+    @State private var navigationPath: [NibRequest] = []
+    @State private var selectedProject: NibProject?
 
-    private var activeRequests: [PrtlRequest] {
+    private var activeRequests: [NibRequest] {
         requests.filter(\.isActive)
     }
 
-    private var visibleProjects: [PrtlProject] {
+    private var visibleProjects: [NibProject] {
         Array(projects.prefix(4))
     }
 
@@ -151,19 +151,19 @@ struct WatchRequestListView: View {
                     .padding(.bottom, 8)
                 }
             }
-            .navigationTitle("Prtl")
-            .navigationDestination(for: PrtlRequest.self) { request in
+            .navigationTitle("Nib")
+            .navigationDestination(for: NibRequest.self) { request in
                 WatchRequestDetailView(request: request)
             }
             .task {
-                if let server = launchArgument("prtl.server") {
+                if let server = launchArgument("nib.server") {
                     baseURLString = server
                     client.configure(baseURLString: server)
                 }
                 await load()
-                if let requestId = launchArgument("prtl.openRequest") {
+                if let requestId = launchArgument("nib.openRequest") {
                     await openRequest(id: requestId)
-                } else if let projectId = launchArgument("prtl.openProject") {
+                } else if let projectId = launchArgument("nib.openProject") {
                     await openProject(id: projectId)
                 } else {
                     await consumePendingNotificationRoute()
@@ -177,21 +177,21 @@ struct WatchRequestListView: View {
                     WatchProjectDetailView(project: project)
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .prtlWatchDeviceToken)) { payload in
+            .onReceive(NotificationCenter.default.publisher(for: .nibWatchDeviceToken)) { payload in
                 guard let token = payload.object as? String else { return }
                 Task { await registerDevice(token: token) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .prtlWatchDeviceRegistrationFailed)) { payload in
+            .onReceive(NotificationCenter.default.publisher(for: .nibWatchDeviceRegistrationFailed)) { payload in
                 notice = payload.object as? String ?? "Device registration failed."
             }
-            .onReceive(NotificationCenter.default.publisher(for: .prtlWatchOpenRequest)) { payload in
+            .onReceive(NotificationCenter.default.publisher(for: .nibWatchOpenRequest)) { payload in
                 guard let requestId = payload.object as? String else { return }
-                PrtlWatchNotificationActions.clearPendingRequestId(requestId)
+                NibWatchNotificationActions.clearPendingRequestId(requestId)
                 Task { await openRequest(id: requestId) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .prtlWatchOpenProject)) { payload in
+            .onReceive(NotificationCenter.default.publisher(for: .nibWatchOpenProject)) { payload in
                 guard let projectId = payload.object as? String else { return }
-                PrtlWatchNotificationActions.clearPendingProjectId(projectId)
+                NibWatchNotificationActions.clearPendingProjectId(projectId)
                 Task { await openProject(id: projectId) }
             }
             .onOpenURL { url in
@@ -217,7 +217,7 @@ struct WatchRequestListView: View {
     }
 
     private func registerForNotifications() async {
-        guard PrtlEntitlements.hasAPSEnvironment else {
+        guard NibEntitlements.hasAPSEnvironment else {
             notice = "This build is missing the APS entitlement. Install a push-signed build to receive lock-screen requests."
             return
         }
@@ -275,17 +275,17 @@ struct WatchRequestListView: View {
     }
 
     private func consumePendingNotificationRoute() async {
-        if let requestId = PrtlWatchNotificationActions.consumePendingRequestId() {
+        if let requestId = NibWatchNotificationActions.consumePendingRequestId() {
             await openRequest(id: requestId)
             return
         }
-        if let projectId = PrtlWatchNotificationActions.consumePendingProjectId() {
+        if let projectId = NibWatchNotificationActions.consumePendingProjectId() {
             await openProject(id: projectId)
         }
     }
 
     private func open(url: URL) {
-        guard url.scheme == "prtl" else { return }
+        guard url.scheme == "nib" else { return }
         if let requestId = requestId(from: url) {
             Task { await openRequest(id: requestId) }
             return
@@ -334,7 +334,7 @@ struct WatchStatusSurface: View {
     var count: Int
     var projectCount: Int
     var waitingCount: Int
-    var waitingPane: PrtlWaitingPane?
+    var waitingPane: NibWaitingPane?
     var server: String
     var loading: Bool
     var refresh: () -> Void
@@ -396,7 +396,7 @@ struct WatchStatusSurface: View {
 }
 
 struct WatchRequestCard: View {
-    var request: PrtlRequest
+    var request: NibRequest
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -423,7 +423,7 @@ struct WatchRequestCard: View {
 }
 
 struct WatchWaitingPaneCard: View {
-    var pane: PrtlWaitingPane
+    var pane: NibWaitingPane
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -453,7 +453,7 @@ struct WatchWaitingPaneCard: View {
 }
 
 struct WatchProjectCard: View {
-    var project: PrtlProject
+    var project: NibProject
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -518,7 +518,7 @@ struct WatchIconButtonStyle: ButtonStyle {
     }
 }
 
-enum PrtlEntitlements {
+enum NibEntitlements {
     static var hasAPSEnvironment: Bool {
         #if targetEnvironment(simulator)
         true
@@ -546,8 +546,8 @@ struct WatchMiniIconButtonStyle: ButtonStyle {
 }
 
 struct WatchProjectDetailView: View {
-    @EnvironmentObject private var client: PrtlClient
-    @State var project: PrtlProject
+    @EnvironmentObject private var client: NibClient
+    @State var project: NibProject
     @State private var message: String?
     @State private var rechecking = false
     @State private var settingRoute: String?
@@ -648,7 +648,7 @@ struct WatchProjectDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This terminates the backing local process through the prtl server.")
+            Text("This terminates the backing local process through the nib server.")
         }
     }
 
@@ -711,7 +711,7 @@ struct WatchProjectDetailView: View {
         }
     }
 
-    private func routeDetail(_ route: PrtlRouteInfo?) -> String {
+    private func routeDetail(_ route: NibRouteInfo?) -> String {
         guard let route else { return "Unavailable" }
         if let code = route.statusCode {
             return "HTTP \(code)"
@@ -721,8 +721,8 @@ struct WatchProjectDetailView: View {
 }
 
 struct WatchRequestDetailView: View {
-    @EnvironmentObject private var client: PrtlClient
-    @State var request: PrtlRequest
+    @EnvironmentObject private var client: NibClient
+    @State var request: NibRequest
     @State private var reply = ""
     @State private var message: String?
     @State private var sending = false
@@ -877,14 +877,14 @@ struct WatchSettingsView: View {
     }
 }
 
-enum PrtlWatchNotificationActions {
-    static let open = "PRTL_OPEN"
-    static let choice0 = "PRTL_CHOICE_0"
-    static let choice1 = "PRTL_CHOICE_1"
-    static let choice2 = "PRTL_CHOICE_2"
-    static let text = "PRTL_TEXT_REPLY"
-    private static let pendingRequestKey = "prtl.pendingNotification.requestId"
-    private static let pendingProjectKey = "prtl.pendingNotification.projectId"
+enum NibWatchNotificationActions {
+    static let open = "NIB_OPEN"
+    static let choice0 = "NIB_CHOICE_0"
+    static let choice1 = "NIB_CHOICE_1"
+    static let choice2 = "NIB_CHOICE_2"
+    static let text = "NIB_TEXT_REPLY"
+    private static let pendingRequestKey = "nib.pendingNotification.requestId"
+    private static let pendingProjectKey = "nib.pendingNotification.projectId"
 
     static func register() {
         let openAction = UNNotificationAction(identifier: open, title: "Open", options: [.foreground])
@@ -899,10 +899,10 @@ enum PrtlWatchNotificationActions {
             textInputPlaceholder: "Reply"
         )
         var categories = [
-            UNNotificationCategory(identifier: "PRTL_OPEN", actions: [openAction], intentIdentifiers: []),
-            choiceCategory("PRTL_APPROVAL", "Approve", "Hold", openAction),
-            UNNotificationCategory(identifier: "PRTL_CHOICE", actions: [firstAction, secondAction, thirdAction, textAction, openAction], intentIdentifiers: []),
-            UNNotificationCategory(identifier: "PRTL_TEXT", actions: [textAction, openAction], intentIdentifiers: [])
+            UNNotificationCategory(identifier: "NIB_OPEN", actions: [openAction], intentIdentifiers: []),
+            choiceCategory("NIB_APPROVAL", "Approve", "Hold", openAction),
+            UNNotificationCategory(identifier: "NIB_CHOICE", actions: [firstAction, secondAction, thirdAction, textAction, openAction], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "NIB_TEXT", actions: [textAction, openAction], intentIdentifiers: [])
         ]
         categories.append(contentsOf: choiceCategories(openAction: openAction))
         UNUserNotificationCenter.current().setNotificationCategories(Set(categories))
@@ -910,13 +910,13 @@ enum PrtlWatchNotificationActions {
 
     private static func choiceCategories(openAction: UNNotificationAction) -> [UNNotificationCategory] {
         [
-            threeChoiceCategory("PRTL_SHIP_HOLD_REVISE", "Ship", "Hold", "Revise", openAction),
-            choiceCategory("PRTL_APPROVE_HOLD", "Approve", "Hold", openAction),
-            choiceCategory("PRTL_APPROVE_REJECT", "Approve", "Reject", openAction),
-            choiceCategory("PRTL_ALLOW_DENY", "Allow", "Deny", openAction),
-            choiceCategory("PRTL_YES_NO", "Yes", "No", openAction),
-            choiceCategory("PRTL_SHIP_HOLD", "Ship", "Hold", openAction),
-            choiceCategory("PRTL_USE_REVISE", "Use it", "Revise", openAction)
+            threeChoiceCategory("NIB_SHIP_HOLD_REVISE", "Ship", "Hold", "Revise", openAction),
+            choiceCategory("NIB_APPROVE_HOLD", "Approve", "Hold", openAction),
+            choiceCategory("NIB_APPROVE_REJECT", "Approve", "Reject", openAction),
+            choiceCategory("NIB_ALLOW_DENY", "Allow", "Deny", openAction),
+            choiceCategory("NIB_YES_NO", "Yes", "No", openAction),
+            choiceCategory("NIB_SHIP_HOLD", "Ship", "Hold", openAction),
+            choiceCategory("NIB_USE_REVISE", "Use it", "Revise", openAction)
         ]
     }
 
@@ -957,7 +957,7 @@ enum PrtlWatchNotificationActions {
     }
 
     static func handle(response: UNNotificationResponse) async {
-        let payload = prtlPayload(from: response.notification.request.content.userInfo)
+        let payload = nibPayload(from: response.notification.request.content.userInfo)
         if response.actionIdentifier == UNNotificationDefaultActionIdentifier || response.actionIdentifier == open {
             guard let requestId = payload["requestId"] as? String else {
                 await openPayload(payload)
@@ -966,7 +966,7 @@ enum PrtlWatchNotificationActions {
             storePendingRequestId(requestId)
             await markClicked(requestId: requestId)
             await MainActor.run {
-                NotificationCenter.default.post(name: .prtlWatchOpenRequest, object: requestId)
+                NotificationCenter.default.post(name: .nibWatchOpenRequest, object: requestId)
             }
             return
         }
@@ -1000,7 +1000,7 @@ enum PrtlWatchNotificationActions {
         guard let projectId = payload["projectId"] as? String, !projectId.isEmpty else { return }
         storePendingProjectId(projectId)
         await MainActor.run {
-            NotificationCenter.default.post(name: .prtlWatchOpenProject, object: projectId)
+            NotificationCenter.default.post(name: .nibWatchOpenProject, object: projectId)
         }
     }
 
@@ -1020,11 +1020,11 @@ enum PrtlWatchNotificationActions {
         clearPendingString(pendingProjectKey, matching: projectId)
     }
 
-    private static func prtlPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
-        if let payload = userInfo["prtl"] as? [String: Any] {
+    private static func nibPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
+        if let payload = userInfo["nib"] as? [String: Any] {
             return payload
         }
-        if let payload = userInfo["prtl"] as? NSDictionary {
+        if let payload = userInfo["nib"] as? NSDictionary {
             return payload as? [String: Any] ?? [:]
         }
         return userInfo.reduce(into: [String: Any]()) { result, item in
@@ -1063,7 +1063,7 @@ enum PrtlWatchNotificationActions {
     }
 
     private static func endpoint(_ path: String) -> URL? {
-        let base = UserDefaults.standard.string(forKey: "prtl.baseURL") ?? PrtlDefaults.defaultBaseURLString
+        let base = UserDefaults.standard.string(forKey: "nib.baseURL") ?? NibDefaults.defaultBaseURLString
         return URL(string: path, relativeTo: URL(string: base))?.absoluteURL
     }
 

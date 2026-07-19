@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import type net from "node:net";
-import { cliFetch } from "../cli/index";
 import { listPacks, readBrief, readLibraryContext, readPack } from "../html/packs";
 import { validateFeedbackSurface, validateHtml } from "../html/validate";
 import { HOST, PORT, PUBLIC_BASE_URL, SCREENSHOT_DIR } from "./config";
@@ -387,11 +386,6 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === "/api/cli" || url.pathname.startsWith("/api/cli/")) {
-      await handleCliFetch(req, res, url);
-      return;
-    }
-
     if (url.pathname.match(/^\/api\/projects\/[^/]+\/compatibility$/)) {
       const projectId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
       const projects = await discoverProjects(url.searchParams.get("refresh") === "1");
@@ -591,8 +585,20 @@ server.on("upgrade", async (req, socket, head) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`prtl listening at ${PUBLIC_BASE_URL}`);
+  console.log(`nib listening at ${PUBLIC_BASE_URL}`);
 });
+
+function shutdown(signal: NodeJS.Signals): void {
+  server.close((error) => {
+    if (error) {
+      console.error(`Nib failed to shut down after ${signal}`, error);
+      process.exitCode = 1;
+    }
+  });
+}
+
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));
 
 const retentionSweep = () => runRetentionSweep().catch((error) => console.error("retention sweep failed", error));
 void retentionSweep();
@@ -649,7 +655,7 @@ function feedbackLabHtml(): string {
   <main>
     <section>
       <h1>Feedback Lab</h1>
-      <p>This built-in project exists so prtl can test the fastest path from agent question to human answer without relying on another dev server.</p>
+      <p>This built-in project exists so nib can test the fastest path from agent question to human answer without relying on another dev server.</p>
       <div class="metrics">
         <div><strong>1</strong><small>Tap to open</small></div>
         <div><strong>30px</strong><small>Hidden sheet</small></div>
@@ -674,38 +680,6 @@ function readJsonBody<T>(req: http.IncomingMessage): Promise<T> {
         reject(error);
       }
     });
-    req.on("error", reject);
-  });
-}
-
-async function handleCliFetch(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<void> {
-  const cliPath = url.pathname.replace(/^\/api\/cli/, "") || "/";
-  const cliUrl = new URL(`${cliPath}${url.search}`, "http://prtl-cli.local");
-  const body = ["GET", "HEAD"].includes(req.method ?? "GET") ? undefined : await readRawBody(req);
-  const response = await cliFetch(
-    new Request(cliUrl, {
-      method: req.method,
-      headers: req.headers as HeadersInit,
-      body: body ? new Uint8Array(body) : undefined
-    })
-  );
-  res.writeHead(response.status, Object.fromEntries(response.headers.entries()));
-  if (response.body) {
-    const reader = response.body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      res.write(Buffer.from(value));
-    }
-  }
-  res.end();
-}
-
-function readRawBody(req: http.IncomingMessage): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    req.on("end", () => resolve(Buffer.concat(chunks)));
     req.on("error", reject);
   });
 }

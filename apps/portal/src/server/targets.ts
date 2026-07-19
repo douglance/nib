@@ -123,7 +123,7 @@ function targetToProject(target: RegisteredTarget, now = Date.now()): ProjectInf
       port: 0,
       host: "",
       sourcePath: null,
-      command: "prtl registered website target",
+      command: "nib registered website target",
       framework: "Website",
       url: target.url,
       status: "online",
@@ -146,7 +146,7 @@ function targetToProject(target: RegisteredTarget, now = Date.now()): ProjectInf
     available: true,
     label: "Artifact",
     statusCode: 200,
-    message: "Registered HTML artifact served through prtl."
+    message: "Registered HTML artifact served through nib."
   };
   return {
     id: target.id,
@@ -155,7 +155,7 @@ function targetToProject(target: RegisteredTarget, now = Date.now()): ProjectInf
     port: PORT,
     host: HOST,
     sourcePath: target.artifactPath ? path.dirname(target.artifactPath) : null,
-    command: "prtl registered html artifact",
+    command: "nib registered html artifact",
     framework: "HTML Artifact",
     artifactPath: target.artifactPath,
     artifactKind: target.artifactKind,

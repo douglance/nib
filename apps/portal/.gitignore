@@ -1,9 +1,5 @@
 node_modules/
 dist/
-.prtl/
+.nib/
 .DS_Store
 *.log
-native/.zig-cache/
-native/zig-out/
-native/app.zon
-native/src/allowed_origins.zig

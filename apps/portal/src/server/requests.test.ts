@@ -6,7 +6,7 @@ import { test } from "node:test";
 import type { CodeStateSnapshot, FeedbackRequest } from "../shared/types";
 
 test("createRequest resolves project targets to canonical viewer URLs", async () => {
-  process.env.PRTL_DATA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "prtl-requests-"));
+  process.env.NIB_DATA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "nib-requests-"));
   const { createRequest } = await import("./requests");
 
   const request = await createRequest({

@@ -16,7 +16,7 @@ export async function killProject(projectId: string): Promise<KillProjectResult>
     throw new Error(`Project is not killable: ${project.name}`);
   }
   if (project.processId === process.pid) {
-    throw new Error("Refusing to kill the prtl server process.");
+    throw new Error("Refusing to kill the nib server process.");
   }
 
   const signals: string[] = [];

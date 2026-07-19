@@ -6,10 +6,10 @@ import UserNotifications
 import WebKit
 
 @main
-struct PrtlApp: App {
-    @UIApplicationDelegateAdaptor(PrtlAppDelegate.self) private var appDelegate
-    @StateObject private var client = PrtlClient()
-    @AppStorage("prtl.baseURL") private var baseURLString = PrtlDefaults.defaultBaseURLString
+struct NibApp: App {
+    @UIApplicationDelegateAdaptor(NibAppDelegate.self) private var appDelegate
+    @StateObject private var client = NibClient()
+    @AppStorage("nib.baseURL") private var baseURLString = NibDefaults.defaultBaseURLString
 
     var body: some Scene {
         WindowGroup {
@@ -25,20 +25,20 @@ struct PrtlApp: App {
     }
 }
 
-final class PrtlAppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
+final class NibAppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-        PrtlNotificationActions.register()
+        NibNotificationActions.register()
         UNUserNotificationCenter.current().delegate = self
         return true
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         let token = deviceToken.map { String(format: "%02.2hhx", $0) }.joined()
-        NotificationCenter.default.post(name: .prtlDeviceToken, object: token)
+        NotificationCenter.default.post(name: .nibDeviceToken, object: token)
     }
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
-        NotificationCenter.default.post(name: .prtlDeviceRegistrationFailed, object: error.localizedDescription)
+        NotificationCenter.default.post(name: .nibDeviceRegistrationFailed, object: error.localizedDescription)
     }
 
     func userNotificationCenter(
@@ -47,51 +47,51 @@ final class PrtlAppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UN
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         Task {
-            await PrtlNotificationActions.handle(response: response)
+            await NibNotificationActions.handle(response: response)
             completionHandler()
         }
     }
 }
 
 extension Notification.Name {
-    static let prtlDeviceToken = Notification.Name("prtlDeviceToken")
-    static let prtlDeviceRegistrationFailed = Notification.Name("prtlDeviceRegistrationFailed")
-    static let prtlOpenRequest = Notification.Name("prtlOpenRequest")
-    static let prtlOpenProject = Notification.Name("prtlOpenProject")
-    static let prtlOpenWebURL = Notification.Name("prtlOpenWebURL")
+    static let nibDeviceToken = Notification.Name("nibDeviceToken")
+    static let nibDeviceRegistrationFailed = Notification.Name("nibDeviceRegistrationFailed")
+    static let nibOpenRequest = Notification.Name("nibOpenRequest")
+    static let nibOpenProject = Notification.Name("nibOpenProject")
+    static let nibOpenWebURL = Notification.Name("nibOpenWebURL")
 }
 
 struct RequestInboxView: View {
-    @EnvironmentObject private var client: PrtlClient
+    @EnvironmentObject private var client: NibClient
     @Binding var baseURLString: String
-    @State private var projects: [PrtlProject] = []
-    @State private var requests: [PrtlRequest] = []
-    @State private var devices: [PrtlDevice] = []
-    @State private var notificationStatus: PrtlNotificationStatus?
-    @State private var waitingPanes: [PrtlWaitingPane] = []
-    @State private var activity: [PrtlActivityEvent] = []
+    @State private var projects: [NibProject] = []
+    @State private var requests: [NibRequest] = []
+    @State private var devices: [NibDevice] = []
+    @State private var notificationStatus: NibNotificationStatus?
+    @State private var waitingPanes: [NibWaitingPane] = []
+    @State private var activity: [NibActivityEvent] = []
     @State private var error: String?
     @State private var notice: String?
     @State private var showingSettings = false
     @State private var loading = false
     @State private var sendingTestNotification = false
-    @State private var navigationPath: [PrtlRequest] = []
-    @State private var selectedProject: PrtlProject?
+    @State private var navigationPath: [NibRequest] = []
+    @State private var selectedProject: NibProject?
     @State private var safariRoute: SafariRoute?
     @State private var webRoute: WebRoute?
-    @AppStorage("prtl.autoRegisteredNotifications") private var autoRegisteredNotifications = false
+    @AppStorage("nib.autoRegisteredNotifications") private var autoRegisteredNotifications = false
 
-    private var activeRequests: [PrtlRequest] {
+    private var activeRequests: [NibRequest] {
         requests.filter(\.isActive)
     }
 
     var body: some View {
         NavigationStack(path: $navigationPath) {
             ZStack {
-                PrtlTheme.background.ignoresSafeArea()
+                NibTheme.background.ignoresSafeArea()
                 List {
                     Section {
-                        PrtlStatusSurface(
+                        NibStatusSurface(
                             activeCount: activeRequests.count,
                             server: client.baseURL.host() ?? client.baseURL.absoluteString,
                             deviceCount: notificationStatus?.deviceCount ?? devices.count,
@@ -120,7 +120,7 @@ struct RequestInboxView: View {
                         } header: {
                             Text("Devices")
                                 .font(.footnote.weight(.semibold))
-                                .foregroundStyle(PrtlTheme.muted)
+                                .foregroundStyle(NibTheme.muted)
                         }
                     }
 
@@ -132,7 +132,7 @@ struct RequestInboxView: View {
                         } header: {
                             Text("Waiting")
                                 .font(.footnote.weight(.semibold))
-                                .foregroundStyle(PrtlTheme.muted)
+                                .foregroundStyle(NibTheme.muted)
                         }
                     }
 
@@ -146,7 +146,7 @@ struct RequestInboxView: View {
                         } header: {
                             Text("Projects")
                                 .font(.footnote.weight(.semibold))
-                                .foregroundStyle(PrtlTheme.muted)
+                                .foregroundStyle(NibTheme.muted)
                         }
                     }
 
@@ -156,12 +156,12 @@ struct RequestInboxView: View {
                                 RequestRow(request: request)
                                     .padding(.vertical, 10)
                             }
-                            .listRowBackground(PrtlTheme.surface)
+                            .listRowBackground(NibTheme.surface)
                         }
                     } header: {
                         Text(activeRequests.isEmpty ? "Recent" : "Waiting")
                             .font(.footnote.weight(.semibold))
-                            .foregroundStyle(PrtlTheme.muted)
+                            .foregroundStyle(NibTheme.muted)
                     }
 
                     if !activity.isEmpty {
@@ -169,36 +169,36 @@ struct RequestInboxView: View {
                             ForEach(activity.prefix(4)) { event in
                                 ActivityRow(event: event)
                                     .padding(.vertical, 8)
-                                    .listRowBackground(PrtlTheme.surface)
+                                    .listRowBackground(NibTheme.surface)
                             }
                         } header: {
                             Text("Activity")
                                 .font(.footnote.weight(.semibold))
-                                .foregroundStyle(PrtlTheme.muted)
+                                .foregroundStyle(NibTheme.muted)
                         }
                     }
                 }
                 .scrollContentBackground(.hidden)
                 .listStyle(.insetGrouped)
             }
-            .navigationTitle("Prtl")
+            .navigationTitle("Nib")
             .toolbarTitleDisplayMode(.large)
-            .navigationDestination(for: PrtlRequest.self) { request in
+            .navigationDestination(for: NibRequest.self) { request in
                 RequestDetailView(request: request)
             }
             .task {
-                if let server = launchArgument("prtl.server") {
+                if let server = launchArgument("nib.server") {
                     baseURLString = server
                     client.configure(baseURLString: server)
                 }
                 await load()
-                if !autoRegisteredNotifications, PrtlEntitlements.hasAPSEnvironment {
+                if !autoRegisteredNotifications, NibEntitlements.hasAPSEnvironment {
                     autoRegisteredNotifications = true
                     await registerForNotifications()
                 }
-                if let requestId = launchArgument("prtl.openRequest") {
+                if let requestId = launchArgument("nib.openRequest") {
                     await openRequest(id: requestId)
-                } else if let projectId = launchArgument("prtl.openProject") {
+                } else if let projectId = launchArgument("nib.openProject") {
                     await openProject(id: projectId)
                 } else {
                     await consumePendingNotificationRoute()
@@ -221,27 +221,27 @@ struct RequestInboxView: View {
             .sheet(item: $selectedProject) { project in
                 ProjectDetailView(project: project)
             }
-            .onReceive(NotificationCenter.default.publisher(for: .prtlDeviceToken)) { payload in
+            .onReceive(NotificationCenter.default.publisher(for: .nibDeviceToken)) { payload in
                 guard let token = payload.object as? String else { return }
                 Task { await registerDevice(token: token) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .prtlDeviceRegistrationFailed)) { payload in
+            .onReceive(NotificationCenter.default.publisher(for: .nibDeviceRegistrationFailed)) { payload in
                 notice = payload.object as? String ?? "Device registration failed."
             }
-            .onReceive(NotificationCenter.default.publisher(for: .prtlOpenRequest)) { payload in
+            .onReceive(NotificationCenter.default.publisher(for: .nibOpenRequest)) { payload in
                 guard let requestId = payload.object as? String else { return }
-                PrtlNotificationActions.clearPendingRequestId(requestId)
+                NibNotificationActions.clearPendingRequestId(requestId)
                 Task { await openRequest(id: requestId) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .prtlOpenProject)) { payload in
+            .onReceive(NotificationCenter.default.publisher(for: .nibOpenProject)) { payload in
                 guard let projectId = payload.object as? String else { return }
-                PrtlNotificationActions.clearPendingProjectId(projectId)
+                NibNotificationActions.clearPendingProjectId(projectId)
                 Task { await openProject(id: projectId) }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .prtlOpenWebURL)) { payload in
+            .onReceive(NotificationCenter.default.publisher(for: .nibOpenWebURL)) { payload in
                 guard let url = payload.object as? URL else { return }
-                PrtlNotificationActions.clearPendingWebURL(url)
-                webRoute = WebRoute(url: url, title: url.host ?? "prtl")
+                NibNotificationActions.clearPendingWebURL(url)
+                webRoute = WebRoute(url: url, title: url.host ?? "nib")
             }
             .onOpenURL { url in
                 open(url: url)
@@ -276,7 +276,7 @@ struct RequestInboxView: View {
     }
 
     private func registerForNotifications() async {
-        guard PrtlEntitlements.hasAPSEnvironment else {
+        guard NibEntitlements.hasAPSEnvironment else {
             notice = "This build is missing the APS entitlement. Install a push-signed build to receive lock-screen requests."
             return
         }
@@ -336,7 +336,7 @@ struct RequestInboxView: View {
     }
 
     private func open(url: URL) {
-        guard url.scheme == "prtl" else { return }
+        guard url.scheme == "nib" else { return }
         if let server = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?
             .first(where: { $0.name == "server" })?
@@ -375,16 +375,16 @@ struct RequestInboxView: View {
     }
 
     private func consumePendingNotificationRoute() async {
-        if let requestId = PrtlNotificationActions.consumePendingRequestId() {
+        if let requestId = NibNotificationActions.consumePendingRequestId() {
             await openRequest(id: requestId)
             return
         }
-        if let projectId = PrtlNotificationActions.consumePendingProjectId() {
+        if let projectId = NibNotificationActions.consumePendingProjectId() {
             await openProject(id: projectId)
             return
         }
-        if let url = PrtlNotificationActions.consumePendingWebURL() {
-            webRoute = WebRoute(url: url, title: url.host ?? "prtl")
+        if let url = NibNotificationActions.consumePendingWebURL() {
+            webRoute = WebRoute(url: url, title: url.host ?? "nib")
         }
     }
 
@@ -424,7 +424,7 @@ struct RequestInboxView: View {
 
 }
 
-struct PrtlStatusSurface: View {
+struct NibStatusSurface: View {
     var activeCount: Int
     var server: String
     var deviceCount: Int
@@ -442,14 +442,14 @@ struct PrtlStatusSurface: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(activeCount == 1 ? "1 request waiting" : "\(activeCount) requests waiting")
                         .font(.title2.weight(.semibold))
-                        .foregroundStyle(PrtlTheme.text)
+                        .foregroundStyle(NibTheme.text)
                     Text(server)
                         .font(.footnote)
-                        .foregroundStyle(PrtlTheme.muted)
+                        .foregroundStyle(NibTheme.muted)
                         .lineLimit(1)
                     Text(deviceLine)
                         .font(.footnote)
-                        .foregroundStyle(PrtlTheme.muted2)
+                        .foregroundStyle(NibTheme.muted2)
                 }
                 Spacer()
                 if loading {
@@ -471,15 +471,15 @@ struct PrtlStatusSurface: View {
                 }
                 .accessibilityLabel("Server")
             }
-            .buttonStyle(PrtlIconButtonStyle())
+            .buttonStyle(NibIconButtonStyle())
         }
         .padding(20)
-        .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(PrtlTheme.border)
+                .stroke(NibTheme.border)
         )
-        .shadow(color: PrtlTheme.shadow, radius: 18, x: 0, y: 12)
+        .shadow(color: NibTheme.shadow, radius: 18, x: 0, y: 12)
     }
 
     private var deviceLine: String {
@@ -496,8 +496,8 @@ struct PrtlStatusSurface: View {
 }
 
 struct DeviceHealthSurface: View {
-    var devices: [PrtlDevice]
-    var status: PrtlNotificationStatus?
+    var devices: [NibDevice]
+    var status: NibNotificationStatus?
     var sendingTest: Bool
     var sendTest: () -> Void
 
@@ -507,10 +507,10 @@ struct DeviceHealthSurface: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(summary)
                         .font(.headline)
-                        .foregroundStyle(PrtlTheme.text)
+                        .foregroundStyle(NibTheme.text)
                     Text(statusLine)
                         .font(.footnote)
-                        .foregroundStyle(PrtlTheme.muted)
+                        .foregroundStyle(NibTheme.muted)
                 }
                 Spacer()
                 Circle()
@@ -521,15 +521,15 @@ struct DeviceHealthSurface: View {
             ForEach(devices.prefix(3)) { device in
                 HStack(spacing: 10) {
                     Image(systemName: icon(for: device.platform))
-                        .foregroundStyle(PrtlTheme.blue)
+                        .foregroundStyle(NibTheme.blue)
                         .frame(width: 24)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(device.name)
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(PrtlTheme.text)
+                            .foregroundStyle(NibTheme.text)
                         Text(deviceDetail(device))
                             .font(.caption)
-                            .foregroundStyle(device.lastError == nil ? PrtlTheme.muted : PrtlTheme.amber)
+                            .foregroundStyle(device.lastError == nil ? NibTheme.muted : NibTheme.amber)
                     }
                     Spacer()
                 }
@@ -538,7 +538,7 @@ struct DeviceHealthSurface: View {
             if let readinessDetail {
                 Text(readinessDetail)
                     .font(.caption)
-                    .foregroundStyle(PrtlTheme.muted)
+                    .foregroundStyle(NibTheme.muted)
                     .lineLimit(2)
             }
 
@@ -546,7 +546,7 @@ struct DeviceHealthSurface: View {
                 HStack(spacing: 8) {
                     if sendingTest {
                         ProgressView()
-                            .tint(PrtlTheme.text)
+                            .tint(NibTheme.text)
                     } else {
                         Image(systemName: "paperplane")
                     }
@@ -554,12 +554,12 @@ struct DeviceHealthSurface: View {
                     Spacer()
                 }
             }
-            .buttonStyle(PrtlSecondaryButtonStyle())
+            .buttonStyle(NibSecondaryButtonStyle())
             .disabled(sendingTest)
         }
         .padding(18)
-        .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(PrtlTheme.border))
+        .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(NibTheme.border))
     }
 
     private var summary: String {
@@ -579,11 +579,11 @@ struct DeviceHealthSurface: View {
     }
 
     private var statusDot: Color {
-        guard let status else { return PrtlTheme.muted2.opacity(0.6) }
+        guard let status else { return NibTheme.muted2.opacity(0.6) }
         if status.nativeReady == true || status.webReady == true {
-            return status.apnsConfigured || (status.apnsDeviceCount ?? 0) == 0 ? PrtlTheme.green : PrtlTheme.amber
+            return status.apnsConfigured || (status.apnsDeviceCount ?? 0) == 0 ? NibTheme.green : NibTheme.amber
         }
-        return PrtlTheme.amber
+        return NibTheme.amber
     }
 
     private var readinessDetail: String? {
@@ -617,7 +617,7 @@ struct DeviceHealthSurface: View {
         }
     }
 
-    private func deviceDetail(_ device: PrtlDevice) -> String {
+    private func deviceDetail(_ device: NibDevice) -> String {
         if let error = device.lastError, !error.isEmpty {
             return error
         }
@@ -627,7 +627,7 @@ struct DeviceHealthSurface: View {
 }
 
 struct WaitingPaneSurface: View {
-    var waitingPanes: [PrtlWaitingPane]
+    var waitingPanes: [NibWaitingPane]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -635,14 +635,14 @@ struct WaitingPaneSurface: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(waitingPanes.count == 1 ? "1 pane blocked" : "\(waitingPanes.count) panes blocked")
                         .font(.headline)
-                        .foregroundStyle(PrtlTheme.text)
+                        .foregroundStyle(NibTheme.text)
                     Text("Agents waiting for input")
                         .font(.footnote)
-                        .foregroundStyle(PrtlTheme.muted)
+                        .foregroundStyle(NibTheme.muted)
                 }
                 Spacer()
                 Image(systemName: "exclamationmark.triangle")
-                    .foregroundStyle(PrtlTheme.amber)
+                    .foregroundStyle(NibTheme.amber)
             }
 
             ForEach(waitingPanes.prefix(4)) { pane in
@@ -650,38 +650,38 @@ struct WaitingPaneSurface: View {
                     HStack(spacing: 8) {
                         Text(pane.window)
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(PrtlTheme.text)
+                            .foregroundStyle(NibTheme.text)
                             .lineLimit(1)
                         Spacer(minLength: 8)
                         Text("\(pane.session):\(pane.paneId)")
                             .font(.caption.monospacedDigit())
-                            .foregroundStyle(PrtlTheme.muted2)
+                            .foregroundStyle(NibTheme.muted2)
                             .lineLimit(1)
                     }
                     Text(pane.reason)
                         .font(.footnote)
-                        .foregroundStyle(PrtlTheme.muted)
+                        .foregroundStyle(NibTheme.muted)
                         .lineLimit(2)
                     Text(pane.since)
                         .font(.caption2)
-                        .foregroundStyle(PrtlTheme.muted2)
+                        .foregroundStyle(NibTheme.muted2)
                         .lineLimit(1)
                 }
                 .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(PrtlTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(PrtlTheme.border))
+                .background(NibTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NibTheme.border))
             }
         }
         .padding(18)
-        .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(PrtlTheme.border))
+        .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(NibTheme.border))
     }
 }
 
 struct ProjectSurface: View {
-    var projects: [PrtlProject]
-    var inspect: (PrtlProject) -> Void
+    var projects: [NibProject]
+    var inspect: (NibProject) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -689,10 +689,10 @@ struct ProjectSurface: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(summary)
                         .font(.headline)
-                        .foregroundStyle(PrtlTheme.text)
+                        .foregroundStyle(NibTheme.text)
                     Text(subtitle)
                         .font(.footnote)
-                        .foregroundStyle(PrtlTheme.muted)
+                        .foregroundStyle(NibTheme.muted)
                 }
                 Spacer()
             }
@@ -703,21 +703,21 @@ struct ProjectSurface: View {
                 } label: {
                     HStack(spacing: 12) {
                         Circle()
-                            .fill(project.status == "online" ? PrtlTheme.green : PrtlTheme.amber)
+                            .fill(project.status == "online" ? NibTheme.green : NibTheme.amber)
                             .frame(width: 9, height: 9)
                         VStack(alignment: .leading, spacing: 3) {
                             Text(project.name)
                                 .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(PrtlTheme.text)
+                                .foregroundStyle(NibTheme.text)
                                 .lineLimit(1)
                             Text(detail(project))
                                 .font(.caption)
-                                .foregroundStyle(PrtlTheme.muted)
+                                .foregroundStyle(NibTheme.muted)
                                 .lineLimit(1)
                         }
                         Spacer()
                         Image(systemName: "chevron.right")
-                            .foregroundStyle(PrtlTheme.blue)
+                            .foregroundStyle(NibTheme.blue)
                     }
                     .contentShape(Rectangle())
                 }
@@ -725,8 +725,8 @@ struct ProjectSurface: View {
             }
         }
         .padding(18)
-        .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(PrtlTheme.border))
+        .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(NibTheme.border))
     }
 
     private var summary: String {
@@ -738,7 +738,7 @@ struct ProjectSurface: View {
         projects.count == 1 ? "Open the current target" : "Open current targets"
     }
 
-    private func detail(_ project: PrtlProject) -> String {
+    private func detail(_ project: NibProject) -> String {
         let kind = project.targetKind.replacingOccurrences(of: "-", with: " ")
         if let framework = project.framework, !framework.isEmpty {
             return "\(kind) · \(framework)"
@@ -751,14 +751,14 @@ struct ProjectSurface: View {
 }
 
 struct ProjectDetailView: View {
-    @EnvironmentObject private var client: PrtlClient
+    @EnvironmentObject private var client: NibClient
     @Environment(\.dismiss) private var dismiss
-    @State var project: PrtlProject
+    @State var project: NibProject
 
-    @State private var workspace: PrtlProjectWorkspace?
-    @State private var activity: [PrtlActivityEvent] = []
-    @State private var commandPresets: [PrtlCommandPreset] = []
-    @State private var commandRuns: [PrtlCommandRun] = []
+    @State private var workspace: NibProjectWorkspace?
+    @State private var activity: [NibActivityEvent] = []
+    @State private var commandPresets: [NibCommandPreset] = []
+    @State private var commandRuns: [NibCommandRun] = []
     @State private var commandText = ""
     @State private var noteText = ""
     @State private var loading = false
@@ -783,40 +783,40 @@ struct ProjectDetailView: View {
                         HStack {
                             Text(project.status)
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(project.status == "online" ? PrtlTheme.green : PrtlTheme.amber)
+                                .foregroundStyle(project.status == "online" ? NibTheme.green : NibTheme.amber)
                                 .padding(.horizontal, 10)
                                 .padding(.vertical, 6)
-                                .background((project.status == "online" ? PrtlTheme.green : PrtlTheme.amber).opacity(0.12), in: Capsule())
+                                .background((project.status == "online" ? NibTheme.green : NibTheme.amber).opacity(0.12), in: Capsule())
                             Spacer()
                             if let level = project.compatibility?.level {
                                 Text(level)
                                     .font(.caption.weight(.semibold))
-                                    .foregroundStyle(PrtlTheme.blue)
+                                    .foregroundStyle(NibTheme.blue)
                             }
                         }
 
                         Text(project.name)
                             .font(.largeTitle.weight(.semibold))
-                            .foregroundStyle(PrtlTheme.text)
+                            .foregroundStyle(NibTheme.text)
                             .textSelection(.enabled)
 
                         Text(projectDetail)
                             .font(.body)
-                            .foregroundStyle(PrtlTheme.muted)
+                            .foregroundStyle(NibTheme.muted)
                             .textSelection(.enabled)
 
                         if let sourcePath = project.sourcePath, !sourcePath.isEmpty {
                             Text(sourcePath)
                                 .font(.caption)
-                                .foregroundStyle(PrtlTheme.muted2)
+                                .foregroundStyle(NibTheme.muted2)
                                 .lineLimit(2)
                                 .textSelection(.enabled)
                         }
                     }
                     .padding(22)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(PrtlTheme.border))
+                    .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(NibTheme.border))
 
                     HStack(spacing: 10) {
                         Button {
@@ -824,7 +824,7 @@ struct ProjectDetailView: View {
                         } label: {
                             Label("Open website", systemImage: "globe")
                         }
-                        .buttonStyle(PrtlSecondaryButtonStyle())
+                        .buttonStyle(NibSecondaryButtonStyle())
 
                         Button {
                             Task { await captureScreenshots() }
@@ -835,7 +835,7 @@ struct ProjectDetailView: View {
                                 Label("Capture", systemImage: "camera.viewfinder")
                             }
                         }
-                        .buttonStyle(PrtlSecondaryButtonStyle())
+                        .buttonStyle(NibSecondaryButtonStyle())
                         .disabled(capturingScreenshots)
                     }
 
@@ -870,69 +870,69 @@ struct ProjectDetailView: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Workspace")
                             .font(.headline)
-                            .foregroundStyle(PrtlTheme.text)
+                            .foregroundStyle(NibTheme.text)
 
                         if let workspace {
                             Text("Drawer \(workspace.viewer.drawer) · \(workspace.viewer.activeTab) · \(workspace.viewer.viewport)")
                                 .font(.caption)
-                                .foregroundStyle(PrtlTheme.muted)
+                                .foregroundStyle(NibTheme.muted)
                         } else if loading {
                             Text("Loading workspace")
                                 .font(.caption)
-                                .foregroundStyle(PrtlTheme.muted)
+                                .foregroundStyle(NibTheme.muted)
                         }
 
                         TextField("Add a note", text: $noteText, axis: .vertical)
                             .lineLimit(2...5)
                             .textFieldStyle(.plain)
                             .padding(14)
-                            .background(PrtlTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(PrtlTheme.border))
+                            .background(NibTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NibTheme.border))
 
                         Button {
                             Task { await saveNote() }
                         } label: {
                             Label(savingNote ? "Saving" : "Save note", systemImage: "square.and.pencil")
                         }
-                        .buttonStyle(PrtlSecondaryButtonStyle())
+                        .buttonStyle(NibSecondaryButtonStyle())
                         .disabled(savingNote || noteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                         ForEach(workspace?.notes.prefix(3).map { $0 } ?? []) { note in
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(note.text)
                                     .font(.subheadline)
-                                    .foregroundStyle(PrtlTheme.text)
+                                    .foregroundStyle(NibTheme.text)
                                 Text(note.createdAt)
                                     .font(.caption)
-                                    .foregroundStyle(PrtlTheme.muted2)
+                                    .foregroundStyle(NibTheme.muted2)
                             }
                             .padding(12)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(PrtlTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .background(NibTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
                     }
                     .padding(18)
-                    .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(PrtlTheme.border))
+                    .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(NibTheme.border))
 
                     if !activity.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
                             Text("Activity")
                                 .font(.headline)
-                                .foregroundStyle(PrtlTheme.text)
+                                .foregroundStyle(NibTheme.text)
                             ForEach(activity.prefix(4)) { event in
                                 ActivityRow(event: event)
                                     .padding(.vertical, 4)
                             }
                         }
                         .padding(18)
-                        .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(PrtlTheme.border))
+                        .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(NibTheme.border))
                     }
                 }
                 .padding(18)
             }
-            .background(PrtlTheme.background.ignoresSafeArea())
+            .background(NibTheme.background.ignoresSafeArea())
             .navigationTitle("Project")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -965,7 +965,7 @@ struct ProjectDetailView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("This asks the prtl server to terminate the backing local process.")
+                Text("This asks the nib server to terminate the backing local process.")
             }
         }
     }
@@ -1149,7 +1149,7 @@ struct ProjectDetailView: View {
         commandStreamTask = nil
     }
 
-    private func applyCommandEvent(_ event: PrtlCommandEvent) {
+    private func applyCommandEvent(_ event: NibCommandEvent) {
         switch event.data {
         case .run(let run):
             upsertCommandRun(run)
@@ -1162,7 +1162,7 @@ struct ProjectDetailView: View {
         }
     }
 
-    private func upsertCommandRun(_ run: PrtlCommandRun) {
+    private func upsertCommandRun(_ run: NibCommandRun) {
         commandRuns.removeAll { $0.id == run.id }
         commandRuns.insert(run, at: 0)
     }
@@ -1183,7 +1183,7 @@ struct ProjectDetailView: View {
 }
 
 struct ProjectOperationSurface: View {
-    var project: PrtlProject
+    var project: NibProject
     var rechecking: Bool
     var settingRoute: String?
     var killing: Bool
@@ -1193,7 +1193,7 @@ struct ProjectOperationSurface: View {
 
     private let routeModes = ["direct", "pathProxy", "hostProxy"]
 
-    private var selectedRoute: PrtlRouteInfo? {
+    private var selectedRoute: NibRouteInfo? {
         guard let preferred = project.preferredRoute else { return nil }
         return project.routes?[preferred]
     }
@@ -1203,14 +1203,14 @@ struct ProjectOperationSurface: View {
             HStack {
                 Text("Operations")
                     .font(.headline)
-                    .foregroundStyle(PrtlTheme.text)
+                    .foregroundStyle(NibTheme.text)
                 Spacer()
                 Button {
                     Task { await recheck() }
                 } label: {
                     Image(systemName: rechecking ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
                 }
-                .buttonStyle(PrtlIconButtonStyle())
+                .buttonStyle(NibIconButtonStyle())
                 .disabled(rechecking || settingRoute != nil || killing)
                 .accessibilityLabel("Recheck project")
             }
@@ -1237,7 +1237,7 @@ struct ProjectOperationSurface: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .buttonStyle(PrtlRouteButtonStyle(active: active))
+                        .buttonStyle(NibRouteButtonStyle(active: active))
                         .opacity(route?.available == true ? 1 : 0.46)
                         .disabled(route?.available != true || settingRoute != nil || killing)
                     }
@@ -1246,7 +1246,7 @@ struct ProjectOperationSurface: View {
                 if let selectedRoute {
                     Text(selectedRoute.url)
                         .font(.caption)
-                        .foregroundStyle(PrtlTheme.muted2)
+                        .foregroundStyle(NibTheme.muted2)
                         .lineLimit(1)
                         .textSelection(.enabled)
                 }
@@ -1259,13 +1259,13 @@ struct ProjectOperationSurface: View {
                     Label(killing ? "Killing" : "Kill project", systemImage: "power")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(PrtlDangerButtonStyle())
+                .buttonStyle(NibDangerButtonStyle())
                 .disabled(rechecking || settingRoute != nil || killing)
             }
         }
         .padding(18)
-        .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(PrtlTheme.border))
+        .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(NibTheme.border))
     }
 
     private func routeLabel(_ mode: String) -> String {
@@ -1277,7 +1277,7 @@ struct ProjectOperationSurface: View {
         }
     }
 
-    private func routeDetail(_ route: PrtlRouteInfo?) -> String {
+    private func routeDetail(_ route: NibRouteInfo?) -> String {
         guard let route else { return "Unavailable" }
         if let code = route.statusCode { return "HTTP \(code)" }
         if route.available { return "Available" }
@@ -1286,11 +1286,11 @@ struct ProjectOperationSurface: View {
 }
 
 struct CommandActionSurface: View {
-    var presets: [PrtlCommandPreset]
-    var runs: [PrtlCommandRun]
+    var presets: [NibCommandPreset]
+    var runs: [NibCommandRun]
     @Binding var customCommand: String
     var running: Bool
-    var runPreset: (PrtlCommandPreset) async -> Void
+    var runPreset: (NibCommandPreset) async -> Void
     var runCustom: (String) async -> Void
     var refresh: () async -> Void
 
@@ -1303,14 +1303,14 @@ struct CommandActionSurface: View {
             HStack {
                 Text("Actions")
                     .font(.headline)
-                    .foregroundStyle(PrtlTheme.text)
+                    .foregroundStyle(NibTheme.text)
                 Spacer()
                 Button {
                     Task { await refresh() }
                 } label: {
                     Image(systemName: "arrow.clockwise")
                 }
-                .buttonStyle(PrtlIconButtonStyle())
+                .buttonStyle(NibIconButtonStyle())
                 .disabled(running)
                 .accessibilityLabel("Refresh commands")
             }
@@ -1326,7 +1326,7 @@ struct CommandActionSurface: View {
                                 .minimumScaleFactor(0.82)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        .buttonStyle(PrtlSecondaryButtonStyle())
+                        .buttonStyle(NibSecondaryButtonStyle())
                         .disabled(running)
                     }
                 }
@@ -1339,8 +1339,8 @@ struct CommandActionSurface: View {
                     .autocorrectionDisabled()
                     .font(.system(.subheadline, design: .monospaced))
                     .padding(14)
-                    .background(PrtlTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(PrtlTheme.border))
+                    .background(NibTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NibTheme.border))
 
                 Button {
                     Task { await runCustom(customCommand) }
@@ -1348,7 +1348,7 @@ struct CommandActionSurface: View {
                     Label(running ? "Running" : "Run command", systemImage: "play")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(PrtlPrimaryButtonStyle())
+                .buttonStyle(NibPrimaryButtonStyle())
                 .disabled(!canRunCustom)
             }
 
@@ -1356,7 +1356,7 @@ struct CommandActionSurface: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Recent")
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(PrtlTheme.muted)
+                        .foregroundStyle(NibTheme.muted)
                     ForEach(runs.prefix(3)) { run in
                         CommandRunRow(run: run)
                     }
@@ -1364,13 +1364,13 @@ struct CommandActionSurface: View {
             }
         }
         .padding(18)
-        .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(PrtlTheme.border))
+        .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(NibTheme.border))
     }
 }
 
 struct CommandRunRow: View {
-    var run: PrtlCommandRun
+    var run: NibCommandRun
 
     private var output: String {
         let stderr = run.stderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1380,9 +1380,9 @@ struct CommandRunRow: View {
 
     private var statusColor: Color {
         switch run.status {
-        case "running": return PrtlTheme.blue
-        case "exited": return PrtlTheme.green
-        default: return PrtlTheme.amber
+        case "running": return NibTheme.blue
+        case "exited": return NibTheme.green
+        default: return NibTheme.amber
         }
     }
 
@@ -1401,7 +1401,7 @@ struct CommandRunRow: View {
                     .frame(width: 8, height: 8)
                 Text(run.command)
                     .font(.system(.subheadline, design: .monospaced).weight(.semibold))
-                    .foregroundStyle(PrtlTheme.text)
+                    .foregroundStyle(NibTheme.text)
                     .lineLimit(2)
                 Spacer(minLength: 8)
                 Text(statusText)
@@ -1411,26 +1411,26 @@ struct CommandRunRow: View {
 
             Text(run.cwd)
                 .font(.caption2)
-                .foregroundStyle(PrtlTheme.muted2)
+                .foregroundStyle(NibTheme.muted2)
                 .lineLimit(1)
 
             if !output.isEmpty {
                 Text(output)
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(run.stderrTail.isEmpty ? PrtlTheme.muted : PrtlTheme.amber)
+                    .foregroundStyle(run.stderrTail.isEmpty ? NibTheme.muted : NibTheme.amber)
                     .lineLimit(4)
                     .textSelection(.enabled)
             }
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(PrtlTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(PrtlTheme.border.opacity(0.8)))
+        .background(NibTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NibTheme.border.opacity(0.8)))
     }
 }
 
 struct ScreenshotStatusSurface: View {
-    var screenshots: [String: PrtlScreenshotInfo]
+    var screenshots: [String: NibScreenshotInfo]
 
     private let viewports = ["phone", "tablet", "desktop"]
 
@@ -1438,7 +1438,7 @@ struct ScreenshotStatusSurface: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Screenshots")
                 .font(.headline)
-                .foregroundStyle(PrtlTheme.text)
+                .foregroundStyle(NibTheme.text)
             HStack(spacing: 8) {
                 ForEach(viewports, id: \.self) { viewport in
                     let info = screenshots[viewport]
@@ -1447,37 +1447,37 @@ struct ScreenshotStatusSurface: View {
                             .foregroundStyle(color(for: info))
                         Text(viewport.capitalized)
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(PrtlTheme.text)
+                            .foregroundStyle(NibTheme.text)
                         Text(detail(for: info))
                             .font(.caption2)
-                            .foregroundStyle(PrtlTheme.muted)
+                            .foregroundStyle(NibTheme.muted)
                             .lineLimit(2)
                     }
                     .padding(12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(PrtlTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(PrtlTheme.border))
+                    .background(NibTheme.background, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NibTheme.border))
                 }
             }
         }
         .padding(18)
-        .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(PrtlTheme.border))
+        .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(NibTheme.border))
     }
 
-    private func icon(for info: PrtlScreenshotInfo?) -> String {
+    private func icon(for info: NibScreenshotInfo?) -> String {
         if info?.error != nil { return "exclamationmark.triangle" }
         if info?.url != nil { return "checkmark.circle" }
         return "circle.dashed"
     }
 
-    private func color(for info: PrtlScreenshotInfo?) -> Color {
-        if info?.error != nil { return PrtlTheme.amber }
-        if info?.url != nil { return PrtlTheme.green }
-        return PrtlTheme.muted2
+    private func color(for info: NibScreenshotInfo?) -> Color {
+        if info?.error != nil { return NibTheme.amber }
+        if info?.url != nil { return NibTheme.green }
+        return NibTheme.muted2
     }
 
-    private func detail(for info: PrtlScreenshotInfo?) -> String {
+    private func detail(for info: NibScreenshotInfo?) -> String {
         guard let info else { return "Not captured" }
         if let error = info.error, !error.isEmpty { return error }
         if info.url != nil { return "\(info.width)x\(info.height)" }
@@ -1486,20 +1486,20 @@ struct ScreenshotStatusSurface: View {
 }
 
 struct ActivityRow: View {
-    var event: PrtlActivityEvent
+    var event: NibActivityEvent
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: icon)
-                .foregroundStyle(PrtlTheme.blue)
+                .foregroundStyle(NibTheme.blue)
                 .frame(width: 24)
             VStack(alignment: .leading, spacing: 4) {
                 Text(event.message)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(PrtlTheme.text)
+                    .foregroundStyle(NibTheme.text)
                 Text(event.kind)
                     .font(.caption)
-                    .foregroundStyle(PrtlTheme.muted)
+                    .foregroundStyle(NibTheme.muted)
             }
         }
     }
@@ -1516,14 +1516,14 @@ struct ActivityRow: View {
 }
 
 struct RequestRow: View {
-    var request: PrtlRequest
+    var request: NibRequest
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .firstTextBaseline) {
                 Text(request.title)
                     .font(.headline.weight(.semibold))
-                    .foregroundStyle(PrtlTheme.text)
+                    .foregroundStyle(NibTheme.text)
                 Spacer()
                 Text(request.status)
                     .font(.caption)
@@ -1531,12 +1531,12 @@ struct RequestRow: View {
             }
             Text(request.prompt)
                 .font(.subheadline)
-                .foregroundStyle(PrtlTheme.muted)
+                .foregroundStyle(NibTheme.muted)
                 .lineLimit(2)
             if let context = request.context, !context.isEmpty {
                 Text(context)
                     .font(.caption)
-                    .foregroundStyle(PrtlTheme.muted2)
+                    .foregroundStyle(NibTheme.muted2)
                     .lineLimit(1)
             }
         }
@@ -1544,18 +1544,18 @@ struct RequestRow: View {
 
     private var statusColor: Color {
         switch request.status {
-        case "open", "viewed": return PrtlTheme.blue
-        case "answered", "acted", "resolved": return PrtlTheme.green
-        case "stale", "expired": return PrtlTheme.amber
-        default: return PrtlTheme.muted
+        case "open", "viewed": return NibTheme.blue
+        case "answered", "acted", "resolved": return NibTheme.green
+        case "stale", "expired": return NibTheme.amber
+        default: return NibTheme.muted
         }
     }
 }
 
 struct RequestDetailView: View {
-    @EnvironmentObject private var client: PrtlClient
+    @EnvironmentObject private var client: NibClient
     @Environment(\.openURL) private var openURL
-    @State var request: PrtlRequest
+    @State var request: NibRequest
     @State private var reply = ""
     @State private var error: String?
     @State private var notice: String?
@@ -1575,29 +1575,29 @@ struct RequestDetailView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text(request.kind)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(PrtlTheme.blue)
+                        .foregroundStyle(NibTheme.blue)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(PrtlTheme.blue.opacity(0.12), in: Capsule())
+                        .background(NibTheme.blue.opacity(0.12), in: Capsule())
                     Text(request.title)
                         .font(.largeTitle.weight(.semibold))
-                        .foregroundStyle(PrtlTheme.text)
+                        .foregroundStyle(NibTheme.text)
                         .textSelection(.enabled)
                     Text(request.prompt)
                         .font(.body)
-                        .foregroundStyle(PrtlTheme.muted)
+                        .foregroundStyle(NibTheme.muted)
                         .textSelection(.enabled)
                     if let context = request.context, !context.isEmpty {
                         Text(context)
                             .font(.footnote)
-                            .foregroundStyle(PrtlTheme.muted2)
+                            .foregroundStyle(NibTheme.muted2)
                             .textSelection(.enabled)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(22)
-                .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(PrtlTheme.border))
+                .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(NibTheme.border))
 
                 if let url = client.absoluteURL(request.target.url) ?? client.absoluteURL(request.target.appPath) {
                     Button {
@@ -1605,7 +1605,7 @@ struct RequestDetailView: View {
                     } label: {
                         Label("Open website", systemImage: "globe")
                     }
-                    .buttonStyle(PrtlSecondaryButtonStyle())
+                    .buttonStyle(NibSecondaryButtonStyle())
                 }
 
                 if !request.attachments.isEmpty {
@@ -1616,7 +1616,7 @@ struct RequestDetailView: View {
                     PhotosPicker(selection: $selectedPhoto, matching: .images) {
                         Label("Attach image", systemImage: "photo.on.rectangle")
                     }
-                    .buttonStyle(PrtlSecondaryButtonStyle())
+                    .buttonStyle(NibSecondaryButtonStyle())
                     .disabled(sending)
                     .onChange(of: selectedPhoto) { _, item in
                         guard let item else { return }
@@ -1629,7 +1629,7 @@ struct RequestDetailView: View {
                         } label: {
                             Label("Take photo", systemImage: "camera")
                         }
-                        .buttonStyle(PrtlSecondaryButtonStyle())
+                        .buttonStyle(NibSecondaryButtonStyle())
                         .disabled(sending)
                     }
                 }
@@ -1641,16 +1641,16 @@ struct RequestDetailView: View {
                         Text("Answered")
                             .font(.headline)
                         Text(response.choice ?? response.text)
-                            .foregroundStyle(PrtlTheme.muted)
+                            .foregroundStyle(NibTheme.muted)
                     }
                     .padding(18)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                 }
             }
             .padding(20)
         }
-        .background(PrtlTheme.background)
+        .background(NibTheme.background)
         .navigationTitle("Request")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $safariRoute) { route in
@@ -1698,7 +1698,7 @@ struct RequestDetailView: View {
         }
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else {
-                throw NSError(domain: "Prtl", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not read image."])
+                throw NSError(domain: "Nib", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not read image."])
             }
             try await uploadImageData(data, prefix: "image")
         } catch {
@@ -1711,7 +1711,7 @@ struct RequestDetailView: View {
         defer { sending = false }
         do {
             guard let data = image.jpegData(compressionQuality: 0.86) else {
-                throw NSError(domain: "Prtl", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not prepare image."])
+                throw NSError(domain: "Nib", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not prepare image."])
             }
             try await uploadImageData(data, prefix: "camera")
         } catch {
@@ -1733,7 +1733,7 @@ struct RequestDetailView: View {
 }
 
 struct RequestActionSurface: View {
-    var request: PrtlRequest
+    var request: NibRequest
     @Binding var reply: String
     var sending: Bool
     var respond: (RequestResponsePayload) async -> Void
@@ -1749,7 +1749,7 @@ struct RequestActionSurface: View {
                         Spacer()
                     }
                 }
-                .buttonStyle(PrtlPrimaryButtonStyle())
+                .buttonStyle(NibPrimaryButtonStyle())
                 .disabled(sending)
             }
 
@@ -1759,7 +1759,7 @@ struct RequestActionSurface: View {
                         .lineLimit(3...6)
                         .padding(14)
                         .background(Color.white.opacity(0.74), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(PrtlTheme.border))
+                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NibTheme.border))
                     Button {
                         let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
                         Task { await respond(RequestResponsePayload(text: text)) }
@@ -1767,7 +1767,7 @@ struct RequestActionSurface: View {
                         Text("Send reply")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(PrtlPrimaryButtonStyle())
+                    .buttonStyle(NibPrimaryButtonStyle())
                     .disabled(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
                 }
             }
@@ -1782,8 +1782,8 @@ struct RequestResponsePayload {
 }
 
 struct AttachmentStrip: View {
-    @EnvironmentObject private var client: PrtlClient
-    var request: PrtlRequest
+    @EnvironmentObject private var client: NibClient
+    var request: NibRequest
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -1797,7 +1797,7 @@ struct AttachmentStrip: View {
 }
 
 struct AttachmentTile: View {
-    var attachment: PrtlRequest.Attachment
+    var attachment: NibRequest.Attachment
     var url: URL?
 
     private var isImage: Bool {
@@ -1827,7 +1827,7 @@ struct AttachmentTile: View {
             VStack(alignment: .leading, spacing: 10) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(PrtlTheme.background)
+                        .fill(NibTheme.background)
                     if let url {
                         AsyncImage(url: url) { phase in
                             switch phase {
@@ -1838,10 +1838,10 @@ struct AttachmentTile: View {
                             case .failure:
                                 Image(systemName: "photo")
                                     .font(.title2)
-                                    .foregroundStyle(PrtlTheme.muted)
+                                    .foregroundStyle(NibTheme.muted)
                             case .empty:
                                 ProgressView()
-                                    .tint(PrtlTheme.muted)
+                                    .tint(NibTheme.muted)
                             @unknown default:
                                 EmptyView()
                             }
@@ -1849,7 +1849,7 @@ struct AttachmentTile: View {
                     } else {
                         Image(systemName: "photo")
                             .font(.title2)
-                            .foregroundStyle(PrtlTheme.muted)
+                            .foregroundStyle(NibTheme.muted)
                     }
                 }
                 .frame(width: 188, height: 132)
@@ -1858,39 +1858,39 @@ struct AttachmentTile: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(attachment.name)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(PrtlTheme.text)
+                        .foregroundStyle(NibTheme.text)
                         .lineLimit(1)
                     Text(bytesLabel)
                         .font(.caption2)
-                        .foregroundStyle(PrtlTheme.muted2)
+                        .foregroundStyle(NibTheme.muted2)
                 }
             }
             .padding(10)
             .frame(width: 208, alignment: .leading)
-            .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(PrtlTheme.border))
+            .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(NibTheme.border))
             .shadow(color: Color.black.opacity(0.05), radius: 18, y: 10)
         } else {
             HStack(spacing: 10) {
                 Image(systemName: "paperclip")
                     .font(.headline)
-                    .foregroundStyle(PrtlTheme.muted)
+                    .foregroundStyle(NibTheme.muted)
                     .frame(width: 34, height: 34)
-                    .background(PrtlTheme.background, in: Circle())
+                    .background(NibTheme.background, in: Circle())
                 VStack(alignment: .leading, spacing: 4) {
                     Text(attachment.name)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(PrtlTheme.text)
+                        .foregroundStyle(NibTheme.text)
                         .lineLimit(1)
                     Text(bytesLabel)
                         .font(.caption2)
-                        .foregroundStyle(PrtlTheme.muted2)
+                        .foregroundStyle(NibTheme.muted2)
                 }
             }
             .padding(12)
             .frame(width: 188, alignment: .leading)
-            .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(PrtlTheme.border))
+            .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(NibTheme.border))
         }
     }
 }
@@ -1907,7 +1907,7 @@ struct SettingsView: View {
                     .keyboardType(.URL)
                     .autocorrectionDisabled()
             } footer: {
-                Text("Use the same prtl server URL that web, CLI, and notifications use.")
+                Text("Use the same nib server URL that web, CLI, and notifications use.")
             }
         }
         .navigationTitle("Server")
@@ -1926,7 +1926,7 @@ struct ToastView: View {
         if let message {
             Text(message)
                 .font(.footnote)
-                .foregroundStyle(PrtlTheme.text)
+                .foregroundStyle(NibTheme.text)
                 .padding(12)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .padding()
@@ -1999,7 +1999,7 @@ struct RequestWebContainer: View {
 
     var body: some View {
         NavigationStack {
-            PrtlWebView(url: route.url)
+            NibWebView(url: route.url)
                 .ignoresSafeArea(edges: .bottom)
                 .navigationTitle(route.title)
                 .navigationBarTitleDisplayMode(.inline)
@@ -2021,7 +2021,7 @@ struct RequestWebContainer: View {
     }
 }
 
-struct PrtlWebView: UIViewRepresentable {
+struct NibWebView: UIViewRepresentable {
     var url: URL
 
     func makeUIView(context: Context) -> WKWebView {
@@ -2029,8 +2029,8 @@ struct PrtlWebView: UIViewRepresentable {
         configuration.allowsInlineMediaPlayback = true
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
-        webView.scrollView.backgroundColor = UIColor(PrtlTheme.background)
-        webView.backgroundColor = UIColor(PrtlTheme.background)
+        webView.scrollView.backgroundColor = UIColor(NibTheme.background)
+        webView.backgroundColor = UIColor(NibTheme.background)
         webView.load(URLRequest(url: url))
         return webView
     }
@@ -2041,15 +2041,15 @@ struct PrtlWebView: UIViewRepresentable {
     }
 }
 
-enum PrtlNotificationActions {
-    static let open = "PRTL_OPEN"
-    static let choice0 = "PRTL_CHOICE_0"
-    static let choice1 = "PRTL_CHOICE_1"
-    static let choice2 = "PRTL_CHOICE_2"
-    static let text = "PRTL_TEXT_REPLY"
-    private static let pendingRequestKey = "prtl.pendingNotification.requestId"
-    private static let pendingProjectKey = "prtl.pendingNotification.projectId"
-    private static let pendingURLKey = "prtl.pendingNotification.url"
+enum NibNotificationActions {
+    static let open = "NIB_OPEN"
+    static let choice0 = "NIB_CHOICE_0"
+    static let choice1 = "NIB_CHOICE_1"
+    static let choice2 = "NIB_CHOICE_2"
+    static let text = "NIB_TEXT_REPLY"
+    private static let pendingRequestKey = "nib.pendingNotification.requestId"
+    private static let pendingProjectKey = "nib.pendingNotification.projectId"
+    private static let pendingURLKey = "nib.pendingNotification.url"
 
     static func register() {
         let openAction = UNNotificationAction(identifier: open, title: "Open", options: [.foreground])
@@ -2064,10 +2064,10 @@ enum PrtlNotificationActions {
             textInputPlaceholder: "Reply"
         )
         var categories = [
-            UNNotificationCategory(identifier: "PRTL_OPEN", actions: [openAction], intentIdentifiers: []),
-            choiceCategory("PRTL_APPROVAL", "Approve", "Hold", openAction),
-            UNNotificationCategory(identifier: "PRTL_CHOICE", actions: [firstAction, secondAction, thirdAction, textAction, openAction], intentIdentifiers: []),
-            UNNotificationCategory(identifier: "PRTL_TEXT", actions: [textAction, openAction], intentIdentifiers: [])
+            UNNotificationCategory(identifier: "NIB_OPEN", actions: [openAction], intentIdentifiers: []),
+            choiceCategory("NIB_APPROVAL", "Approve", "Hold", openAction),
+            UNNotificationCategory(identifier: "NIB_CHOICE", actions: [firstAction, secondAction, thirdAction, textAction, openAction], intentIdentifiers: []),
+            UNNotificationCategory(identifier: "NIB_TEXT", actions: [textAction, openAction], intentIdentifiers: [])
         ]
         categories.append(contentsOf: choiceCategories(openAction: openAction))
         UNUserNotificationCenter.current().setNotificationCategories(Set(categories))
@@ -2075,13 +2075,13 @@ enum PrtlNotificationActions {
 
     private static func choiceCategories(openAction: UNNotificationAction) -> [UNNotificationCategory] {
         [
-            threeChoiceCategory("PRTL_SHIP_HOLD_REVISE", "Ship", "Hold", "Revise", openAction),
-            choiceCategory("PRTL_APPROVE_HOLD", "Approve", "Hold", openAction),
-            choiceCategory("PRTL_APPROVE_REJECT", "Approve", "Reject", openAction),
-            choiceCategory("PRTL_ALLOW_DENY", "Allow", "Deny", openAction),
-            choiceCategory("PRTL_YES_NO", "Yes", "No", openAction),
-            choiceCategory("PRTL_SHIP_HOLD", "Ship", "Hold", openAction),
-            choiceCategory("PRTL_USE_REVISE", "Use it", "Revise", openAction)
+            threeChoiceCategory("NIB_SHIP_HOLD_REVISE", "Ship", "Hold", "Revise", openAction),
+            choiceCategory("NIB_APPROVE_HOLD", "Approve", "Hold", openAction),
+            choiceCategory("NIB_APPROVE_REJECT", "Approve", "Reject", openAction),
+            choiceCategory("NIB_ALLOW_DENY", "Allow", "Deny", openAction),
+            choiceCategory("NIB_YES_NO", "Yes", "No", openAction),
+            choiceCategory("NIB_SHIP_HOLD", "Ship", "Hold", openAction),
+            choiceCategory("NIB_USE_REVISE", "Use it", "Revise", openAction)
         ]
     }
 
@@ -2121,8 +2121,9 @@ enum PrtlNotificationActions {
         )
     }
 
+    @MainActor
     static func handle(response: UNNotificationResponse) async {
-        let payload = prtlPayload(from: response.notification.request.content.userInfo)
+        let payload = nibPayload(from: response.notification.request.content.userInfo)
         if response.actionIdentifier == UNNotificationDefaultActionIdentifier || response.actionIdentifier == open {
             guard let requestId = payload["requestId"] as? String else {
                 await openPayload(payload)
@@ -2131,7 +2132,7 @@ enum PrtlNotificationActions {
             storePendingRequestId(requestId)
             await markClicked(requestId: requestId)
             await MainActor.run {
-                NotificationCenter.default.post(name: .prtlOpenRequest, object: requestId)
+                NotificationCenter.default.post(name: .nibOpenRequest, object: requestId)
             }
             return
         }
@@ -2158,6 +2159,7 @@ enum PrtlNotificationActions {
         }
     }
 
+    @MainActor
     private static func openPayload(_ payload: [String: Any]) async {
         if let feedbackId = payload["feedbackId"] as? String, !feedbackId.isEmpty {
             await markFeedbackClicked(feedbackId: feedbackId)
@@ -2165,14 +2167,14 @@ enum PrtlNotificationActions {
         if let projectId = payload["projectId"] as? String, !projectId.isEmpty {
             storePendingProjectId(projectId)
             await MainActor.run {
-                NotificationCenter.default.post(name: .prtlOpenProject, object: projectId)
+                NotificationCenter.default.post(name: .nibOpenProject, object: projectId)
             }
             return
         }
         if let url = payloadURL(payload) {
             storePendingWebURL(url)
             await MainActor.run {
-                NotificationCenter.default.post(name: .prtlOpenWebURL, object: url)
+                NotificationCenter.default.post(name: .nibOpenWebURL, object: url)
             }
         }
     }
@@ -2202,11 +2204,11 @@ enum PrtlNotificationActions {
         clearPendingString(pendingURLKey, matching: url.absoluteString)
     }
 
-    private static func prtlPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
-        if let payload = userInfo["prtl"] as? [String: Any] {
+    private static func nibPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
+        if let payload = userInfo["nib"] as? [String: Any] {
             return payload
         }
-        if let payload = userInfo["prtl"] as? NSDictionary {
+        if let payload = userInfo["nib"] as? NSDictionary {
             return payload as? [String: Any] ?? [:]
         }
         return userInfo.reduce(into: [String: Any]()) { result, item in
@@ -2245,7 +2247,7 @@ enum PrtlNotificationActions {
     }
 
     private static func endpoint(_ path: String) -> URL? {
-        let base = UserDefaults.standard.string(forKey: "prtl.baseURL") ?? PrtlDefaults.defaultBaseURLString
+        let base = UserDefaults.standard.string(forKey: "nib.baseURL") ?? NibDefaults.defaultBaseURLString
         return URL(string: path, relativeTo: URL(string: base))?.absoluteURL
     }
 
@@ -2280,7 +2282,7 @@ enum PrtlNotificationActions {
     }
 }
 
-enum PrtlTheme {
+enum NibTheme {
     static let background = Color(red: 0.956, green: 0.944, blue: 0.918)
     static let surface = Color(red: 0.992, green: 0.984, blue: 0.960)
     static let text = Color(red: 0.142, green: 0.137, blue: 0.123)
@@ -2293,7 +2295,7 @@ enum PrtlTheme {
     static let shadow = Color.black.opacity(0.08)
 }
 
-struct PrtlPrimaryButtonStyle: ButtonStyle {
+struct NibPrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.headline)
@@ -2313,7 +2315,7 @@ struct PrtlPrimaryButtonStyle: ButtonStyle {
     }
 }
 
-enum PrtlEntitlements {
+enum NibEntitlements {
     static var hasAPSEnvironment: Bool {
         #if targetEnvironment(simulator)
         true
@@ -2328,64 +2330,64 @@ enum PrtlEntitlements {
     }
 }
 
-struct PrtlSecondaryButtonStyle: ButtonStyle {
+struct NibSecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(PrtlTheme.text)
+            .foregroundStyle(NibTheme.text)
             .padding(.horizontal, 13)
             .frame(minHeight: 42)
-            .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(PrtlTheme.border))
+            .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(NibTheme.border))
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
-struct PrtlRouteButtonStyle: ButtonStyle {
+struct NibRouteButtonStyle: ButtonStyle {
     var active: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.subheadline.weight(.semibold))
-            .foregroundStyle(active ? .white : PrtlTheme.text)
+            .foregroundStyle(active ? .white : NibTheme.text)
             .padding(12)
             .frame(minHeight: 70)
             .background(
                 active
                     ? Color(red: 0.170, green: 0.166, blue: 0.154)
-                    : PrtlTheme.background,
+                    : NibTheme.background,
                 in: RoundedRectangle(cornerRadius: 16, style: .continuous)
             )
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(active ? Color.white.opacity(0.10) : PrtlTheme.border))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(active ? Color.white.opacity(0.10) : NibTheme.border))
             .opacity(configuration.isPressed ? 0.88 : 1)
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
-struct PrtlDangerButtonStyle: ButtonStyle {
+struct NibDangerButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.headline)
-            .foregroundStyle(PrtlTheme.amber)
+            .foregroundStyle(NibTheme.amber)
             .padding(.horizontal, 16)
             .frame(minHeight: 50)
-            .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(PrtlTheme.amber.opacity(0.48)))
+            .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NibTheme.amber.opacity(0.48)))
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
-struct PrtlIconButtonStyle: ButtonStyle {
+struct NibIconButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.title3.weight(.semibold))
-            .foregroundStyle(PrtlTheme.text)
+            .foregroundStyle(NibTheme.text)
             .frame(width: 58, height: 46)
-            .background(PrtlTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(PrtlTheme.border))
+            .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NibTheme.border))
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }

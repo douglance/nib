@@ -6,7 +6,7 @@ import path from "node:path";
 import type { WaitingPane } from "../../shared/types";
 
 test("persists waiting panes across watcher readers", async () => {
-  process.env.PRTL_DATA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "prtl-waiting-test-"));
+  process.env.NIB_DATA_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "nib-waiting-test-"));
   const { getWaiting, persistWaitingForSession } = await import("./watcher");
   const pane: WaitingPane = {
     session: "ignored",
