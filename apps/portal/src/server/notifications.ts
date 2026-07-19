@@ -348,14 +348,15 @@ export function requestPayload(request: RequestRecord): Record<string, unknown> 
     ? `/view/${encodeURIComponent(request.target.projectId)}?${new URLSearchParams({ path: request.target.appPath ?? "/" }).toString()}`
     : "/");
   const url = PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/r/${encodeURIComponent(request.id)}` : fallbackUrl;
+  const opensWebReviewer = request.kind === "visual-review";
   return {
     type: request.kind,
     requestId: request.id,
     title: request.title,
     body: request.body || request.prompt,
     request: request.prompt,
-    choices: request.choices,
-    allowText: request.allowText,
+    choices: opensWebReviewer ? [] : request.choices,
+    allowText: opensWebReviewer ? false : request.allowText,
     projectId: request.target.projectId,
     projectName: request.target.projectName,
     url,

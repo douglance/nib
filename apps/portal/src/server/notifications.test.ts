@@ -4,7 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { apnsCategory, apnsJwt, apnsReadiness, apnsTopicForDevice } from "./notifications";
+import type { RequestRecord } from "../shared/types";
+import { apnsCategory, apnsJwt, apnsReadiness, apnsTopicForDevice, requestPayload } from "./notifications";
 
 test("maps common first-two request choices to native APNs categories", () => {
   assert.equal(apnsCategory({ choices: ["Approve", "Hold"] }), "NIB_APPROVE_HOLD");
@@ -78,4 +79,41 @@ test("creates APNs JWTs with a verifiable ES256 signature", () => {
     crypto.verify("sha256", Buffer.from(`${header}.${claims}`), { key: publicKey, dsaEncoding: "ieee-p1363" }, Buffer.from(signature, "base64url")),
     true
   );
+});
+
+test("visual-review notifications only open the web reviewer", () => {
+  const now = new Date().toISOString();
+  const request: RequestRecord = {
+    id: "visual-review-1",
+    kind: "visual-review",
+    title: "Verify button alignment",
+    prompt: "Verify button alignment",
+    body: null,
+    context: null,
+    choices: ["Approve", "Reject"],
+    allowText: true,
+    target: {},
+    status: "open",
+    priority: "normal",
+    source: "nib",
+    createdAt: now,
+    updatedAt: now,
+    viewedAt: null,
+    answeredAt: null,
+    actedAt: null,
+    resolvedAt: null,
+    expiresAt: null,
+    notifiedAt: null,
+    notificationClickedAt: null,
+    staleReason: null,
+    attachments: [],
+    responses: [],
+    metadata: { contract: "nib.visual-review/v1" }
+  };
+
+  const payload = requestPayload(request);
+
+  assert.deepEqual(payload.choices, []);
+  assert.equal(payload.allowText, false);
+  assert.match(String(payload.url), /\/r\//);
 });

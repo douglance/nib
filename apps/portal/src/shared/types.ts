@@ -388,11 +388,11 @@ export interface FeedbackMetricsSummary {
   improvementRate: number | null;
 }
 
-export type RequestKind = "approval" | "choice" | "question" | "review" | "notification" | "tmux";
+export type RequestKind = "approval" | "choice" | "question" | "review" | "visual-review" | "notification" | "tmux";
 
 export type RequestStatus = "open" | "viewed" | "answered" | "acted" | "stale" | "resolved" | "expired";
 
-export type RequestResponseKind = FeedbackResponseKind | "choice" | "text";
+export type RequestResponseKind = FeedbackResponseKind | "choice" | "text" | "visual-review";
 
 export interface RequestTarget {
   projectId?: string;
@@ -451,6 +451,7 @@ export interface RequestRecord {
   actedAt: string | null;
   resolvedAt: string | null;
   expiresAt: string | null;
+  publishedAt?: string | null;
   notifiedAt: string | null;
   notificationClickedAt: string | null;
   staleReason: string | null;

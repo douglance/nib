@@ -42,8 +42,11 @@ import {
   listRequests,
   markRequestNotificationClicked,
   patchRequest,
+  publishRequest,
+  RequestContractError,
   respondRequest
 } from "./requests";
+import { streamRequestEvents } from "./requestEvents";
 import { requestPageHtml } from "./requestPage";
 import { runRetentionSweep } from "./retention";
 import { captureScreenshots } from "./screenshots";
@@ -87,62 +90,7 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (url.pathname === "/api/requests") {
-      if (req.method === "GET") {
-        sendJson(
-          res,
-          await listRequests(
-            url.searchParams.get("projectId") ?? undefined,
-            url.searchParams.get("includeMissing") !== "0"
-          )
-        );
-        return;
-      }
-      if (req.method === "POST") {
-        sendJson(res, await createRequest(await readJsonBody(req)), 201);
-        return;
-      }
-    }
-
-    if (url.pathname.match(/^\/api\/requests\/[^/]+$/)) {
-      const requestId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
-      if (req.method === "GET") {
-        const item = await getRequest(requestId);
-        if (!item) sendJson(res, { error: "Request not found" }, 404);
-        else sendJson(res, item);
-        return;
-      }
-      if (req.method === "PATCH") {
-        const item = await patchRequest(requestId, await readJsonBody(req));
-        if (!item) sendJson(res, { error: "Request not found" }, 404);
-        else sendJson(res, item);
-        return;
-      }
-    }
-
-    if (url.pathname.match(/^\/api\/requests\/[^/]+\/respond$/) && req.method === "POST") {
-      const requestId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
-      const item = await respondRequest(requestId, await readJsonBody(req));
-      if (!item) sendJson(res, { error: "Request not found" }, 404);
-      else sendJson(res, item);
-      return;
-    }
-
-    if (url.pathname.match(/^\/api\/requests\/[^/]+\/attachments$/) && req.method === "POST") {
-      const requestId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
-      const item = await addRequestAttachment(requestId, await readJsonBody(req));
-      if (!item) sendJson(res, { error: "Request not found" }, 404);
-      else sendJson(res, item, 201);
-      return;
-    }
-
-    if (url.pathname.match(/^\/api\/requests\/[^/]+\/notification-click$/) && req.method === "POST") {
-      const requestId = decodeURIComponent(url.pathname.split("/")[3] ?? "");
-      const item = await markRequestNotificationClicked(requestId);
-      if (!item) sendJson(res, { error: "Request not found" }, 404);
-      else sendJson(res, item);
-      return;
-    }
+    if (await handleRequestRoute(req, res, url)) return;
 
     if (url.pathname === "/api/notify" && req.method === "POST") {
       const body = await readJsonBody<{ title?: string; body?: string; url?: string; tag?: string; kind?: string }>(req);
@@ -567,7 +515,8 @@ const server = http.createServer(async (req, res) => {
     if (fs.existsSync(filePath)) serveFile(res, filePath);
     else serveFile(res, path.join(distPath, "index.html"));
   } catch (error) {
-    res.writeHead(500, { "content-type": "application/json; charset=utf-8" });
+    const statusCode = error instanceof RequestContractError ? error.statusCode : 500;
+    res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }));
   }
 });
@@ -603,6 +552,60 @@ process.once("SIGTERM", () => shutdown("SIGTERM"));
 const retentionSweep = () => runRetentionSweep().catch((error) => console.error("retention sweep failed", error));
 void retentionSweep();
 setInterval(retentionSweep, 60 * 60 * 1000).unref();
+
+async function handleRequestRoute(req: http.IncomingMessage, res: http.ServerResponse, url: URL): Promise<boolean> {
+  if (!url.pathname.startsWith("/api/requests")) return false;
+  if (url.pathname === "/api/requests") {
+    if (req.method === "GET") {
+      sendJson(res, await listRequests(url.searchParams.get("projectId") ?? undefined, url.searchParams.get("includeMissing") !== "0"));
+      return true;
+    }
+    if (req.method === "POST") {
+      sendJson(res, await createRequest(await readJsonBody(req)), 201);
+      return true;
+    }
+    return false;
+  }
+  if (url.pathname === "/api/requests/events" && req.method === "GET") {
+    streamRequestEvents(res);
+    return true;
+  }
+
+  const match = url.pathname.match(/^\/api\/requests\/([^/]+)(?:\/(respond|publish|attachments|notification-click))?$/);
+  if (!match) return false;
+  const requestId = decodeURIComponent(match[1] ?? "");
+  const action = match[2];
+  if (!action && req.method === "GET") {
+    sendRequestResult(res, await getRequest(requestId));
+    return true;
+  }
+  if (!action && req.method === "PATCH") {
+    sendRequestResult(res, await patchRequest(requestId, await readJsonBody(req)));
+    return true;
+  }
+  if (action === "respond" && req.method === "POST") {
+    sendRequestResult(res, await respondRequest(requestId, await readJsonBody(req)));
+    return true;
+  }
+  if (action === "publish" && req.method === "POST") {
+    sendRequestResult(res, await publishRequest(requestId));
+    return true;
+  }
+  if (action === "attachments" && req.method === "POST") {
+    sendRequestResult(res, await addRequestAttachment(requestId, await readJsonBody(req)), 201);
+    return true;
+  }
+  if (action === "notification-click" && req.method === "POST") {
+    sendRequestResult(res, await markRequestNotificationClicked(requestId));
+    return true;
+  }
+  return false;
+}
+
+function sendRequestResult(res: http.ServerResponse, item: unknown, statusCode = 200): void {
+  if (!item) sendJson(res, { error: "Request not found" }, 404);
+  else sendJson(res, item, statusCode);
+}
 
 function sendJson(res: http.ServerResponse, payload: unknown, statusCode = 200): void {
   res.writeHead(statusCode, {

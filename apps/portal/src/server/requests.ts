@@ -15,7 +15,8 @@ import type {
 import { ATTACHMENT_DIR } from "./config";
 import { discoverProjects } from "./discovery";
 import { sendRequestNotification } from "./notifications";
-import { readStore, writeStore } from "./store";
+import { emitRequestEvent } from "./requestEvents";
+import { mutateStore, readStore, writeStore } from "./store";
 import { paneFingerprint } from "./waiting/detect";
 import { appendActivity } from "./workspace";
 
@@ -48,6 +49,9 @@ interface RequestRespondInput {
   data?: Record<string, unknown> | null;
   deviceId?: string;
   acted?: boolean;
+  decision?: "approve" | "reject" | "comment";
+  comment?: string;
+  annotations?: unknown[];
 }
 
 interface RequestPatchInput {
@@ -66,6 +70,7 @@ export async function listRequests(projectId?: string, includeMissing = true): P
   const store = await readStore();
   return Object.values(store.requests ?? {})
     .filter((request) => !projectId || request.target.projectId === projectId)
+    .filter(isPublishedRequest)
     .filter((request) => includeMissing || request.status !== "stale")
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
@@ -82,6 +87,10 @@ export async function createRequest(input: RequestCreateInput): Promise<RequestR
   const prompt = input.prompt?.trim() || input.title?.trim() || input.body?.trim();
   if (!prompt) throw new Error("prompt is required");
   const now = new Date().toISOString();
+  const visualReview = input.kind === "visual-review";
+  if (visualReview && input.metadata?.contract !== "nib.visual-review/v1") {
+    throw new RequestContractError("visual reviews require contract nib.visual-review/v1", 400);
+  }
   const choices = (input.choices ?? []).map((choice) => choice.trim()).filter(Boolean);
   const project = input.projectId ? (await discoverProjects()).find((item) => item.id === input.projectId) : null;
   const projectId = project?.id ?? input.projectId;
@@ -111,7 +120,8 @@ export async function createRequest(input: RequestCreateInput): Promise<RequestR
     answeredAt: null,
     actedAt: null,
     resolvedAt: null,
-    expiresAt: input.expiresAt ?? null,
+    expiresAt: input.expiresAt ?? (visualReview ? defaultVisualReviewExpiry(now) : null),
+    publishedAt: visualReview ? null : now,
     notifiedAt: null,
     notificationClickedAt: null,
     staleReason: null,
@@ -123,39 +133,52 @@ export async function createRequest(input: RequestCreateInput): Promise<RequestR
   store.requests[request.id] = request;
   await writeStore(store);
   await appendActivity({ kind: "feedback", projectId: request.target.projectId, message: "Created request", data: request });
-  return input.notify === false ? request : sendRequestNotification(request);
+  const created = input.notify === false || visualReview ? request : await sendRequestNotification(request);
+  if (isPublishedRequest(created)) emitRequestEvent("created", created);
+  return created;
 }
 
 export async function respondRequest(id: string, input: RequestRespondInput): Promise<RequestRecord | null> {
-  const store = await readStore();
-  const request = store.requests?.[id];
-  if (!request) return null;
-  const now = new Date().toISOString();
-  const choice = normalizeChoice(request.choices, input.choice, input.choiceIndex);
-  const notificationResponse = isNotificationResponse(input.deviceId);
-  const response: RequestResponse = {
-    id: crypto.randomUUID(),
-    kind: input.kind ?? (choice ? "choice" : "text"),
-    text: input.text?.trim() || choice || "",
-    choice,
-    choiceIndex: typeof input.choiceIndex === "number" ? input.choiceIndex : choice ? request.choices.indexOf(choice) : undefined,
-    data: normalizeData(input.data),
-    deviceId: input.deviceId?.trim() || undefined,
-    createdAt: now
-  };
-  const next: RequestRecord = {
-    ...request,
-    responses: [response, ...request.responses].slice(0, 100),
-    status: input.acted ? "acted" : "answered",
-    viewedAt: notificationResponse ? request.viewedAt ?? now : request.viewedAt,
-    answeredAt: request.answeredAt ?? now,
-    actedAt: input.acted ? now : request.actedAt,
-    notificationClickedAt: notificationResponse ? request.notificationClickedAt ?? now : request.notificationClickedAt,
-    updatedAt: now
-  };
-  store.requests[id] = next;
-  await writeStore(store);
+  const mutated = await mutateStore((store) => {
+    const request = store.requests?.[id];
+    if (!request) return;
+    if (request.responses.length > 0) {
+      throw new RequestContractError("request already has a response", 409);
+    }
+    if (request.kind === "visual-review" && !request.publishedAt) {
+      throw new RequestContractError("visual review is not published", 409);
+    }
+    const now = new Date().toISOString();
+    const visualResponse = request.kind === "visual-review" ? normalizeVisualResponse(input) : null;
+    const choice = visualResponse?.decision ?? normalizeChoice(request.choices, input.choice, input.choiceIndex);
+    const notificationResponse = isNotificationResponse(input.deviceId);
+    const response: RequestResponse = {
+      id: crypto.randomUUID(),
+      kind: visualResponse ? "visual-review" : input.kind ?? (choice ? "choice" : "text"),
+      text: visualResponse?.comment ?? (input.text?.trim() || choice || ""),
+      choice,
+      choiceIndex: typeof input.choiceIndex === "number" ? input.choiceIndex : choice ? request.choices.indexOf(choice) : undefined,
+      data: visualResponse ?? normalizeData(input.data),
+      deviceId: input.deviceId?.trim() || undefined,
+      createdAt: now
+    };
+    const next: RequestRecord = {
+      ...request,
+      responses: [response],
+      status: input.acted ? "acted" : "answered",
+      viewedAt: notificationResponse ? request.viewedAt ?? now : request.viewedAt,
+      answeredAt: request.answeredAt ?? now,
+      actedAt: input.acted ? now : request.actedAt,
+      notificationClickedAt: notificationResponse ? request.notificationClickedAt ?? now : request.notificationClickedAt,
+      updatedAt: now
+    };
+    store.requests[id] = next;
+  });
+  const next = mutated.requests[id] ?? null;
+  const response = next?.responses[0] ?? null;
+  if (!next || !response) return null;
   await appendActivity({ kind: "feedback", projectId: next.target.projectId, message: "Answered request", data: response });
+  emitRequestEvent("responded", next);
   if (shouldActuate(next)) return actuateRequest(next, response);
   return next;
 }
@@ -176,6 +199,7 @@ export async function patchRequest(id: string, input: RequestPatchInput): Promis
   store.requests[id] = next;
   await writeStore(store);
   await appendActivity({ kind: "feedback", projectId: next.target.projectId, message: `Marked request ${status}`, data: { id } });
+  if (isPublishedRequest(next)) emitRequestEvent("updated", next);
   return next;
 }
 
@@ -192,6 +216,7 @@ export async function markRequestNotificationClicked(id: string, when = new Date
   };
   store.requests[id] = next;
   await writeStore(store);
+  if (isPublishedRequest(next)) emitRequestEvent("updated", next);
   return next;
 }
 
@@ -199,6 +224,9 @@ export async function addRequestAttachment(id: string, input: AttachmentInput): 
   const store = await readStore();
   const request = store.requests?.[id];
   if (!request) return null;
+  if (request.kind === "visual-review" && request.publishedAt) {
+    throw new RequestContractError("visual review is already published", 409);
+  }
   if (!input.contentBase64) throw new Error("contentBase64 is required");
   const buffer = Buffer.from(input.contentBase64, "base64");
   if (!buffer.length) throw new Error("attachment is empty");
@@ -231,6 +259,37 @@ export async function addRequestAttachment(id: string, input: AttachmentInput): 
   await writeStore(store);
   await appendActivity({ kind: "feedback", projectId: next.target.projectId, message: "Attached file to request", data: attachment });
   return attachment;
+}
+
+export async function publishRequest(id: string): Promise<RequestRecord | null> {
+  const mutated = await mutateStore((store) => {
+    const request = store.requests?.[id];
+    if (!request) return;
+    if (request.publishedAt) return;
+    if (request.kind !== "visual-review") {
+      throw new RequestContractError("only visual reviews require explicit publish", 400);
+    }
+    if (request.metadata.contract !== "nib.visual-review/v1") {
+      throw new RequestContractError("visual review contract is invalid", 400);
+    }
+    const hasPreview = request.attachments.some((attachment) =>
+      attachment.contentType.startsWith("image/") && attachment.metadata.role === "preview"
+    );
+    if (!hasPreview) throw new RequestContractError("visual review requires a preview image attachment", 400);
+    const hasCanonical = request.attachments.some((attachment) =>
+      attachment.contentType === "application/x-nib" && attachment.metadata.role === "canonical"
+    );
+    if (!hasCanonical) throw new RequestContractError("visual review requires a canonical .nib attachment", 400);
+    const now = new Date().toISOString();
+    const published: RequestRecord = { ...request, publishedAt: now, updatedAt: now };
+    store.requests[id] = published;
+  });
+  const published = mutated.requests[id] ?? null;
+  if (!published) return null;
+  await appendActivity({ kind: "feedback", projectId: published.target.projectId, message: "Published visual review", data: { id } });
+  const notified = await sendRequestNotification(published);
+  emitRequestEvent("published", notified);
+  return notified;
 }
 
 export async function attachmentFile(id: string): Promise<{ file: string; contentType: string; name: string } | null> {
@@ -346,6 +405,41 @@ async function actuateRequest(request: RequestRecord, response: RequestResponse)
 
 function shouldActuate(request: RequestRecord): boolean {
   return Boolean(request.target.tmux && request.metadata?.actuate === true);
+}
+
+function isPublishedRequest(request: RequestRecord): boolean {
+  return request.kind !== "visual-review" || Boolean(request.publishedAt);
+}
+
+function defaultVisualReviewExpiry(createdAt: string): string {
+  return new Date(new Date(createdAt).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function normalizeVisualResponse(input: RequestRespondInput): Record<string, unknown> & {
+  decision: "approve" | "reject" | "comment";
+  comment?: string;
+  annotations: unknown[];
+} {
+  if (!input.decision || !["approve", "reject", "comment"].includes(input.decision)) {
+    throw new RequestContractError("visual review decision must be approve, reject, or comment", 400);
+  }
+  const comment = input.comment?.trim();
+  if (input.decision === "comment" && !comment) {
+    throw new RequestContractError("comment decision requires a comment", 400);
+  }
+  return {
+    contract: "nib.visual-review/v1",
+    decision: input.decision,
+    ...(comment ? { comment } : {}),
+    annotations: Array.isArray(input.annotations) ? input.annotations : []
+  };
+}
+
+export class RequestContractError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+    this.name = "RequestContractError";
+  }
 }
 
 async function captureTmuxPane(session: string, paneId: string): Promise<string> {

@@ -65,19 +65,19 @@ test("still removes answered requests older than the answered retention", async 
   assert.equal(store.requests["answered-ten"], undefined);
 });
 
-test("defaults the open-stale threshold to 21 days and honors NIB_OPEN_STALE_DAYS", async () => {
+test("defaults the pending threshold to 7 days and honors NIB_OPEN_STALE_DAYS", async () => {
   await seedStore({
     requests: {
-      "twenty-days": makeRequest({ id: "twenty-days", status: "open", updatedAt: daysAgo(20) }),
-      "twenty-two-days": makeRequest({ id: "twenty-two-days", status: "open", updatedAt: daysAgo(22) })
+      "six-days": makeRequest({ id: "six-days", status: "open", updatedAt: daysAgo(6) }),
+      "eight-days": makeRequest({ id: "eight-days", status: "open", updatedAt: daysAgo(8) })
     }
   });
 
   await runRetentionSweep();
 
   let store = await readStoreFile();
-  assert.ok(store.requests["twenty-days"], "20-day open request survives the 21-day default");
-  assert.equal(store.requests["twenty-two-days"], undefined, "22-day open request is swept by the 21-day default");
+  assert.ok(store.requests["six-days"], "six-day pending request survives the seven-day default");
+  assert.equal(store.requests["eight-days"], undefined, "eight-day pending request is swept by the seven-day default");
 
   process.env.NIB_OPEN_STALE_DAYS = "45";
   try {
@@ -92,6 +92,36 @@ test("defaults the open-stale threshold to 21 days and honors NIB_OPEN_STALE_DAY
   } finally {
     delete process.env.NIB_OPEN_STALE_DAYS;
   }
+});
+
+test("removes completed visual-review bytes after 24 hours while keeping request metadata", async () => {
+  const preview = makeAttachment("completed-review", "completed.png");
+  const canonical = makeAttachment("completed-review", "completed.nib", "application/x-nib", "file");
+  await seedStore({
+    requests: {
+      "completed-review": makeRequest({
+        id: "completed-review",
+        kind: "visual-review",
+        status: "answered",
+        updatedAt: daysAgo(2),
+        answeredAt: daysAgo(2),
+        attachments: [preview, canonical]
+      })
+    },
+    attachments: { [preview.id]: preview, [canonical.id]: canonical }
+  });
+  await writeAttachmentFile("completed.png");
+  await writeAttachmentFile("completed.nib");
+
+  await runRetentionSweep();
+
+  const store = await readStoreFile();
+  assert.ok(store.requests["completed-review"]);
+  assert.deepEqual(store.requests["completed-review"].attachments, []);
+  assert.equal(store.attachments[preview.id], undefined);
+  assert.equal(store.attachments[canonical.id], undefined);
+  assert.equal(await fileExists("completed.png"), false);
+  assert.equal(await fileExists("completed.nib"), false);
 });
 
 test("keeps recently answered requests and their attachment files", async () => {
@@ -213,13 +243,18 @@ function makeRequest(overrides: Partial<RequestRecord> & { id: string; status: R
   };
 }
 
-function makeAttachment(requestId: string, fileName: string): RequestAttachment {
+function makeAttachment(
+  requestId: string,
+  fileName: string,
+  contentType = "image/png",
+  type: RequestAttachment["type"] = "image"
+): RequestAttachment {
   return {
     id: `attachment-${fileName}`,
     requestId,
     name: fileName,
-    type: "image",
-    contentType: "image/png",
+    type,
+    contentType,
     bytes: 4,
     url: `/attachments/attachment-${fileName}`,
     createdAt: daysAgo(30),

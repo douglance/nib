@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { FeedbackStatus, RequestAttachment, RequestStatus } from "../shared/types";
+import type { FeedbackStatus, RequestAttachment, RequestRecord, RequestStatus } from "../shared/types";
 import { ATTACHMENT_DIR } from "./config";
 import { mutateStore, type StoreShape } from "./store";
 
@@ -24,12 +24,18 @@ export function retentionDays(): number {
 
 export function openStaleDays(): number {
   const parsed = Number(process.env.NIB_OPEN_STALE_DAYS);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 21;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 7;
+}
+
+export function completedAttachmentHours(): number {
+  const parsed = Number(process.env.NIB_COMPLETED_ATTACHMENT_HOURS);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 24;
 }
 
 export async function runRetentionSweep(now = Date.now()): Promise<RetentionSweepSummary> {
   const cutoff = now - retentionDays() * DAY_MS;
   const openStaleCutoff = now - openStaleDays() * DAY_MS;
+  const completedAttachmentCutoff = now - completedAttachmentHours() * 60 * 60 * 1000;
   let removedRequests = 0;
   let removedFeedback = 0;
   let prunedCacheEntries = 0;
@@ -40,6 +46,14 @@ export async function runRetentionSweep(now = Date.now()): Promise<RetentionSwee
       if (answeredExpired || abandonedOpen) {
         delete store.requests[id];
         removedRequests += 1;
+      } else if (
+        request.kind === "visual-review" &&
+        removableRequestStatuses.has(request.status) &&
+        completedTime(request) < completedAttachmentCutoff
+      ) {
+        const expired = request.attachments.filter(isReviewByteAttachment);
+        request.attachments = request.attachments.filter((attachment) => !isReviewByteAttachment(attachment));
+        for (const attachment of expired) delete store.attachments[attachment.id];
       }
     }
     for (const [id, feedback] of Object.entries(store.feedback)) {
@@ -62,6 +76,16 @@ export async function runRetentionSweep(now = Date.now()): Promise<RetentionSwee
     `retention sweep: removed ${removedRequests} requests, ${removedAttachments} attachments, ${removedFeedback} feedback, ${prunedCacheEntries} cache entries`
   );
   return { removedRequests, removedAttachments, removedFeedback, prunedCacheEntries };
+}
+
+function completedTime(record: RequestRecord): number {
+  const value = record.answeredAt || record.actedAt || record.resolvedAt || record.updatedAt;
+  const time = new Date(value || "").getTime();
+  return Number.isFinite(time) ? time : Number.POSITIVE_INFINITY;
+}
+
+function isReviewByteAttachment(attachment: RequestAttachment): boolean {
+  return attachment.contentType.startsWith("image/") || attachment.contentType === "application/x-nib";
 }
 
 function recordTime(record: { updatedAt?: string | null; createdAt?: string | null }): number {
