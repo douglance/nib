@@ -75,6 +75,7 @@ rmcp = { version = "0.12", features = ["server", "transport-io", "macros"] }
 schemars = "1.0"
 libc = "0.2"
 xcap = "0.8"
+ureq = { version = "2.12", features = ["json"] }
 
 # Dev dependencies
 tempfile = "3.14"
@@ -201,6 +202,7 @@ schemars = { workspace = true, optional = true }
 
 # Window capture
 xcap.workspace = true
+ureq.workspace = true
 
 # Platform-specific utilities
 [target.'cfg(unix)'.dependencies]

@@ -90,8 +90,12 @@ nib clear-annotations shot.png
 Nib is designed for image-based communication. After each annotation event, the agent must inspect the image (zoom first, then full if unclear).
 
 ```bash
-# Wait for human feedback in the GUI
+# Publish to the private Nib portal, then wait for the first response.
+# If the portal is unavailable, auto falls back to terminal review in tmux or the GUI.
 nib feedback shot.png -t 120
+
+# Require the shared web reviewer (no local fallback)
+nib feedback shot.png --ui web -m "Ship this image?" -t 0
 
 # Keep the agent pane noninteractive while review happens in a temporary tmux window
 nib feedback shot.png --ui terminal -m "Ship this image?" -t 0
@@ -108,6 +112,12 @@ Terminal review sends lossless Kitty/iTerm image data and deliberately has no
 character-art fallback. It supports true SSH, but rejects vmux/mosh because
 mosh synchronizes terminal cell state rather than forwarding graphics control
 sequences.
+
+Web review uses `https://dave.tail5d92b4.ts.net` by default. Override it with
+`NIB_PORTAL_URL` for another private deployment or local development server.
+The CLI publishes the preview and canonical `.nib` together, prints the
+versioned response JSON, and merges returned annotations into the originating
+`.nib` file.
 
 ## Annotation Types
 

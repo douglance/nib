@@ -2729,21 +2729,32 @@ pub async fn run_mcp_server(args: &McpServerArgs) -> Result<()> {
 /// 6. Wait for SendToAgent response
 /// 7. Print JSON and optionally render
 pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
-    use super::annotation_json;
-
     tracing::info!(?args, "Running feedback");
 
-    let use_terminal = match args.ui {
-        FeedbackUi::Gui => false,
-        FeedbackUi::Terminal => true,
-        FeedbackUi::Auto => {
-            std::env::var_os("TMUX").is_some() && nib_tui::TerminalReport::detect().is_ok()
+    match args.ui {
+        FeedbackUi::Terminal => return run_terminal_feedback(args).await,
+        FeedbackUi::Web => {
+            return super::web_feedback::run(args)
+                .map_err(|error| crate::core::NibError::Other(error.to_string()))
         }
-    };
-
-    if use_terminal {
-        return run_terminal_feedback(args).await;
+        FeedbackUi::Auto => match super::web_feedback::run(args) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.allows_local_fallback() => {
+                tracing::warn!("Web review unavailable; using a local reviewer: {error}");
+                if std::env::var_os("TMUX").is_some() && nib_tui::TerminalReport::detect().is_ok() {
+                    return run_terminal_feedback(args).await;
+                }
+            }
+            Err(error) => return Err(crate::core::NibError::Other(error.to_string())),
+        },
+        FeedbackUi::Gui => {}
     }
+
+    run_gui_feedback(args).await
+}
+
+async fn run_gui_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
+    use super::annotation_json;
 
     // Verify file exists
     if !args.file.exists() {
@@ -3092,7 +3103,7 @@ fn feedback_response_path(file: &Path) -> PathBuf {
         .join(format!("{}.json", session))
 }
 
-fn ensure_feedback_nib(file: &Path) -> Result<PathBuf> {
+pub(super) fn ensure_feedback_nib(file: &Path) -> Result<PathBuf> {
     if file
         .extension()
         .and_then(|e| e.to_str())

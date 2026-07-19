@@ -29,9 +29,10 @@ fn error(message: impl ToString) -> CommandResult {
 }
 
 fn ui(value: Option<&Value>) -> Result<FeedbackUi, CommandResult> {
-    match value.and_then(Value::as_str).unwrap_or("gui") {
+    match value.and_then(Value::as_str).unwrap_or("auto") {
         "gui" => Ok(FeedbackUi::Gui),
         "terminal" => Ok(FeedbackUi::Terminal),
+        "web" => Ok(FeedbackUi::Web),
         "auto" => Ok(FeedbackUi::Auto),
         other => Err(error(format!("invalid --ui value: {other}"))),
     }

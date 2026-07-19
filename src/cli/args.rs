@@ -205,7 +205,7 @@ pub struct FeedbackArgs {
     pub timeout: u64,
 
     /// Human review surface
-    #[arg(long, value_enum, default_value = "gui")]
+    #[arg(long, value_enum, default_value = "auto")]
     pub ui: FeedbackUi,
 
     /// Open the review and return its session without waiting
@@ -217,6 +217,7 @@ pub struct FeedbackArgs {
 pub enum FeedbackUi {
     Gui,
     Terminal,
+    Web,
     Auto,
 }
 
@@ -425,7 +426,7 @@ pub struct GenerateArgs {
     pub message: Option<String>,
 
     /// Human review surface used with --feedback
-    #[arg(long, value_enum, default_value = "gui")]
+    #[arg(long, value_enum, default_value = "auto")]
     pub feedback_ui: FeedbackUi,
 }
 
@@ -645,4 +646,18 @@ pub struct McpServerArgs {
 pub enum OutputFormat {
     Text,
     Json,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feedback_defaults_to_web_first_auto_mode() {
+        let cli = Cli::try_parse_from(["nib", "feedback", "review.png"]).unwrap();
+        let Command::Feedback(args) = cli.command else {
+            panic!("expected feedback command");
+        };
+        assert_eq!(args.ui, FeedbackUi::Auto);
+    }
 }

@@ -22,6 +22,7 @@ pub mod commands;
 pub mod fields;
 mod incurs_commands;
 pub mod sessions;
+mod web_feedback;
 
 pub use args::*;
 pub use commands::*;
