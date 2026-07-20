@@ -1580,7 +1580,43 @@ struct RequestDetailView: View {
         UIImagePickerController.isSourceTypeAvailable(.camera)
     }
 
+    private var reviewImage: NibRequest.Attachment? {
+        request.attachments.first { $0.contentType.hasPrefix("image/") || $0.type == "image" }
+    }
+
     var body: some View {
+        Group {
+            if request.kind == "visual-review", let reviewImage {
+                NativeVisualReviewWorkspace(
+                    request: request,
+                    imageURL: client.absoluteURL(reviewImage.url),
+                    sending: sending,
+                    submit: submitVisualReview
+                )
+            } else {
+                standardRequestView
+            }
+        }
+        .sheet(item: $safariRoute) { route in
+            SafariView(url: route.url)
+        }
+        .sheet(item: $webRoute) { route in
+            RequestWebContainer(route: route) {
+                safariRoute = SafariRoute(url: route.url)
+            }
+        }
+        .sheet(isPresented: $showingCamera) {
+            CameraCaptureView { image in
+                Task { await upload(image: image) }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            ToastView(message: error ?? notice)
+                .padding(.bottom, 10)
+        }
+    }
+
+    private var standardRequestView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 12) {
@@ -1664,23 +1700,6 @@ struct RequestDetailView: View {
         .background(NibTheme.background)
         .navigationTitle("Request")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(item: $safariRoute) { route in
-            SafariView(url: route.url)
-        }
-        .sheet(item: $webRoute) { route in
-            RequestWebContainer(route: route) {
-                safariRoute = SafariRoute(url: route.url)
-            }
-        }
-        .sheet(isPresented: $showingCamera) {
-            CameraCaptureView { image in
-                Task { await upload(image: image) }
-            }
-        }
-        .overlay(alignment: .bottom) {
-            ToastView(message: error ?? notice)
-                .padding(.bottom, 10)
-        }
     }
 
     private func respond(_ payload: RequestResponsePayload) async {
@@ -1695,6 +1714,27 @@ struct RequestDetailView: View {
             )
             reply = ""
             notice = "Response sent."
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func submitVisualReview(
+        decision: String,
+        comment: String?,
+        annotations: [NibReviewAnnotation]
+    ) async {
+        sending = true
+        defer { sending = false }
+        do {
+            request = try await client.respond(
+                requestId: request.id,
+                decision: decision,
+                comment: comment,
+                annotations: annotations
+            )
+            notice = decision == "approve" ? "Approved." : decision == "reject" ? "Rejected." : "Comment sent."
             error = nil
         } catch {
             self.error = error.localizedDescription
