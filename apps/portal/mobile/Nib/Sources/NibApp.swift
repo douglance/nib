@@ -246,6 +246,10 @@ struct RequestInboxView: View {
             .onOpenURL { url in
                 open(url: url)
             }
+            .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                guard let url = activity.webpageURL else { return }
+                open(url: url)
+            }
             .overlay(alignment: .bottom) {
                 ToastView(message: error ?? notice)
                     .padding(.bottom, 10)
@@ -336,13 +340,16 @@ struct RequestInboxView: View {
     }
 
     private func open(url: URL) {
-        guard url.scheme == "nib" else { return }
-        if let server = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+        guard let scheme = url.scheme?.lowercased(), ["nib", "http", "https"].contains(scheme) else { return }
+        if scheme == "nib", let server = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems?
             .first(where: { $0.name == "server" })?
             .value {
             baseURLString = server
             client.configure(baseURLString: server)
+        }
+        if scheme == "http" || scheme == "https" {
+            guard url.host == client.baseURL.host() else { return }
         }
         guard let requestId = requestId(from: url) else {
             if let projectId = projectId(from: url) {
@@ -389,6 +396,10 @@ struct RequestInboxView: View {
     }
 
     private func requestId(from url: URL) -> String? {
+        if ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+           ["r", "requests"].contains(url.pathComponents.dropFirst().first ?? "") {
+            return url.pathComponents.dropFirst(2).first
+        }
         if url.host == "request" || url.host == "requests" {
             return url.pathComponents.dropFirst().first
         }
@@ -1784,14 +1795,22 @@ struct RequestResponsePayload {
 struct AttachmentStrip: View {
     @EnvironmentObject private var client: NibClient
     var request: NibRequest
+    @State private var selectedImage: NibRequest.Attachment?
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
                 ForEach(request.attachments) { attachment in
-                    AttachmentTile(attachment: attachment, url: client.absoluteURL(attachment.url))
+                    AttachmentTile(
+                        attachment: attachment,
+                        url: client.absoluteURL(attachment.url),
+                        openImage: { selectedImage = attachment }
+                    )
                 }
             }
+        }
+        .fullScreenCover(item: $selectedImage) { attachment in
+            NativeImageViewer(attachment: attachment, url: client.absoluteURL(attachment.url))
         }
     }
 }
@@ -1799,6 +1818,7 @@ struct AttachmentStrip: View {
 struct AttachmentTile: View {
     var attachment: NibRequest.Attachment
     var url: URL?
+    var openImage: () -> Void
 
     private var isImage: Bool {
         attachment.type == "image" || attachment.contentType.hasPrefix("image/")
@@ -1810,7 +1830,12 @@ struct AttachmentTile: View {
 
     var body: some View {
         Group {
-            if let url {
+            if isImage, url != nil {
+                Button(action: openImage) {
+                    content(url: url)
+                }
+                .accessibilityLabel("Open \(attachment.name) in Nib")
+            } else if let url {
                 Link(destination: url) {
                     content(url: url)
                 }
@@ -1891,6 +1916,83 @@ struct AttachmentTile: View {
             .frame(width: 188, alignment: .leading)
             .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(NibTheme.border))
+        }
+    }
+}
+
+struct NativeImageViewer: View {
+    @Environment(\.dismiss) private var dismiss
+    var attachment: NibRequest.Attachment
+    var url: URL?
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let url {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    case .failure:
+                        ContentUnavailableView(
+                            "Image unavailable",
+                            systemImage: "photo.badge.exclamationmark",
+                            description: Text("Nib could not load \(attachment.name).")
+                        )
+                        .foregroundStyle(.white)
+                    case .empty:
+                        ProgressView()
+                            .tint(.white)
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+                .padding(.horizontal, 12)
+            } else {
+                ContentUnavailableView("Image unavailable", systemImage: "photo.badge.exclamationmark")
+                    .foregroundStyle(.white)
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack(spacing: 12) {
+                Button(action: { dismiss() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.title.weight(.regular))
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close image")
+
+                Spacer(minLength: 0)
+
+                Text(attachment.name)
+                    .font(.headline)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                if let url {
+                    ShareLink(item: url) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.title2.weight(.regular))
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Share image")
+                } else {
+                    Color.clear.frame(width: 44, height: 44)
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .frame(height: 56)
+            .background(Color(white: 0.10))
+            .overlay(alignment: .bottom) {
+                Divider().overlay(Color.white.opacity(0.12))
+            }
         }
     }
 }

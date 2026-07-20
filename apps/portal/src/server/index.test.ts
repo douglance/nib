@@ -7,6 +7,54 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { test } from "node:test";
 import type { RequestRecord } from "../shared/types";
 
+test("serves the Nib universal-link association and redirects iOS review links into the app", async () => {
+  const { port, server } = await startTestServer();
+
+  try {
+    const associationResponse = await fetch(`http://127.0.0.1:${port}/.well-known/apple-app-site-association`);
+    assert.equal(associationResponse.status, 200);
+    assert.equal(associationResponse.headers.get("content-type"), "application/json; charset=utf-8");
+    assert.deepEqual(await associationResponse.json(), {
+      applinks: {
+        apps: [],
+        details: [{
+          appID: "2AS3V73632.com.douglance.nib",
+          paths: ["/r/*"]
+        }]
+      }
+    });
+
+    const createdResponse = await fetch(`http://127.0.0.1:${port}/api/requests`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "visual-review",
+        title: "Open this image in Nib",
+        prompt: "Open this image in Nib",
+        source: "test",
+        metadata: { contract: "nib.visual-review/v1" },
+        notify: false
+      })
+    });
+    assert.equal(createdResponse.status, 201);
+    const created = await createdResponse.json() as RequestRecord;
+
+    const reviewResponse = await fetch(`http://127.0.0.1:${port}/r/${created.id}`, {
+      headers: { "user-agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 27_0 like Mac OS X)" },
+      redirect: "manual"
+    });
+    assert.equal(reviewResponse.status, 302);
+    const location = new URL(reviewResponse.headers.get("location") ?? "");
+    assert.equal(location.protocol, "nib:");
+    assert.equal(location.host, "request");
+    assert.equal(location.pathname, `/${created.id}`);
+    assert.equal(location.searchParams.get("server"), `http://127.0.0.1:${port}`);
+  } finally {
+    server.kill();
+    await once(server, "exit").catch(() => undefined);
+  }
+});
+
 test("preferred route update returns 404 instead of partial project for missing projects", async () => {
   const { port, server } = await startTestServer();
 
