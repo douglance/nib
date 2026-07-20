@@ -27,6 +27,8 @@ targets:
       path: Nib-Info.plist
       properties:
         CFBundleDisplayName: Nib
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleURLTypes:
           - CFBundleURLName: com.douglance.nib
             CFBundleURLSchemes:
@@ -61,6 +63,8 @@ targets:
       path: NibNotificationService-Info.plist
       properties:
         CFBundleDisplayName: Nib rich notifications
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
@@ -82,6 +86,8 @@ targets:
       path: NibWatch-Info.plist
       properties:
         CFBundleDisplayName: Nib
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.douglance.nib
         NSAppTransportSecurity:
