@@ -317,7 +317,7 @@ mod tests {
         // Current process should be in active list
         assert!(active
             .iter()
-            .any(|s| s.path == PathBuf::from("/tmp/current.nib")));
+            .any(|s| s.path.to_str() == Some("/tmp/current.nib")));
 
         // Stale process should NOT be in active list (assuming PID 999999 doesn't exist)
         // Note: This test might be flaky if PID 999999 happens to exist
@@ -377,7 +377,7 @@ mod tests {
         assert!(registry
             .sessions
             .iter()
-            .any(|s| s.path == PathBuf::from("/tmp/current.nib")));
+            .any(|s| s.path.to_str() == Some("/tmp/current.nib")));
 
         // Stale process (PID 999999) should be removed if it's not alive
         // Note: On some systems PID 999999 might exist, so we just verify the logic ran

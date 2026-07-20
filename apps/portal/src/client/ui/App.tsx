@@ -1,627 +1,75 @@
 import {
+  ArrowUpRight,
   Bell,
-  CheckCircle2,
-  Copy,
-  Edit3,
-  ExternalLink,
-  Home,
-  Monitor,
-  Power,
+  Check,
+  ChevronLeft,
+  Hand,
+  Expand,
+  Move,
+  Redo2,
   RefreshCw,
-  Route,
-  Search,
-  Server,
-  ShieldAlert,
-  Smartphone,
-  Tablet,
-  TriangleAlert,
-  X
+  Square,
+  Type,
+  Undo2,
+  WifiOff,
+  ZoomIn
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent } from "react";
-import type {
-  FeedbackArtifact,
-  FeedbackRequest,
-  FeedbackResponseKind,
-  HealthResponse,
-  HtmlArtifactSummary,
-  ProjectInfo,
-  ProjectsResponse,
-  ProjectWorkspace,
-  RequestRecord,
-  RouteMode,
-  ViewerState,
-  ViewportKey,
-  WaitingPane
-} from "../../shared/types";
-import {
-  apiUrl,
-  assetUrl,
-  closeNativeWebView,
-  ensureNativeWebView,
-  isNativeShell,
-  measureNativeFrame,
-  nativeFeedbackSurfaceUrl,
-  nativeTargetUrl,
-  nibFetch
-} from "../native";
+import type { ComponentType, PointerEvent as ReactPointerEvent, SVGProps } from "react";
+import type { RequestRecord } from "../../shared/types";
+import { apiUrl, assetUrl, nibFetch } from "../native";
 
-const viewportIcons = {
-  phone: Smartphone,
-  tablet: Tablet,
-  desktop: Monitor
-};
+type ConnectionState = "connecting" | "connected" | "reconnecting";
+type ReviewTool = "select" | "pan" | "cursor" | "arrow" | "rectangle" | "text" | "path";
+type Decision = "approve" | "reject" | "comment";
 
-const FEEDBACK_SYNC_EVENT = "nib:feedback-sync";
+interface ReviewAnnotation {
+  id: string;
+  type: "arrow" | "rectangle" | "text" | "path";
+  color: string;
+  start_x?: number;
+  start_y?: number;
+  end_x?: number;
+  end_y?: number;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  content?: string;
+  points?: Array<[number, number]>;
+  stroke_width?: number;
+  head?: string;
+  font_size?: number;
+  align?: string;
+}
 
-interface FeedbackSyncDetail {
-  removeId?: string;
-  restore?: FeedbackRequest;
+interface DrawState {
+  start: [number, number];
+  points: Array<[number, number]>;
 }
 
 export function App() {
-  const viewerProjectId = getViewerProjectId();
-  const [data, setData] = useState<ProjectsResponse | null>(null);
-  const [query, setQuery] = useState("");
-  const [selectedViewport, setSelectedViewport] = useState<ViewportKey>("desktop");
-  const [loading, setLoading] = useState(true);
-  const [refreshingId, setRefreshingId] = useState<string | null>(null);
-  const [killingId, setKillingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [artifacts, setArtifacts] = useState<HtmlArtifactSummary[]>([]);
-  const [copied, setCopied] = useState(false);
-  const [activePanel, setActivePanel] = useState<"waiting" | "requests" | null>(null);
-  const autoCaptured = useRef(new Set<string>());
-
-  useEffect(() => {
-    if (activePanel === null) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setActivePanel(null);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activePanel]);
-
-  async function load(refresh = false) {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await nibFetch(`/api/projects${refresh ? "?refresh=1" : ""}`);
-      if (!response.ok) throw new Error(`Discovery failed: ${response.status}`);
-      setData(await response.json());
-      void loadHealth();
-      void loadArtifacts();
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : "Discovery failed");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadHealth() {
-    try {
-      const response = await nibFetch("/api/health");
-      if (response.ok) setHealth(await response.json());
-    } catch {
-      setHealth(null);
-    }
-  }
-
-  async function loadArtifacts() {
-    try {
-      const response = await nibFetch("/api/html/artifacts");
-      if (response.ok) {
-        const payload = await response.json() as { artifacts: HtmlArtifactSummary[] };
-        setArtifacts(payload.artifacts);
-      }
-    } catch {
-      setArtifacts([]);
-    }
-  }
-
-  async function copyInstallUrl() {
-    const value = health?.publicBaseUrl ?? data?.publicBaseUrl;
-    if (!value) return;
-    try {
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(value);
-      } else {
-        const textarea = document.createElement("textarea");
-        textarea.value = value;
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.focus();
-        textarea.select();
-        const copiedOk = document.execCommand("copy");
-        document.body.removeChild(textarea);
-        if (!copiedOk) throw new Error("execCommand copy failed");
-      }
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1800);
-    } catch {
-      setError("Couldn't copy URL — copy it manually.");
-    }
-  }
-
-  async function refreshScreenshots(projectId: string) {
-    setRefreshingId(projectId);
-    try {
-      const response = await nibFetch(`/api/projects/${encodeURIComponent(projectId)}/screenshots`, {
-        method: "POST"
-      });
-      if (!response.ok) throw new Error(`Screenshot failed: ${response.status}`);
-      const payload = await response.json();
-      setData((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          projects: current.projects.map((project) =>
-            project.id === projectId ? { ...project, screenshots: payload.screenshots } : project
-          )
-        };
-      });
-    } catch (captureError) {
-      setError(captureError instanceof Error ? captureError.message : "Screenshot failed");
-    } finally {
-      setRefreshingId(null);
-    }
-  }
-
-  async function killProject(projectId: string) {
-    setKillingId(projectId);
-    setError(null);
-    try {
-      const response = await nibFetch(`/api/projects/${encodeURIComponent(projectId)}/kill`, {
-        method: "POST"
-      });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => null) as { error?: string } | null;
-        throw new Error(payload?.error ?? `Kill failed: ${response.status}`);
-      }
-      await load(true);
-    } catch (killError) {
-      setError(killError instanceof Error ? killError.message : "Kill failed");
-    } finally {
-      setKillingId(null);
-    }
-  }
-
-  async function setPreferredRoute(projectId: string, mode: RouteMode) {
-    try {
-      const response = await nibFetch(`/api/projects/${encodeURIComponent(projectId)}/preferred-route`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ mode })
-      });
-      if (!response.ok) throw new Error(`Route update failed: ${response.status}`);
-      const project = await response.json();
-      setData((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          projects: current.projects.map((item) => (item.id === projectId ? project : item))
-        };
-      });
-    } catch (routeError) {
-      setError(routeError instanceof Error ? routeError.message : "Route update failed");
-    }
-  }
-
-  useEffect(() => {
-    void load();
-    const id = window.setInterval(() => void loadHealth(), 15000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  useEffect(() => {
-    if (!data) return;
-    const pending = data.projects.filter(
-      (project) => !autoCaptured.current.has(project.id) && !project.screenshots.desktop.capturedAt
-    );
-    if (pending.length === 0) return;
-    let cancelled = false;
-    void (async () => {
-      for (const project of pending.slice(0, 8)) {
-        if (cancelled) return;
-        autoCaptured.current.add(project.id);
-        await refreshScreenshots(project.id);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [data]);
-
-  const projects = useMemo(() => {
-    const source = data?.projects ?? [];
-    const needle = query.trim().toLowerCase();
-    if (!needle) return source;
-    return source.filter((project) =>
-      [project.name, project.framework, project.sourcePath, String(project.port)]
-        .filter(Boolean)
-        .some((value) => value!.toLowerCase().includes(needle))
-    );
-  }, [data, query]);
-
-  const viewerProject = viewerProjectId ? data?.projects.find((project) => project.id === viewerProjectId) : null;
-  if (viewerProjectId) {
-    return (
-      <ProjectViewer
-        project={viewerProject}
-        projects={data?.projects ?? []}
-        loading={loading}
-      />
-    );
-  }
-
-  return (
-    <main className="appShell">
-      <header className="topBar">
-        <div>
-          <h1>nib</h1>
-          <p>{health?.publicBaseUrl ?? data?.publicBaseUrl ?? "Scanning local project servers"}</p>
-          <div className="topMeta">
-            <span className={health?.ok ? "healthPill good" : "healthPill warn"}>
-              {health?.ok ? <CheckCircle2 size={15} /> : <TriangleAlert size={15} />}
-              {health?.tailscaleServe === "configured" ? "HTTPS ready" : "Check HTTPS"}
-            </span>
-            <span className="healthPill">
-              <Server size={15} />
-              {data
-                ? `${data.projects.filter((project) => project.status === "online").length}/${data.projects.length} online`
-                : health
-                  ? `${health.onlineProjectCount}/${health.projectCount} online`
-                  : "Checking"}
-            </span>
-          </div>
-        </div>
-        <div className="topActions">
-          <WaitingPanel
-            open={activePanel === "waiting"}
-            onToggle={() => setActivePanel((p) => (p === "waiting" ? null : "waiting"))}
-            onClose={() => setActivePanel(null)}
-          />
-          <RequestInbox
-            open={activePanel === "requests"}
-            onToggle={() => setActivePanel((p) => (p === "requests" ? null : "requests"))}
-            onClose={() => setActivePanel(null)}
-          />
-          <button className="primaryButton" onClick={() => void copyInstallUrl()} disabled={!health && !data}>
-            <Copy size={17} />
-            {copied ? "Copied" : "Copy URL"}
-          </button>
-          <button className="primaryButton" onClick={() => void load(true)} disabled={loading}>
-            <RefreshCw size={17} />
-            Refresh
-          </button>
-        </div>
-      </header>
-
-      <section className="controls" aria-label="Project controls">
-        <label className="searchBox">
-          <Search size={18} />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search projects, ports, paths"
-          />
-        </label>
-        <div className="segmented" aria-label="Screenshot viewport">
-          {(["desktop", "tablet", "phone"] as ViewportKey[]).map((viewport) => {
-            const Icon = viewportIcons[viewport];
-            return (
-              <button
-                key={viewport}
-                className={selectedViewport === viewport ? "active" : ""}
-                onClick={() => setSelectedViewport(viewport)}
-                title={viewport}
-              >
-                <Icon size={17} />
-                <span>{viewport}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
-
-      {error ? <div className="notice">{error}</div> : null}
-      {health?.warnings.length ? (
-        <section className="notice">
-          {health.warnings.map((warning) => (
-            <p key={warning}>{warning}</p>
-          ))}
-        </section>
-      ) : null}
-
-      <section className="summaryBand">
-        <strong>{projects.length}</strong>
-        <span>
-          {loading
-            ? "Scanning..."
-            : query.trim() && data?.projects
-              ? `of ${data.projects.length} match`
-              : "active project servers"}
-        </span>
-        <span className="summaryDetail">
-          {health ? `Uptime ${formatDuration(health.uptimeSeconds)} · Updated ${formatTime(health.generatedAt)}` : null}
-        </span>
-      </section>
-
-      {artifacts.length ? (
-        <section className="artifactGallery" aria-label="HTML artifacts">
-          <header>
-            <div>
-              <h2>HTML Artifacts</h2>
-              <p>{artifacts.length} registered artifact{artifacts.length === 1 ? "" : "s"}</p>
-            </div>
-            <a className="openButton" href="#projects">Projects</a>
-          </header>
-          <div className="artifactGalleryGrid">
-            {artifacts.slice(0, 12).map((artifact) => (
-              <ArtifactCard key={artifact.id} artifact={artifact} />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
-      <section id="projects" className="projectGrid" aria-live="polite">
-        {projects.map((project) => (
-          <ProjectCard
-            key={project.id}
-            project={project}
-            viewport={selectedViewport}
-            refreshing={refreshingId === project.id}
-            killing={killingId === project.id}
-            onRefresh={() => void refreshScreenshots(project.id)}
-            onKill={() => void killProject(project.id)}
-            onPreferredRoute={(mode) => void setPreferredRoute(project.id, mode)}
-          />
-        ))}
-      </section>
-
-      {!loading && projects.length === 0 ? (
-        (data?.projects?.length ?? 0) > 0 && query.trim() ? (
-          <section className="emptyState">
-            <h2>No projects match "{query.trim()}"</h2>
-            <button className="openButton" onClick={() => setQuery("")}>Clear search</button>
-          </section>
-        ) : (
-          <section className="emptyState">
-            <h2>No active web projects found</h2>
-            <p>Start a local dev server and refresh this page.</p>
-          </section>
-        )
-      ) : null}
-    </main>
-  );
-}
-
-function WaitingPanel({ open, onToggle, onClose }: { open: boolean; onToggle: () => void; onClose: () => void }) {
-  const [waiting, setWaiting] = useState<WaitingPane[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  async function loadWaiting() {
-    setLoading(true);
-    try {
-      const response = await nibFetch("/api/waiting");
-      if (response.ok) setWaiting(await response.json() as WaitingPane[]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    void loadWaiting();
-    const interval = window.setInterval(() => void loadWaiting(), 15000);
-    const onFocus = () => void loadWaiting();
-    const onVisibility = () => {
-      if (!document.hidden) void loadWaiting();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, []);
-
-  return (
-    <div className="waitingPanel">
-      <button
-        className="waitingPanelButton"
-        onClick={() => {
-          onToggle();
-          void loadWaiting();
-        }}
-        title="Waiting panes"
-      >
-        <TriangleAlert size={17} />
-        <span>Waiting</span>
-        {waiting.length ? <strong>{waiting.length}</strong> : null}
-      </button>
-      {open ? (
-        <section className="waitingPanelMenu">
-          <header>
-            <div>
-              <span>Waiting panes</span>
-              <small>{waiting.length ? `${waiting.length} blocked` : "Clear"}</small>
-            </div>
-            <button onClick={() => void loadWaiting()} title="Refresh waiting panes">
-              <RefreshCw size={14} className={loading ? "spinning" : ""} />
-            </button>
-            <button onClick={onClose} title="Close" aria-label="Close">
-              <X size={14} />
-            </button>
-          </header>
-          <div className="waitingPanelList">
-            {waiting.map((pane) => (
-              <article key={`${pane.session}:${pane.paneId}`}>
-                <div>
-                  <strong>{pane.window}</strong>
-                  <small>{pane.session}:{pane.paneId} · {formatTime(pane.since)}</small>
-                </div>
-                <p>{pane.reason}</p>
-              </article>
-            ))}
-            {!waiting.length ? <p className="waitingPanelEmpty">No blocked panes detected.</p> : null}
-          </div>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
-function ArtifactCard({ artifact }: { artifact: HtmlArtifactSummary }) {
-  const screenshot = artifact.screenshots.desktop;
-  const issueCount = artifact.validation?.issues.length ?? 0;
-  return (
-    <article className="artifactCard">
-      <div className="artifactPreview">
-        {screenshot.url ? <img src={assetUrl(screenshot.url) ?? screenshot.url} alt={`${artifact.name} screenshot`} /> : <span>No screenshot</span>}
-      </div>
-      <div className="artifactCardBody">
-        <div>
-          <h3>{artifact.name}</h3>
-          <p>{artifact.artifactKind ?? "html-artifact"} · {artifact.hash ?? "no hash"}</p>
-        </div>
-        <span className={`artifactValidation ${artifact.validation?.valid === false ? "bad" : "good"}`}>
-          {artifact.validation?.valid === false ? `${issueCount} issue${issueCount === 1 ? "" : "s"}` : "valid"}
-        </span>
-        <div className="artifactActions">
-          <a className="openButton" href={artifact.viewerUrl}>View</a>
-          <a className="openButton" href={assetUrl(artifact.artifactUrl) ?? artifact.artifactUrl}>Artifact</a>
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function formatDuration(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60);
-  const hours = Math.floor(minutes / 60);
-  if (hours > 0) return `${hours}h ${minutes % 60}m`;
-  if (minutes > 0) return `${minutes}m`;
-  return `${totalSeconds}s`;
-}
-
-function formatTime(value: string): string {
-  return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-}
-
-interface ProjectCardProps {
-  project: ProjectInfo;
-  viewport: ViewportKey;
-  refreshing: boolean;
-  killing: boolean;
-  onRefresh: () => void;
-  onKill: () => void;
-  onPreferredRoute: (mode: RouteMode) => void;
-}
-
-function ProjectCard({ project, viewport, refreshing, killing, onRefresh, onKill, onPreferredRoute }: ProjectCardProps) {
-  const screenshot = project.screenshots[viewport];
-  const preferred = project.routes[project.preferredRoute] ?? project.routes.pathProxy;
-  const compatibilityClass = `compatBadge ${project.compatibility.level}`;
-  return (
-    <article className="projectCard">
-      <div className="screenshotFrame">
-        {screenshot.url ? (
-          <img src={assetUrl(screenshot.url) ?? screenshot.url} alt={`${project.name} ${viewport} screenshot`} />
-        ) : (
-          <div className="screenshotEmpty">No screenshot</div>
-        )}
-      </div>
-      <div className="cardBody">
-        <div className="cardTitleRow">
-          <div>
-            <h2>{project.name}</h2>
-            <p>
-              {project.framework ?? "Web"} · {project.port ? `${project.host}:${project.port}` : project.targetKind}
-              {project.processId ? ` · pid ${project.processId}` : ""}
-            </p>
-          </div>
-          <span className="statusDot" title={project.status} />
-        </div>
-        <div className="compatRow">
-          <span className={compatibilityClass}>
-            <Route size={14} />
-            {project.compatibility.level}
-          </span>
-          <span>{preferred?.label ?? "Proxy"} route</span>
-        </div>
-        {project.sourcePath ? <p className="pathLine">{project.sourcePath}</p> : null}
-        <div className="routeButtons" aria-label={`${project.name} route options`}>
-          {(["direct", "pathProxy"] as RouteMode[]).map((mode) => {
-            const route = project.routes[mode];
-            if (!route) return null;
-            return (
-              <button
-                key={mode}
-                className={project.preferredRoute === mode ? "active" : ""}
-                disabled={!route.available}
-                onClick={() => onPreferredRoute(mode)}
-                title={route.message ?? route.label}
-              >
-                {route.label}
-              </button>
-            );
-          })}
-        </div>
-        <div className="cardActions">
-          <a className="openButton" href={`/view/${project.id}`}>
-            <ExternalLink size={16} />
-            View
-          </a>
-          <button className="iconButton" onClick={onRefresh} disabled={refreshing} title="Refresh screenshot">
-            <RefreshCw size={16} className={refreshing ? "spinning" : ""} />
-          </button>
-          {project.killable ? (
-            <button className="dangerButton" onClick={onKill} disabled={killing} title={`Kill ${project.name}`}>
-              <Power size={16} className={killing ? "spinning" : ""} />
-              Kill
-            </button>
-          ) : null}
-        </div>
-        <p className="shotMeta">
-          {screenshot.error
-            ? "Screenshot failed"
-            : screenshot.capturedAt
-              ? `Captured ${new Date(screenshot.capturedAt).toLocaleTimeString()}`
-              : "Screenshot pending"}
-        </p>
-        <details className="compatDetails">
-          <summary>Compatibility</summary>
-          {project.compatibility.checks.map((check) => (
-            <p key={check.id} className={`check ${check.status}`}>
-              <span>{check.label}</span>
-              {check.message}
-            </p>
-          ))}
-        </details>
-      </div>
-    </article>
-  );
-}
-
-function RequestInbox({ open, onToggle, onClose }: { open: boolean; onToggle: () => void; onClose: () => void }) {
   const [requests, setRequests] = useState<RequestRecord[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [reply, setReply] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState(() => requestIdFromPath());
+  const [connection, setConnection] = useState<ConnectionState>("connecting");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [notificationsReady, setNotificationsReady] = useState(false);
+
+  const pending = useMemo(() => requests.filter(isPending).sort(byNewest), [requests]);
+  const completed = useMemo(() => requests.filter(isCompleted).sort(byOldest).slice(-4), [requests]);
+  const selected = requests.find((request) => request.id === selectedId) ?? null;
 
   async function loadRequests() {
-    setLoading(true);
     try {
       const response = await nibFetch("/api/requests");
-      if (response.ok) {
-        const payload = await response.json() as RequestRecord[];
-        setRequests(payload);
-        if (selectedId && !payload.some((request) => request.id === selectedId)) setSelectedId(null);
-      }
+      if (!response.ok) throw new Error(`Inbox failed: ${response.status}`);
+      const payload = await response.json() as RequestRecord[];
+      setRequests(payload);
+      setError(null);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Inbox unavailable");
+      setConnection("reconnecting");
     } finally {
       setLoading(false);
     }
@@ -629,1264 +77,662 @@ function RequestInbox({ open, onToggle, onClose }: { open: boolean; onToggle: ()
 
   useEffect(() => {
     void loadRequests();
-    const interval = window.setInterval(() => void loadRequests(), 6000);
-    const onFocus = () => void loadRequests();
-    const onVisibility = () => {
-      if (!document.hidden) void loadRequests();
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [selectedId]);
-
-  async function respond(request: RequestRecord, payload: { text?: string; choice?: string; choiceIndex?: number }) {
-    setMessage(null);
-    const response = await nibFetch(`/api/requests/${encodeURIComponent(request.id)}/respond`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload)
+    void notificationStatus().then(setNotificationsReady);
+    const events = new EventSource(apiUrl("/api/requests/events"));
+    events.onopen = () => setConnection("connected");
+    events.onerror = () => setConnection("reconnecting");
+    events.addEventListener("request", (event) => {
+      const payload = JSON.parse((event as MessageEvent<string>).data) as { request: RequestRecord };
+      setRequests((current) => upsertRequest(current, payload.request));
     });
-    if (!response.ok) {
-      setMessage(`Response failed: ${response.status}`);
-      return;
-    }
-    const updated = await response.json() as RequestRecord;
-    setRequests((current) => current.map((item) => (item.id === updated.id ? updated : item)));
-    setReply("");
-    setMessage("Response sent.");
-  }
-
-  const active = requests.filter(isActiveRequest);
-  const selected = requests.find((request) => request.id === selectedId) ?? active[0] ?? requests[0] ?? null;
-  const targetUrl = selected ? requestTargetUrl(selected) : null;
-
-  return (
-    <div className="requestInbox">
-      <button
-        className="requestInboxButton"
-        onClick={() => {
-          onToggle();
-          void loadRequests();
-        }}
-        title="Requests"
-      >
-        <Bell size={17} />
-        <span>Requests</span>
-        {active.length ? <strong>{active.length}</strong> : null}
-      </button>
-      {open ? (
-        <section className="requestInboxPanel">
-          <header>
-            <div>
-              <span>Request inbox</span>
-              <small>{active.length ? `${active.length} waiting` : "Clear"}</small>
-            </div>
-            <button onClick={() => void loadRequests()} title="Refresh requests">
-              <RefreshCw size={14} className={loading ? "spinning" : ""} />
-            </button>
-            <button onClick={onClose} title="Close" aria-label="Close">
-              <X size={14} />
-            </button>
-          </header>
-          <div className="requestInboxBody">
-            <div className="requestList">
-              {requests.slice(0, 16).map((request) => (
-                <button
-                  key={request.id}
-                  className={selected?.id === request.id ? "active" : ""}
-                  onClick={() => {
-                    setSelectedId(request.id);
-                    setReply("");
-                    setMessage(null);
-                  }}
-                >
-                  <span className={`requestStatus ${request.status}`} />
-                  <span>
-                    <strong>{request.title}</strong>
-                    <small>{request.kind} · {formatTime(request.updatedAt)}</small>
-                  </span>
-                </button>
-              ))}
-              {!requests.length ? <p className="requestEmpty">No requests yet.</p> : null}
-            </div>
-            {selected ? (
-              <article className="requestDetailCard">
-                <div className="requestDetailHeading">
-                  <span className={`requestKind ${selected.kind}`}>{selected.kind}</span>
-                  <h2>{selected.title}</h2>
-                  <p>{selected.prompt}</p>
-                  {selected.context ? <small>{selected.context}</small> : null}
-                </div>
-                {targetUrl ? (
-                  <a className="requestOpenLink" href={targetUrl}>
-                    <ExternalLink size={15} />
-                    Open context
-                  </a>
-                ) : null}
-                {selected.attachments.length ? (
-                  <div className="requestAttachments">
-                    {selected.attachments.slice(0, 4).map((attachment) => (
-                      <a key={attachment.id} href={assetUrl(attachment.url) ?? attachment.url}>
-                        {attachment.name}
-                      </a>
-                    ))}
-                  </div>
-                ) : null}
-                {isActiveRequest(selected) ? (
-                  <div className="requestActions">
-                    {selected.choices.map((choice, index) => (
-                      <button key={`${choice}-${index}`} onClick={() => void respond(selected, { choice, choiceIndex: index })}>
-                        {choice}
-                      </button>
-                    ))}
-                    {selected.allowText ? (
-                      <form
-                        onSubmit={(event) => {
-                          event.preventDefault();
-                          if (reply.trim()) void respond(selected, { text: reply.trim() });
-                        }}
-                      >
-                        <textarea
-                          value={reply}
-                          onChange={(event) => setReply(event.target.value)}
-                          placeholder="Reply"
-                          rows={3}
-                        />
-                        <button type="submit" disabled={!reply.trim()}>Send</button>
-                      </form>
-                    ) : null}
-                  </div>
-                ) : (
-                  <p className="requestAnswered">Answered {selected.answeredAt ? formatTime(selected.answeredAt) : selected.status}</p>
-                )}
-                {message ? <p className="requestMessage">{message}</p> : null}
-              </article>
-            ) : null}
-          </div>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
-function FeedbackInbox({ compact = false }: { compact?: boolean }) {
-  const [open, setOpen] = useState(false);
-  const [feedback, setFeedback] = useState<FeedbackRequest[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [notificationReady, setNotificationReady] = useState(false);
-  const [notificationMessage, setNotificationMessage] = useState<string | null>(null);
-
-  async function loadFeedback() {
-    setLoading(true);
-    try {
-      const response = await nibFetch("/api/feedback");
-      if (response.ok) setFeedback(await response.json());
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function applyFeedbackSync(detail?: FeedbackSyncDetail) {
-    if (detail?.removeId) {
-      setFeedback((current) => current.filter((request) => request.id !== detail.removeId));
-      window.setTimeout(() => void loadFeedback(), 1500);
-      return;
-    }
-    if (detail?.restore) {
-      setFeedback((current) => [detail.restore!, ...current.filter((request) => request.id !== detail.restore!.id)]);
-      window.setTimeout(() => void loadFeedback(), 800);
-      return;
-    }
-    void loadFeedback();
-  }
-
-  async function loadNotificationStatus() {
-    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
-      setNotificationReady(false);
-      return;
-    }
-    const registration = await navigator.serviceWorker.ready;
-    setNotificationReady(Boolean(await registration.pushManager.getSubscription()));
-  }
-
-  useEffect(() => {
-    void loadFeedback();
-    void loadNotificationStatus();
-    const interval = window.setInterval(() => void loadFeedback(), 8000);
-    const onFocus = () => void loadFeedback();
-    const onVisibility = () => {
-      if (!document.hidden) void loadFeedback();
-    };
-    const onSync = (event: Event) => applyFeedbackSync((event as CustomEvent<FeedbackSyncDetail>).detail);
-    const onStorage = (event: StorageEvent) => {
-      if (event.key !== FEEDBACK_SYNC_EVENT) return;
-      try {
-        applyFeedbackSync(event.newValue ? JSON.parse(event.newValue) as FeedbackSyncDetail : undefined);
-      } catch {
-        void loadFeedback();
-      }
-    };
+    const onFocus = () => void loadRequests();
+    const onPopState = () => setSelectedId(requestIdFromPath());
     window.addEventListener("focus", onFocus);
-    window.addEventListener(FEEDBACK_SYNC_EVENT, onSync);
-    window.addEventListener("storage", onStorage);
-    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("popstate", onPopState);
     return () => {
-      window.clearInterval(interval);
+      events.close();
       window.removeEventListener("focus", onFocus);
-      window.removeEventListener(FEEDBACK_SYNC_EVENT, onSync);
-      window.removeEventListener("storage", onStorage);
-      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("popstate", onPopState);
     };
   }, []);
 
-  async function enableNotifications() {
-    try {
-      setNotificationMessage(null);
-      if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
-        setNotificationMessage("Notifications are not available in this browser.");
-        return;
-      }
-      const permission = await Notification.requestPermission();
-      if (permission !== "granted") {
-        setNotificationMessage("Notifications are not enabled.");
-        return;
-      }
-      const [{ publicKey }, registration] = await Promise.all([
-        nibFetch("/api/notifications/vapid-public-key").then((response) => response.json() as Promise<{ publicKey: string }>),
-        navigator.serviceWorker.ready
-      ]);
-      const existing = await registration.pushManager.getSubscription();
-      const subscription =
-        existing ??
-        (await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToArrayBuffer(publicKey)
-        }));
-      await nibFetch("/api/notifications/subscribe", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ subscription: subscription.toJSON() })
-      });
-      const testResponse = await nibFetch("/api/notifications/test", { method: "POST" });
-      const testPayload = await testResponse.json();
-      setNotificationReady(true);
-      setNotificationMessage(testPayload.sent ? "Notifications enabled. Latest request sent." : "Notifications enabled.");
-    } catch (error) {
-      setNotificationMessage(error instanceof Error ? error.message : "Notification setup failed.");
-    }
-  }
-
-  async function testNotification() {
-    const response = await nibFetch("/api/notifications/test", { method: "POST" });
-    const payload = await response.json();
-    setNotificationMessage(payload.sent ? "Test notification sent." : "No subscription is available yet.");
-  }
-
-  const pending = feedback.filter(isActiveFeedbackRequest);
-
-  return (
-    <div className={`feedbackInbox ${compact ? "compact" : ""}`}>
-      <button
-        className="feedbackInboxButton"
-        onClick={() => {
-          setOpen((value) => !value);
-          void loadFeedback();
-        }}
-        title="Feedback requests"
-      >
-        <Bell size={17} />
-        {compact ? null : <span>Feedback</span>}
-        {pending.length ? <strong>{pending.length}</strong> : null}
-      </button>
-      {open ? (
-        <section className="feedbackInboxMenu">
-          <header>
-            <span>Requests</span>
-            <button onClick={() => void loadFeedback()} title="Refresh feedback">
-              <RefreshCw size={14} className={loading ? "spinning" : ""} />
-            </button>
-          </header>
-          <div className="feedbackInboxList">
-            {!notificationReady ? (
-              <button className="notificationSetupButton" onClick={() => void enableNotifications()}>
-                Enable notifications
-              </button>
-            ) : (
-              <button className="notificationSetupButton" onClick={() => void testNotification()}>
-                Send latest request notification
-              </button>
-            )}
-            {notificationMessage ? <p className="feedbackInboxEmpty">{notificationMessage}</p> : null}
-            {pending.map((request) => (
-              <a key={request.id} href={feedbackHref(request)}>
-                <span className={`feedbackDot ${request.status}`} />
-                <div>
-                  <strong>{request.projectName}</strong>
-                  <p>{request.prompt}</p>
-                  <small>{request.status} · {request.appPath} · {formatTime(request.updatedAt)}</small>
-                </div>
-              </a>
-            ))}
-            {!pending.length ? <p className="feedbackInboxEmpty">No feedback requests.</p> : null}
-          </div>
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
-function urlBase64ToArrayBuffer(value: string): ArrayBuffer {
-  const padding = "=".repeat((4 - (value.length % 4)) % 4);
-  const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
-  const raw = window.atob(base64);
-  const bytes = new Uint8Array(raw.length);
-  for (let index = 0; index < raw.length; index += 1) {
-    bytes[index] = raw.charCodeAt(index);
-  }
-  return bytes.buffer as ArrayBuffer;
-}
-
-function feedbackHref(request: FeedbackRequest): string {
-  const params = new URLSearchParams({ path: request.appPath, feedback: request.id });
-  return `/view/${encodeURIComponent(request.projectId)}?${params.toString()}`;
-}
-
-function isActiveFeedbackRequest(request: FeedbackRequest): boolean {
-  return ["open", "viewed", "stale"].includes(request.status);
-}
-
-function isActiveRequest(request: RequestRecord): boolean {
-  return ["open", "viewed", "stale"].includes(request.status);
-}
-
-function requestTargetUrl(request: RequestRecord): string | null {
-  if (request.target.url?.startsWith("http://") || request.target.url?.startsWith("/")) return request.target.url;
-  if (!request.target.projectId) return null;
-  const params = new URLSearchParams({ path: request.target.appPath ?? "/" });
-  return `/view/${encodeURIComponent(request.target.projectId)}?${params.toString()}`;
-}
-
-function latestFeedbackArtifacts(artifacts: FeedbackArtifact[]): FeedbackArtifact[] {
-  const latestByViewport = new Map<string, FeedbackArtifact>();
-  for (const artifact of [...artifacts].sort((a, b) => b.capturedAt.localeCompare(a.capturedAt))) {
-    const key = artifact.viewport ?? artifact.label;
-    if (!latestByViewport.has(key)) latestByViewport.set(key, artifact);
-  }
-  const order = new Map<string, number>([
-    ["phone", 0],
-    ["tablet", 1],
-    ["desktop", 2]
-  ]);
-  return [...latestByViewport.values()].sort((a, b) => (order.get(a.viewport ?? "") ?? 9) - (order.get(b.viewport ?? "") ?? 9));
-}
-
-function broadcastFeedbackSync(detail: FeedbackSyncDetail = {}) {
-  window.dispatchEvent(new CustomEvent<FeedbackSyncDetail>(FEEDBACK_SYNC_EVENT, { detail }));
-  try {
-    window.localStorage.setItem(FEEDBACK_SYNC_EVENT, JSON.stringify({ ...detail, at: new Date().toISOString() }));
-  } catch {
-    // Local refresh already happened; cross-tab sync is best effort.
-  }
-}
-
-function withViewTransition(update: () => void) {
-  const documentWithTransition = document as Document & {
-    startViewTransition?: (callback: () => void) => { finished: Promise<void> };
-  };
-  if (typeof documentWithTransition.startViewTransition === "function") {
-    void documentWithTransition.startViewTransition(update).finished.catch(() => undefined);
-    return;
-  }
-  update();
-}
-
-function getViewerProjectId(): string | null {
-  const match = window.location.pathname.match(/^\/view\/([^/]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-interface ProjectViewerProps {
-  project: ProjectInfo | null | undefined;
-  projects: ProjectInfo[];
-  loading: boolean;
-}
-
-function ProjectViewer({
-  project,
-  projects,
-  loading
-}: ProjectViewerProps) {
-  const [workspace, setWorkspace] = useState<ProjectWorkspace | null>(null);
-  const [, setFeedbackRequests] = useState<FeedbackRequest[]>([]);
-  const [activeFeedback, setActiveFeedback] = useState<FeedbackRequest | null>(null);
-  const [feedbackText, setFeedbackText] = useState("");
-  const [feedbackFocused, setFeedbackFocused] = useState(false);
-  const [feedbackError, setFeedbackError] = useState<string | null>(null);
-  const [selectedArtifact, setSelectedArtifact] = useState<FeedbackArtifact | null>(null);
-  const [editStatus, setEditStatus] = useState<"idle" | "active" | "unavailable">("idle");
-  const [editMessage, setEditMessage] = useState<string | null>(null);
-  const [frameKey, setFrameKey] = useState(0);
-  const [sheetCollapsed, setSheetCollapsed] = useState(false);
-  const [sheetOffset, setSheetOffset] = useState(0);
-  const [sheetDragging, setSheetDragging] = useState(false);
-  const sheetRef = useRef<HTMLElement | null>(null);
-  const sheetDrag = useRef<{ startY: number; startOffset: number; maxOffset: number; moved: boolean } | null>(null);
-  const targetFrameRef = useRef<HTMLIFrameElement | null>(null);
-  const pendingResponseId = useRef<string | null>(null);
-  const requestedFeedbackId = getQueryParam("feedback");
-  const requestedAppPath = getQueryParam("path");
-  const appPath = requestedAppPath ?? activeFeedback?.appPath ?? "/";
-  const nativeMode = isNativeShell();
-  const targetNative = useNativeWebViewSlot({
-    enabled: nativeMode && Boolean(project),
-    label: "target",
-    url: project ? nativeTargetUrl(project, appPath) : null,
-    layer: 8,
-    bridge: false,
-    reloadKey: frameKey
-  });
-
   useEffect(() => {
-    if (!project) return;
-    void loadViewerData(project.id);
-  }, [project?.id, requestedFeedbackId]);
+    if (!selectedId || selected || loading) return;
+    void nibFetch(`/api/requests/${encodeURIComponent(selectedId)}`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(response.status === 404 ? "Review not found" : `Review failed: ${response.status}`);
+        const request = await response.json() as RequestRecord;
+        setRequests((current) => upsertRequest(current, request));
+      })
+      .catch((loadError) => setError(loadError instanceof Error ? loadError.message : "Review unavailable"));
+  }, [loading, selected, selectedId]);
 
-  useEffect(() => {
-    if (!project || requestedFeedbackId) return;
-    const interval = window.setInterval(() => void loadProjectFeedback(project.id), 4000);
-    const onFocus = () => void loadProjectFeedback(project.id);
-    const onVisibility = () => {
-      if (!document.hidden) void loadProjectFeedback(project.id);
-    };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [project?.id, requestedFeedbackId]);
-
-  useEffect(() => {
-    if (!activeFeedback) return;
-    const events = new EventSource(apiUrl(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/events`));
-    events.addEventListener("feedback", (event) => {
-      const next = JSON.parse((event as MessageEvent).data) as FeedbackRequest;
-      if (isActiveFeedbackRequest(next)) {
-        setActiveFeedback(next);
-        setFeedbackRequests((current) => [next, ...current.filter((item) => item.id !== next.id && isActiveFeedbackRequest(item))]);
-      } else {
-        setFeedbackRequests((current) => {
-          const remaining = current.filter((item) => item.id !== next.id && isActiveFeedbackRequest(item));
-          setActiveFeedback(remaining[0] ?? null);
-          return remaining;
-        });
-      }
-      broadcastFeedbackSync();
-    });
-    return () => events.close();
-  }, [activeFeedback?.id]);
-
-  useEffect(() => {
-    window.setTimeout(() => enableEditableTarget(), 80);
-  }, [activeFeedback?.id, frameKey, nativeMode, project?.id, requestedAppPath]);
-
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      if (!targetFrameRef.current?.contentWindow || event.source !== targetFrameRef.current.contentWindow) return;
-      const message = normalizeTargetEditMessage(event.data);
-      if (!message || !activeFeedback) return;
-      void recordTargetEdit(message);
-    }
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [activeFeedback?.id]);
-
-  useEffect(() => {
-    if (!sheetCollapsed) return;
-    const frame = window.requestAnimationFrame(() => {
-      setSheetOffset(getSheetMaxOffset());
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, [sheetCollapsed, activeFeedback?.id]);
-
-  async function loadViewerData(projectId: string) {
-    const [workspaceResponse, feedbackResponse] = await Promise.all([
-      nibFetch(`/api/projects/${encodeURIComponent(projectId)}/workspace`),
-      requestedFeedbackId
-        ? nibFetch(`/api/feedback/${encodeURIComponent(requestedFeedbackId)}?viewed=1`)
-        : nibFetch(`/api/feedback?projectId=${encodeURIComponent(projectId)}`)
-    ]);
-    if (workspaceResponse.ok) {
-      const nextWorkspace = await workspaceResponse.json();
-      setWorkspace(nextWorkspace);
-      const nextCollapsed = requestedFeedbackId ? false : nextWorkspace.viewer.drawer === "collapsed";
-      setSheetCollapsed(nextCollapsed);
-      window.requestAnimationFrame(() => {
-        setSheetOffset(nextCollapsed ? getSheetMaxOffset() : 0);
-      });
-    }
-    if (feedbackResponse.ok) {
-      const payload = await feedbackResponse.json();
-      applyFeedbackPayload(payload);
-      broadcastFeedbackSync();
-    }
-  }
-
-  async function loadProjectFeedback(projectId: string) {
-    const response = await nibFetch(`/api/feedback?projectId=${encodeURIComponent(projectId)}`);
-    if (!response.ok) return;
-    applyFeedbackPayload(await response.json());
-  }
-
-  function applyFeedbackPayload(payload: FeedbackRequest[] | FeedbackRequest) {
-    if (Array.isArray(payload)) {
-      const active = payload.filter(isActiveFeedbackRequest);
-      setFeedbackRequests(active);
-      setActiveFeedback(active[0] ?? null);
+  function openRequest(request: RequestRecord) {
+    if (request.kind !== "visual-review") {
+      window.location.assign(`/r/${encodeURIComponent(request.id)}`);
       return;
     }
-    setActiveFeedback(isActiveFeedbackRequest(payload) ? payload : null);
-    setFeedbackRequests(isActiveFeedbackRequest(payload) ? [payload] : []);
+    window.history.pushState(null, "", `/r/${encodeURIComponent(request.id)}`);
+    setSelectedId(request.id);
   }
 
-  async function saveViewerState(patch: Partial<ViewerState>) {
-    if (!project || !workspace) return;
-    const response = await nibFetch(`/api/projects/${encodeURIComponent(project.id)}/workspace`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ viewer: patch })
-    });
-    if (response.ok) setWorkspace(await response.json());
+  function showInbox(replace = false) {
+    window.history[replace ? "replaceState" : "pushState"](null, "", "/");
+    setSelectedId(null);
   }
 
-  async function respondToFeedback(
-    kind: FeedbackResponseKind,
-    text = feedbackText,
-    choice?: string,
-    data?: Record<string, unknown> | null
-  ) {
-    if (!activeFeedback) return;
-    if (pendingResponseId.current === activeFeedback.id) return;
-    const request = activeFeedback;
-    const previousText = feedbackText;
-    pendingResponseId.current = request.id;
-    setFeedbackError(null);
-    withViewTransition(() => {
-      setFeedbackRequests((current) => {
-        const remaining = current.filter((item) => item.id !== request.id && isActiveFeedbackRequest(item));
-        setActiveFeedback(remaining[0] ?? null);
-        return remaining;
-      });
-      setFeedbackText("");
-      setFeedbackFocused(false);
-    });
-    broadcastFeedbackSync({ removeId: request.id });
-    try {
-      const response = await nibFetch(`/api/feedback/${encodeURIComponent(request.id)}/respond`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kind, text, choice, data })
-      });
-      if (!response.ok) throw new Error(`Feedback failed: ${response.status}`);
-      window.setTimeout(() => broadcastFeedbackSync(), 1500);
-    } catch (error) {
-      withViewTransition(() => {
-        setActiveFeedback(request);
-        setFeedbackRequests((current) => [request, ...current.filter((item) => item.id !== request.id)]);
-        setFeedbackText(previousText);
-        setFeedbackFocused(Boolean(previousText));
-      });
-      setFeedbackError(error instanceof Error ? error.message : "Feedback failed.");
-      broadcastFeedbackSync({ restore: request });
-    } finally {
-      if (pendingResponseId.current === request.id) pendingResponseId.current = null;
+  function handleSubmitted(updated: RequestRecord) {
+    const nextRequests = upsertRequest(requests, updated);
+    setRequests(nextRequests);
+    const next = nextRequests.filter((request) => request.id !== updated.id).filter(isPending).sort(byNewest)[0];
+    if (next) {
+      window.history.replaceState(null, "", `/r/${encodeURIComponent(next.id)}`);
+      setSelectedId(next.id);
+    } else {
+      showInbox(true);
     }
   }
 
-  function chooseFeedback(choice: string) {
-    const note = feedbackText.trim();
-    void respondToFeedback("note", note || choice, choice);
-  }
-
-  async function captureFeedback() {
-    if (!activeFeedback) return;
-    const response = await nibFetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/capture`, { method: "POST" });
-    if (response.ok) {
-      const next = await response.json();
-      setActiveFeedback(next);
-      setFeedbackRequests((current) => [next, ...current.filter((item) => item.id !== next.id)]);
-      broadcastFeedbackSync();
-    }
-  }
-
-  function enableEditableTarget() {
-    if (!activeFeedback) {
-      setEditStatus("idle");
-      setEditMessage(null);
-      return;
-    }
-    if (nativeMode) {
-      setEditStatus("unavailable");
-      setEditMessage("Editable mode unavailable for isolated native WebViews.");
-      return;
-    }
-    const frame = targetFrameRef.current;
-    if (!frame?.contentDocument) {
-      setEditStatus("unavailable");
-      setEditMessage("Editable mode unavailable for this route.");
-      return;
-    }
-    try {
-      installEditableTargetBridge(frame.contentWindow, frame.contentDocument);
-      setEditStatus("active");
-      setEditMessage("Editable mode active");
-    } catch {
-      setEditStatus("unavailable");
-      setEditMessage("Editable mode unavailable for cross-origin content.");
-    }
-  }
-
-  async function recordTargetEdit(edit: TargetEditMessage) {
-    if (!activeFeedback) return;
-    const response = await nibFetch(`/api/feedback/${encodeURIComponent(activeFeedback.id)}/edit`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(edit)
-    });
-    if (response.ok) {
-      const next = await response.json() as FeedbackRequest;
-      setActiveFeedback(next);
-      setFeedbackRequests((current) => [next, ...current.filter((item) => item.id !== next.id && isActiveFeedbackRequest(item))]);
-      broadcastFeedbackSync();
-    }
-  }
-
-  function getSheetMaxOffset(): number {
-    const drawer = sheetRef.current;
-    if (!drawer) return 0;
-    const paddingBottom = Number.parseFloat(window.getComputedStyle(drawer).paddingBottom) || 0;
-    return Math.max(0, drawer.getBoundingClientRect().height - 30 - paddingBottom);
-  }
-
-  function setSheetPosition(offset: number, maxOffset = getSheetMaxOffset()) {
-    setSheetOffset(Math.min(maxOffset, Math.max(0, offset)));
-  }
-
-  function beginSheetDrag(event: PointerEvent<HTMLButtonElement>) {
-    const maxOffset = getSheetMaxOffset();
-    sheetDrag.current = {
-      startY: event.clientY,
-      startOffset: Math.min(sheetOffset, maxOffset),
-      maxOffset,
-      moved: false
-    };
-    setSheetDragging(true);
-    event.currentTarget.setPointerCapture(event.pointerId);
-    event.preventDefault();
-  }
-
-  function moveSheetDrag(event: PointerEvent<HTMLButtonElement>) {
-    const drag = sheetDrag.current;
-    if (!drag) return;
-    const delta = event.clientY - drag.startY;
-    if (Math.abs(delta) > 3) drag.moved = true;
-    setSheetPosition(drag.startOffset + delta, drag.maxOffset);
-  }
-
-  function endSheetDrag(event: PointerEvent<HTMLButtonElement>) {
-    const drag = sheetDrag.current;
-    if (!drag) return;
-    event.currentTarget.releasePointerCapture(event.pointerId);
-    const delta = event.clientY - drag.startY;
-    const nextCollapsed = drag.moved ? delta > 10 : !sheetCollapsed;
-    const nextOffset = nextCollapsed ? drag.maxOffset : 0;
-    sheetDrag.current = null;
-    setSheetDragging(false);
-    setSheetCollapsed(nextCollapsed);
-    setSheetPosition(nextOffset, drag.maxOffset);
-    void saveViewerState({ drawer: nextCollapsed ? "collapsed" : "half", activeTab: "feedback" });
-  }
-
-  function cancelSheetDrag() {
-    sheetDrag.current = null;
-    setSheetDragging(false);
-  }
-
-  if (loading && !project) {
-    return <main className="viewerShell viewerLoading">Loading project...</main>;
-  }
-
-  if (!project) {
+  if (selectedId) {
     return (
-      <main className="viewerShell viewerLoading">
-        <p>Project not found.</p>
-        <a className="openButton" href="/">
-          <Home size={16} />
-          Portal
-        </a>
-      </main>
+      <ReviewScreen
+        request={selected}
+        connection={connection}
+        error={error}
+        onBack={() => showInbox()}
+        onRefresh={() => void loadRequests()}
+        onSubmitted={handleSubmitted}
+      />
     );
   }
 
-  const preferred = project.routes[project.preferredRoute] ?? project.routes.pathProxy;
-  const frameRoute = project.targetKind === "website" || (preferred?.mode === "direct" && preferred.url.startsWith("https:"))
-    ? preferred
-    : project.routes.pathProxy;
-  const externalRoute = preferred ?? project.routes.pathProxy;
-  const frameSrc = appendAppPath(frameRoute?.url ?? project.openPath, appPath);
-  const externalSrc = appendAppPath(externalRoute?.url ?? project.openPath, appPath);
-  const visibleArtifacts = latestFeedbackArtifacts(activeFeedback?.artifacts ?? []);
-
   return (
-    <main className="viewerShell">
-      <header className="viewerTopbar">
-        <a className="viewerIconButton" href="/" title="Portal">
-          <Home size={18} />
-        </a>
-        <select
-          value={project.id}
-          onChange={(event) => {
-            window.location.href = `/view/${event.target.value}`;
-          }}
-        >
-          {projects.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}{item.port ? ` :${item.port}` : ""}
-            </option>
-          ))}
-        </select>
-        <span className={`compatBadge ${project.compatibility.level}`}>
-          <Route size={14} />
-          {project.compatibility.level}
-        </span>
-        <FeedbackInbox compact />
-        <span className={`editModeBadge ${editStatus}`}>
-          <Edit3 size={14} />
-          {editStatus === "active" ? `Edit ${activeFeedback?.edits?.length ?? 0}` : "Edit"}
-        </span>
-        <button className="viewerIconButton" onClick={() => setFrameKey((value) => value + 1)} title="Reload app">
-          <RefreshCw size={17} />
-        </button>
-        <a className="viewerIconButton" href={externalSrc} target="_blank" rel="noreferrer" title="Open external">
-          <ExternalLink size={17} />
-        </a>
+    <InboxScreen
+      pending={pending}
+      completed={completed}
+      connection={connection}
+      loading={loading}
+      error={error}
+      notificationsReady={notificationsReady}
+      onEnableNotifications={() => void enableNotifications().then(setNotificationsReady).catch((setupError) => {
+        setError(setupError instanceof Error ? setupError.message : "Notification setup failed");
+      })}
+      onOpen={openRequest}
+      onRefresh={() => void loadRequests()}
+    />
+  );
+}
+
+function InboxScreen({
+  pending,
+  completed,
+  connection,
+  loading,
+  error,
+  notificationsReady,
+  onEnableNotifications,
+  onOpen,
+  onRefresh
+}: {
+  pending: RequestRecord[];
+  completed: RequestRecord[];
+  connection: ConnectionState;
+  loading: boolean;
+  error: string | null;
+  notificationsReady: boolean;
+  onEnableNotifications: () => void;
+  onOpen: (request: RequestRecord) => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <main className="inboxShell" data-testid="inbox">
+      <header className="inboxHeader">
+        <NibMark />
+        <div className="inboxActions">
+          <ConnectionPill state={connection} />
+          <span className="badgeSeparator" aria-hidden="true">•</span>
+          <span className="pendingCount">{pending.length} Pending</span>
+          <button className="textButton" onClick={onRefresh} aria-label="Refresh inbox">
+            <RefreshCw size={18} className={loading ? "spinning" : ""} />
+            <span>Refresh</span>
+          </button>
+          <button className={`iconButton ${notificationsReady ? "active" : ""}`} onClick={onEnableNotifications} aria-label="Enable notifications">
+            <Bell size={19} />
+          </button>
+        </div>
       </header>
 
-      <section className={`viewerFrameWrap ${nativeMode ? "native" : ""}`}>
-        {nativeMode ? (
-          <div ref={targetNative.ref} className={`nativeWebViewSlot ${targetNative.active ? "active" : ""}`}>
-            {targetNative.error ? <span>{targetNative.error}</span> : null}
+      {connection === "reconnecting" ? (
+        <div className="reconnectBanner"><WifiOff size={17} /> Reconnecting to Dave. Reviews will refresh automatically.</div>
+      ) : null}
+      {error ? <div className="errorBanner">{error}</div> : null}
+
+      <section className="queueSection">
+        <p className="eyebrow">Prioritized visual review queue</p>
+        {pending.length ? (
+          <div className="requestQueue">
+            {pending.map((request, index) => (
+              <button key={request.id} className={`requestRow ${index === 0 ? "priority" : ""}`} onClick={() => onOpen(request)}>
+                <RequestThumbnail request={request} />
+                <span className="requestIdentity">
+                  <strong>{request.title}</strong>
+                  <small>{request.source || "Unknown source"}</small>
+                </span>
+                <time>{relativeTime(request.createdAt)}</time>
+                <span className="statusBadge">{index === 0 ? "Pending Review" : "Awaiting Approval"}</span>
+              </button>
+            ))}
           </div>
         ) : (
-          <iframe
-            ref={targetFrameRef}
-            key={frameKey}
-            title={project.name}
-            allow="microphone; camera; display-capture; autoplay"
-            src={frameSrc}
-            onLoad={() => enableEditableTarget()}
-          />
+          <div className="emptyInbox">
+            <span className="emptyCheck"><Check size={28} /></span>
+            <h1>{loading ? "Loading reviews" : "Inbox clear"}</h1>
+            <p>{loading ? "Connecting to Dave..." : "New visual reviews from any connected machine will appear here."}</p>
+          </div>
         )}
       </section>
 
-        <aside
-          ref={sheetRef}
-          className={`viewerDrawer ${sheetDragging ? "dragging" : ""} ${sheetCollapsed ? "collapsed" : ""}`}
-        >
-        <button
-          className="feedbackSheetTab"
-          onPointerDown={beginSheetDrag}
-          onPointerMove={moveSheetDrag}
-          onPointerUp={endSheetDrag}
-          onPointerCancel={cancelSheetDrag}
-          aria-expanded={sheetOffset < getSheetMaxOffset() - 12}
-        >
-          <span />
-        </button>
-
-        <section className="drawerPanel feedbackPanel">
-            {activeFeedback ? (
-              <>
-                {activeFeedback.isStale ? (
-                  <div className="feedbackWarning">
-                    <ShieldAlert size={16} />
-                    <span>This request may no longer match the view I asked about. Open the latest request from the bell if this looks off.</span>
-                  </div>
-                ) : null}
-                {editMessage ? (
-                  <div className={`editModeNotice ${editStatus}`}>
-                    <Edit3 size={15} />
-                    <span>{editMessage}{editStatus === "active" ? ". Click text in the page above and type to change it." : ""}</span>
-                  </div>
-                ) : null}
-                {feedbackError ? <div className="feedbackError">{feedbackError}</div> : null}
-                {activeFeedback.feedbackSurface ? (
-                  <FeedbackSurfaceFrame
-                    request={activeFeedback}
-                    nativeMode={nativeMode}
-                    onCapture={() => void captureFeedback()}
-                    onSubmit={(payload) => void respondToFeedback(payload.kind, payload.text, payload.choice, payload.data)}
-                  />
-                ) : (
-                  <>
-                    <div className="feedbackHeader">
-                      <div>
-                        <h2 className="feedbackPrompt">{activeFeedback.prompt}</h2>
-                        {activeFeedback.context ? <p>{activeFeedback.context}</p> : null}
-                      </div>
-                      <button className="viewerIconButton" onClick={() => void captureFeedback()} title="Capture screenshots">
-                        <Monitor size={17} />
-                      </button>
-                    </div>
-                    {activeFeedback.choices.length ? (
-                      <div className="choiceGrid">
-                        {activeFeedback.choices.map((choice) => (
-                          <button key={choice} onClick={() => chooseFeedback(choice)}>
-                            {choice}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null}
-                    <div className={`feedbackFreeform ${feedbackFocused || feedbackText.trim() ? "active" : ""}`}>
-                      <textarea
-                        value={feedbackText}
-                        onChange={(event) => setFeedbackText(event.target.value)}
-                        onFocus={() => setFeedbackFocused(true)}
-                        onBlur={() => setFeedbackFocused(false)}
-                        placeholder={activeFeedback.choices.length ? "Add detail" : "Type feedback"}
-                      />
-                      <button onClick={() => void respondToFeedback("note")} disabled={!feedbackText.trim()}>
-                        Send
-                      </button>
-                    </div>
-                  </>
-                )}
-                <div className="artifactStrip">
-                  {visibleArtifacts.map((artifact) => (
-                    <figure key={artifact.id}>
-                      {artifact.url ? (
-                        <button className="artifactThumb" onClick={() => setSelectedArtifact(artifact)} title="Open screenshot">
-                          <img src={assetUrl(artifact.url) ?? artifact.url} alt={artifact.label} />
-                        </button>
-                      ) : (
-                        <div>No image</div>
-                      )}
-                      <figcaption>{artifact.label}</figcaption>
-                    </figure>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="feedbackEmpty">
-                No feedback requests
+      {completed.length ? (
+        <section className="completedSection">
+          <h2>Recent Completed</h2>
+          <div className="completedList">
+            {completed.map((request) => (
+              <div className="completedRow" key={request.id}>
+                <Check size={18} />
+                <span>{request.title}</span>
+                <ResponseBadge request={request} />
               </div>
-            )}
-          </section>
-      </aside>
-      {selectedArtifact?.url ? (
-        <div className="artifactLightbox" role="dialog" aria-modal="true" aria-label={selectedArtifact.label}>
-          <button className="artifactLightboxClose" onClick={() => setSelectedArtifact(null)} title="Close screenshot">
-            Close
-          </button>
-          <img src={assetUrl(selectedArtifact.url) ?? selectedArtifact.url} alt={selectedArtifact.label} />
-          <span>{selectedArtifact.label}</span>
-        </div>
+            ))}
+          </div>
+        </section>
       ) : null}
     </main>
   );
 }
 
-interface NativeWebViewSlotOptions {
-  enabled: boolean;
-  label: string;
-  url: string | null;
-  layer: number;
-  bridge?: boolean;
-  transparent?: boolean;
-  reloadKey?: number;
-}
-
-function useNativeWebViewSlot(options: NativeWebViewSlotOptions) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [active, setActive] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    return () => {
-      void closeNativeWebView(options.label);
-    };
-  }, [options.label]);
-
-  useEffect(() => {
-    if (!options.enabled || !options.url) {
-      setActive(false);
-      setError(null);
-      void closeNativeWebView(options.label);
-      return;
-    }
-
-    let stopped = false;
-    let raf = 0;
-
-    async function syncFrame() {
-      const frame = measureNativeFrame(ref.current);
-      if (!frame || !options.url) return;
-      try {
-        await ensureNativeWebView({
-          label: options.label,
-          url: options.url,
-          frame,
-          layer: options.layer,
-          bridge: options.bridge,
-          transparent: options.transparent
-        });
-        if (!stopped) {
-          setActive(true);
-          setError(null);
-        }
-      } catch (syncError) {
-        if (!stopped) {
-          setActive(false);
-          setError(syncError instanceof Error ? syncError.message : "Native WebView unavailable");
-        }
-      }
-    }
-
-    function scheduleSync() {
-      window.cancelAnimationFrame(raf);
-      raf = window.requestAnimationFrame(() => void syncFrame());
-    }
-
-    scheduleSync();
-    const observer = new ResizeObserver(scheduleSync);
-    if (ref.current) observer.observe(ref.current);
-    window.addEventListener("resize", scheduleSync);
-    window.addEventListener("orientationchange", scheduleSync);
-
-    return () => {
-      stopped = true;
-      window.cancelAnimationFrame(raf);
-      observer.disconnect();
-      window.removeEventListener("resize", scheduleSync);
-      window.removeEventListener("orientationchange", scheduleSync);
-    };
-  }, [options.bridge, options.enabled, options.label, options.layer, options.reloadKey, options.transparent, options.url]);
-
-  return { ref, active, error };
-}
-
-interface TargetEditMessage {
-  type: "nib.target.edit";
-  targetId: string;
-  selector: string;
-  tagName: string;
-  before: string;
-  after: string;
-}
-
-function normalizeTargetEditMessage(value: unknown): TargetEditMessage | null {
-  if (!value || typeof value !== "object") return null;
-  const message = value as Partial<TargetEditMessage>;
-  if (message.type !== "nib.target.edit") return null;
-  if (typeof message.targetId !== "string" || typeof message.after !== "string") return null;
-  return {
-    type: "nib.target.edit",
-    targetId: message.targetId,
-    selector: typeof message.selector === "string" ? message.selector : "",
-    tagName: typeof message.tagName === "string" ? message.tagName : "unknown",
-    before: typeof message.before === "string" ? message.before : "",
-    after: message.after
-  };
-}
-
-function installEditableTargetBridge(targetWindow: Window | null, doc: Document): void {
-  if (!targetWindow || !doc.body) throw new Error("Target frame is not ready");
-  const root = doc.documentElement;
-  if (root.dataset.nibEditableInstalled === "1") return;
-  root.dataset.nibEditableInstalled = "1";
-  const script = doc.createElement("script");
-  script.id = "nib-editable-script";
-  script.textContent = `(${editableTargetScript.toString()})();`;
-  (doc.body ?? doc.documentElement).appendChild(script);
-}
-
-function editableTargetScript() {
-  const editableWindow = window as Window & { __nibEditableInstalled?: boolean };
-  if (editableWindow.__nibEditableInstalled) return;
-  editableWindow.__nibEditableInstalled = true;
-
-  const style = document.createElement("style");
-  style.id = "nib-editable-style";
-  style.textContent = `
-    [data-nib-edit-id] {
-      outline: 1px dashed rgba(79, 140, 255, 0.48);
-      outline-offset: 2px;
-      cursor: text !important;
-    }
-    [data-nib-edit-id]:focus {
-      outline: 2px solid rgba(79, 140, 255, 0.92);
-      background-color: rgba(79, 140, 255, 0.08);
-    }
-  `;
-  document.head?.appendChild(style);
-
-  const timers = new Map<string, number>();
-  const selector = [
-    "h1", "h2", "h3", "h4", "h5", "h6",
-    "p", "li", "blockquote", "figcaption",
-    "button", "label", "summary",
-    "td", "th", "span", "strong", "em", "small", "a"
-  ].join(",");
-
-  Array.from(document.body.querySelectorAll(selector)).forEach((element, index) => {
-    const editable = element as HTMLElement;
-    if (editable.closest("script, style, svg, canvas, input, textarea, select")) return;
-    const text = normalizeEditText(editable.textContent ?? "");
-    if (!text) return;
-    editable.dataset.nibEditId ||= `edit-${index}`;
-    editable.dataset.nibOriginal ??= text;
-    editable.setAttribute("contenteditable", "plaintext-only");
-    editable.setAttribute("spellcheck", "false");
-  });
-
-  function editableFromEvent(event: Event): HTMLElement | null {
-    const target = event.target as { closest?: (selector: string) => Element | null } | null;
-    return (typeof target?.closest === "function" ? target.closest("[data-nib-edit-id]") : null) as HTMLElement | null;
-  }
-
-  function flush(element: HTMLElement): void {
-    const targetId = element.dataset.nibEditId ?? "unknown";
-    const before = element.dataset.nibOriginal ?? "";
-    const after = normalizeEditText(element.textContent ?? "");
-    if (before === after) return;
-    window.parent.postMessage({
-      type: "nib.target.edit",
-      targetId,
-      selector: targetSelector(element),
-      tagName: element.tagName.toLowerCase(),
-      before,
-      after
-    }, "*");
-    element.dataset.nibOriginal = after;
-  }
-
-  function scheduleFlush(element: HTMLElement): void {
-    const targetId = element.dataset.nibEditId ?? "unknown";
-    const existing = timers.get(targetId);
-    if (existing) window.clearTimeout(existing);
-    timers.set(targetId, window.setTimeout(() => flush(element), 350));
-  }
-
-  document.addEventListener("click", (event) => {
-    const element = editableFromEvent(event);
-    if (!element) return;
-    if (element.matches("a, button")) {
-      event.preventDefault();
-      event.stopPropagation();
-      element.focus();
-    }
-  }, true);
-
-  document.addEventListener("input", (event) => {
-    const element = editableFromEvent(event);
-    if (element) scheduleFlush(element);
-  }, true);
-
-  document.addEventListener("blur", (event) => {
-    const element = editableFromEvent(event);
-    if (element) flush(element);
-  }, true);
-
-  new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      const node = mutation.target as {
-        closest?: (selector: string) => Element | null;
-        parentElement?: { closest?: (selector: string) => Element | null } | null;
-      };
-      const element =
-        typeof node.closest === "function"
-          ? node.closest("[data-nib-edit-id]")
-          : node.parentElement && typeof node.parentElement.closest === "function"
-            ? node.parentElement.closest("[data-nib-edit-id]")
-            : null;
-      if (element) scheduleFlush(element as HTMLElement);
-    }
-  }).observe(document.body, { childList: true, characterData: true, subtree: true });
-
-  function normalizeEditText(value: string): string {
-    return value.replace(/\s+/g, " ").trim();
-  }
-
-  function targetSelector(element: HTMLElement): string {
-    const parts: string[] = [];
-    let current: Element | null = element;
-    while (current && current !== current.ownerDocument.body && parts.length < 5) {
-      const parent: Element | null = current.parentElement;
-      if (!parent) break;
-      const tagName = current.tagName;
-      const siblings = Array.from(parent.children) as Element[];
-      const matching = siblings.filter((item) => item.tagName === tagName);
-      const index = matching.indexOf(current) + 1;
-      parts.unshift(`${current.tagName.toLowerCase()}${matching.length > 1 ? `:nth-of-type(${index})` : ""}`);
-      current = parent;
-    }
-    return parts.join(" > ");
-  }
-}
-
-interface FeedbackSurfaceSubmitPayload {
-  kind: FeedbackResponseKind;
-  text: string;
-  choice?: string;
-  data?: Record<string, unknown> | null;
-}
-
-interface FeedbackSurfaceFrameProps {
-  request: FeedbackRequest;
-  nativeMode: boolean;
-  onCapture: () => void;
-  onSubmit: (payload: FeedbackSurfaceSubmitPayload) => void;
-}
-
-function FeedbackSurfaceFrame({ request, nativeMode, onCapture, onSubmit }: FeedbackSurfaceFrameProps) {
-  const frameRef = useRef<HTMLIFrameElement | null>(null);
-  const [height, setHeight] = useState(280);
-  const [ready, setReady] = useState(false);
-  const surface = request.feedbackSurface;
-  const nativeSurface = useNativeWebViewSlot({
-    enabled: nativeMode && Boolean(surface),
-    label: "feedback-surface",
-    url: surface ? nativeFeedbackSurfaceUrl(request.id) : null,
-    layer: 24,
-    bridge: false
-  });
-
-  useEffect(() => {
-    setReady(false);
-    setHeight(280);
-  }, [request.id, surface?.html]);
-
-  useEffect(() => {
-    function onMessage(event: MessageEvent) {
-      if (!frameRef.current?.contentWindow || event.source !== frameRef.current.contentWindow) return;
-      const message = normalizeFeedbackSurfaceMessage(event.data);
-      if (!message) return;
-      if (message.type === "nib.feedback.ready") {
-        setReady(true);
-        if (message.height) setHeight(clampFeedbackSurfaceHeight(message.height));
-        return;
-      }
-      if (message.type === "nib.feedback.resize") {
-        if (message.height) setHeight(clampFeedbackSurfaceHeight(message.height));
-        return;
-      }
-      if (message.type === "nib.feedback.capture") {
-        onCapture();
-        return;
-      }
-      if (message.type === "nib.feedback.submit") {
-        onSubmit({
-          kind: normalizeFeedbackKind(message.kind),
-          text: message.text || message.choice || "Feedback submitted",
-          choice: message.choice || undefined,
-          data: normalizeSurfaceData(message.data)
-        });
-      }
-    }
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [onCapture, onSubmit]);
-
-  if (!surface) return null;
-
-  if (nativeMode) {
+function ReviewScreen({
+  request,
+  connection,
+  error,
+  onBack,
+  onRefresh,
+  onSubmitted
+}: {
+  request: RequestRecord | null;
+  connection: ConnectionState;
+  error: string | null;
+  onBack: () => void;
+  onRefresh: () => void;
+  onSubmitted: (request: RequestRecord) => void;
+}) {
+  if (!request) {
     return (
-      <div className={`feedbackSurface native ${nativeSurface.active ? "ready" : ""}`}>
-        <div ref={nativeSurface.ref} className="nativeWebViewSlot feedback">
-          {nativeSurface.error ? <span>{nativeSurface.error}</span> : null}
+      <main className="reviewShell">
+        <ReviewHeader request={null} connection={connection} onBack={onBack} />
+        <div className="reviewLoading">
+          {error ? <><h1>Review unavailable</h1><p>{error}</p><button className="textButton" onClick={onRefresh}>Try again</button></> : <p>Loading review...</p>}
         </div>
-      </div>
+      </main>
     );
   }
 
+  const expired = request.expiresAt ? new Date(request.expiresAt).getTime() <= Date.now() : false;
+  if (expired && !request.responses.length) {
+    return (
+      <main className="reviewShell">
+        <ReviewHeader request={request} connection={connection} onBack={onBack} />
+        <div className="reviewLoading expiredState">
+          <h1>Review expired</h1>
+          <p>This request is no longer accepting a response. Ask the originating machine to publish it again.</p>
+          <button className="textButton" onClick={onBack}><ChevronLeft size={17} /> Back to inbox</button>
+        </div>
+      </main>
+    );
+  }
+
+  if (request.responses.length) {
+    return (
+      <main className="reviewShell">
+        <ReviewHeader request={request} connection={connection} onBack={onBack} />
+        <div className="reviewLoading">
+          <h1>Review already submitted</h1>
+          <p>The first response has already been sent.</p>
+          <button className="textButton" onClick={onBack}><ChevronLeft size={17} /> Back to inbox</button>
+        </div>
+      </main>
+    );
+  }
+
+  return <ActiveReview key={request.id} request={request} connection={connection} onBack={onBack} onSubmitted={onSubmitted} />;
+}
+
+function ActiveReview({ request, connection, onBack, onSubmitted }: {
+  request: RequestRecord;
+  connection: ConnectionState;
+  onBack: () => void;
+  onSubmitted: (request: RequestRecord) => void;
+}) {
+  const [mobileLayout, setMobileLayout] = useState(() => window.matchMedia("(max-width: 800px)").matches);
+  const desktopPreview = request.attachments.find((attachment) => attachment.metadata.role === "preview")
+    ?? request.attachments.find((attachment) => attachment.contentType.startsWith("image/"));
+  const mobilePreview = request.attachments.find((attachment) => attachment.metadata.role === "preview-mobile");
+  const preview = mobileLayout && mobilePreview ? mobilePreview : desktopPreview;
+  const canvasCrop = thumbnailCrop(preview?.metadata.canvasCrop);
+  const [tool, setTool] = useState<ReviewTool>("select");
+  const [annotations, setAnnotations] = useState<ReviewAnnotation[]>([]);
+  const [redo, setRedo] = useState<ReviewAnnotation[]>([]);
+  const [comment, setComment] = useState("");
+  const [color, setColor] = useState("#2376d2");
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [submitting, setSubmitting] = useState<Decision | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [draw, setDraw] = useState<DrawState | null>(null);
+  const [imageSize, setImageSize] = useState({ width: canvasCrop?.width ?? 1, height: canvasCrop?.height ?? 1 });
+  const canvasRef = useRef<HTMLDivElement>(null);
+  const panStart = useRef<{ pointer: [number, number]; offset: { x: number; y: number } } | null>(null);
+
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 800px)");
+    const update = () => setMobileLayout(query.matches);
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  useEffect(() => {
+    setImageSize({ width: canvasCrop?.width ?? 1, height: canvasCrop?.height ?? 1 });
+  }, [canvasCrop?.height, canvasCrop?.width]);
+
+  function imagePoint(event: ReactPointerEvent): [number, number] {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return [0, 0];
+    return [
+      ((event.clientX - rect.left) / rect.width) * imageSize.width,
+      ((event.clientY - rect.top) / rect.height) * imageSize.height
+    ];
+  }
+
+  function pointerDown(event: ReactPointerEvent) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    if (tool === "pan") {
+      panStart.current = { pointer: [event.clientX, event.clientY], offset };
+      return;
+    }
+    if (tool === "select" || tool === "cursor") return;
+    const point = imagePoint(event);
+    if (tool === "text") {
+      const content = window.prompt("Text annotation");
+      if (content?.trim()) addAnnotation({ id: annotationId(), type: "text", x: point[0], y: point[1], content: content.trim(), color, font_size: 16, align: "left" });
+      return;
+    }
+    setDraw({ start: point, points: [point] });
+  }
+
+  function pointerMove(event: ReactPointerEvent) {
+    if (tool === "pan" && panStart.current) {
+      setOffset({
+        x: panStart.current.offset.x + event.clientX - panStart.current.pointer[0],
+        y: panStart.current.offset.y + event.clientY - panStart.current.pointer[1]
+      });
+      return;
+    }
+    if (!draw) return;
+    const point = imagePoint(event);
+    setDraw((current) => current ? { ...current, points: tool === "path" ? [...current.points, point] : [current.start, point] } : null);
+  }
+
+  function pointerUp(event: ReactPointerEvent) {
+    if (tool === "pan") {
+      panStart.current = null;
+      return;
+    }
+    if (!draw) return;
+    const end = imagePoint(event);
+    if (tool === "arrow") {
+      addAnnotation({ id: annotationId(), type: "arrow", start_x: draw.start[0], start_y: draw.start[1], end_x: end[0], end_y: end[1], color, stroke_width: 3, head: "end" });
+    } else if (tool === "rectangle") {
+      addAnnotation(rectangleAnnotation(draw.start, end, color));
+    } else if (tool === "path" && draw.points.length > 1) {
+      addAnnotation({ id: annotationId(), type: "path", points: draw.points, color, stroke_width: 3 });
+    }
+    setDraw(null);
+  }
+
+  function addAnnotation(annotation: ReviewAnnotation) {
+    setAnnotations((current) => [...current, annotation]);
+    setRedo([]);
+  }
+
+  function undo() {
+    setAnnotations((current) => {
+      const last = current.at(-1);
+      if (last) setRedo((items) => [...items, last]);
+      return current.slice(0, -1);
+    });
+  }
+
+  function redoAnnotation() {
+    setRedo((current) => {
+      const last = current.at(-1);
+      if (last) setAnnotations((items) => [...items, last]);
+      return current.slice(0, -1);
+    });
+  }
+
+  async function submit(decision: Decision) {
+    setSubmitting(decision);
+    setSubmitError(null);
+    try {
+      const response = await nibFetch(`/api/requests/${encodeURIComponent(request.id)}/respond`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision, comment: comment.trim() || undefined, annotations })
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({ error: `Response failed: ${response.status}` })) as { error?: string };
+        throw new Error(payload.error || `Response failed: ${response.status}`);
+      }
+      onSubmitted(await response.json() as RequestRecord);
+    } catch (responseError) {
+      setSubmitError(responseError instanceof Error ? responseError.message : "Response failed");
+    } finally {
+      setSubmitting(null);
+    }
+  }
+
+  const draft = draw ? draftAnnotation(tool, draw, color) : null;
+
   return (
-    <div className={`feedbackSurface ${ready ? "ready" : ""}`}>
-      <iframe
-        ref={frameRef}
-        title={surface.title ?? request.prompt}
-        srcDoc={withNibFeedbackBridge(surface.html)}
-        sandbox="allow-scripts allow-forms"
-        style={{ height }}
-      />
+    <main className="reviewShell activeReview" data-testid="active-review">
+      <ReviewHeader request={request} connection={connection} onBack={onBack} />
+      <div className="reviewLayout">
+        <section className="canvasPanel">
+          <ReviewToolbar
+            tool={tool}
+            setTool={setTool}
+            color={color}
+            setColor={setColor}
+            canUndo={annotations.length > 0}
+            canRedo={redo.length > 0}
+            onUndo={undo}
+            onRedo={redoAnnotation}
+            onZoom={() => setZoom((value) => value >= 2 ? 1 : value + 0.25)}
+            onFullscreen={() => void document.querySelector(".canvasViewport")?.requestFullscreen()}
+          />
+          <div className="canvasViewport">
+            <div
+              ref={canvasRef}
+              className={`imageCanvas tool-${tool}`}
+              style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
+              onPointerDown={pointerDown}
+              onPointerMove={pointerMove}
+              onPointerUp={pointerUp}
+            >
+              {preview && canvasCrop ? (
+                <svg className="canvasSource" viewBox={`${canvasCrop.x} ${canvasCrop.y} ${canvasCrop.width} ${canvasCrop.height}`} preserveAspectRatio="none" aria-label={request.title}>
+                  <image href={assetUrl(preview.url) ?? undefined} width={canvasCrop.sourceWidth} height={canvasCrop.sourceHeight} />
+                </svg>
+              ) : preview ? (
+                <img
+                  src={assetUrl(preview.url) ?? undefined}
+                  alt={request.title}
+                  draggable={false}
+                  onLoad={(event) => setImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+                />
+              ) : <div className="missingPreview">Preview unavailable</div>}
+              <AnnotationOverlay annotations={draft ? [...annotations, draft] : annotations} size={imageSize} />
+            </div>
+          </div>
+        </section>
+        <aside className="decisionPanel">
+          <h2>{request.prompt}</h2>
+          <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add a comment..." />
+          {submitError ? <p className="submitError">{submitError}</p> : null}
+          <button className="decisionButton approve" disabled={Boolean(submitting)} onClick={() => void submit("approve")}>{submitting === "approve" ? "Sending..." : "Approve"}</button>
+          <button className="decisionButton reject" disabled={Boolean(submitting)} onClick={() => void submit("reject")}>{submitting === "reject" ? "Sending..." : "Request changes"}</button>
+          <button className="decisionButton comment" disabled={Boolean(submitting) || !comment.trim()} onClick={() => void submit("comment")}>{submitting === "comment" ? "Sending..." : "Send comment"}</button>
+        </aside>
+      </div>
+    </main>
+  );
+}
+
+function ReviewHeader({ request, connection, onBack }: { request: RequestRecord | null; connection: ConnectionState; onBack: () => void }) {
+  return (
+    <header className="reviewHeader">
+      <button className="backButton" onClick={onBack}><ChevronLeft size={18} /> <span>Back to inbox</span></button>
+      <NibMark />
+      <div className="reviewIdentity">
+        <strong>{request?.title ?? "Visual review"}</strong>
+        <small>{request?.source ?? ""}</small>
+      </div>
+      <div className="reviewConnection"><ConnectionPill state={connection} />{request ? <time>{relativeTime(request.createdAt)}</time> : null}</div>
+    </header>
+  );
+}
+
+function ReviewToolbar({ tool, setTool, color, setColor, canUndo, canRedo, onUndo, onRedo, onZoom, onFullscreen }: {
+  tool: ReviewTool;
+  setTool: (tool: ReviewTool) => void;
+  color: string;
+  setColor: (color: string) => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onZoom: () => void;
+  onFullscreen: () => void;
+}) {
+  const tools: Array<[ReviewTool, ComponentType<{ className?: string }>, string, ComponentType<{ className?: string }> | undefined]> = [
+    ["select", CursorIcon, "Select", MobileCursorIcon],
+    ["pan", Move, "Pan", Hand],
+    ["cursor", FilledCursorIcon, "Pointer", undefined],
+    ["arrow", ArrowUpRight, "Arrow", undefined],
+    ["rectangle", Square, "Rectangle", undefined],
+    ["text", Type, "Text", MobileTextIcon],
+    ["path", FreehandIcon, "Freehand", FreehandIcon]
+  ];
+  return (
+    <div className="reviewToolbar" aria-label="Annotation tools">
+      {tools.map(([id, Icon, label, MobileIcon]) => (
+        <button key={id} className={tool === id ? "active" : ""} onClick={() => setTool(id)} title={label} aria-label={label}>
+          <Icon className={MobileIcon ? "desktopToolIcon" : undefined} />
+          {MobileIcon ? <MobileIcon className="mobileToolIcon" /> : null}
+        </button>
+      ))}
+      <span className="toolbarDivider" />
+      <button onClick={onUndo} aria-disabled={!canUndo} title="Undo" aria-label="Undo"><Undo2 /></button>
+      <button onClick={onRedo} disabled={!canRedo} title="Redo" aria-label="Redo"><Redo2 /></button>
+      <span className="toolbarDivider" />
+      <button onClick={onZoom} title="Zoom" aria-label="Zoom"><ZoomIn /></button>
+      <button onClick={onFullscreen} title="Fullscreen" aria-label="Fullscreen"><Expand /></button>
+      <label className="colorButton" title={`Color: ${color}`}><input type="color" value={color} onChange={(event) => setColor(event.target.value)} /><span /></label>
     </div>
   );
 }
 
-function withNibFeedbackBridge(html: string): string {
-  const bridge = `<script id="nib-feedback-bridge">
-(() => {
-  if (window.nib && window.nib.feedback) return;
-  const send = (message) => window.parent.postMessage(message, "*");
-  window.nib = Object.assign(window.nib || {}, {
-    feedback: {
-      ready: (detail = {}) => send({ type: "nib.feedback.ready", ...detail }),
-      resize: (height) => send({ type: "nib.feedback.resize", height }),
-      capture: () => send({ type: "nib.feedback.capture" }),
-      submit: (payload = {}) => send({ type: "nib.feedback.submit", ...payload })
-    }
+function FreehandIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M8 13c-3-3-1-8 4-12 5-3 8-1 6 4-2 6-8 10-10 6m10-6c-3 7-8 12-10 18m7-10c3-4 6-2 3 5-2 5 1 7 3 2l3-5" />
+    </svg>
+  );
+}
+
+function MobileCursorIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M5 2.5l14.5 13-8 .9L6.5 22z" fill="#f8f6ef" />
+    </svg>
+  );
+}
+
+function MobileTextIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" {...props}>
+      <text x="3" y="22" fill="currentColor" stroke="none" fontFamily="Times New Roman, serif" fontSize="25">T</text>
+    </svg>
+  );
+}
+
+function CursorIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M4.5 2.5v18l5.2-5.1 3.8 6.6 3-1.7-3.8-6.6H20z" fill="#f8f6ef" />
+    </svg>
+  );
+}
+
+function FilledCursorIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" {...props}>
+      <path d="M5 3v17l5-5 3.6 6.3 3-1.7-3.6-6.3h7z" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function AnnotationOverlay({ annotations, size }: { annotations: ReviewAnnotation[]; size: { width: number; height: number } }) {
+  return (
+    <svg className="annotationOverlay" viewBox={`0 0 ${size.width} ${size.height}`} aria-hidden="true">
+      <defs><marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M 0 0 L 8 4 L 0 8 z" fill="context-stroke" /></marker></defs>
+      {annotations.map((annotation) => {
+        if (annotation.type === "arrow") return <line key={annotation.id} x1={annotation.start_x} y1={annotation.start_y} x2={annotation.end_x} y2={annotation.end_y} stroke={annotation.color} strokeWidth={annotation.stroke_width ?? 3} markerEnd="url(#arrowhead)" />;
+        if (annotation.type === "rectangle") return <rect key={annotation.id} x={annotation.x} y={annotation.y} width={annotation.width} height={annotation.height} fill="transparent" stroke={annotation.color} strokeWidth={annotation.stroke_width ?? 3} />;
+        if (annotation.type === "text") return <text key={annotation.id} x={annotation.x} y={annotation.y} fill={annotation.color} fontSize={annotation.font_size ?? 16} fontFamily="system-ui, sans-serif">{annotation.content}</text>;
+        return <polyline key={annotation.id} points={annotation.points?.map((point) => point.join(",")).join(" ")} fill="none" stroke={annotation.color} strokeWidth={annotation.stroke_width ?? 3} strokeLinecap="round" strokeLinejoin="round" />;
+      })}
+    </svg>
+  );
+}
+
+function ConnectionPill({ state }: { state: ConnectionState }) {
+  return <span className={`connectionPill ${state}`}><span />{state === "connected" ? "Connected to Dave" : state === "reconnecting" ? "Reconnecting" : "Connecting"}</span>;
+}
+
+function NibMark() {
+  return <div className="nibMark" aria-label="Nib">nib</div>;
+}
+
+function RequestThumbnail({ request }: { request: RequestRecord }) {
+  const preview = request.attachments.find((attachment) => attachment.metadata.role === "preview")
+    ?? request.attachments.find((attachment) => attachment.contentType.startsWith("image/"));
+  const crop = thumbnailCrop(preview?.metadata.thumbnailCrop);
+  const source = preview ? assetUrl(preview.url) ?? undefined : undefined;
+  return (
+    <span className="requestThumbnail">
+      {source && crop ? (
+        <svg viewBox={`${crop.x} ${crop.y} ${crop.width} ${crop.height}`} preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+          <image href={source} width={crop.sourceWidth} height={crop.sourceHeight} />
+        </svg>
+      ) : source ? <img src={source} alt="" /> : <Move size={24} />}
+    </span>
+  );
+}
+
+function ResponseBadge({ request }: { request: RequestRecord }) {
+  const decision = request.responses[0]?.data?.decision ?? request.responses[0]?.choice ?? "Completed";
+  const rejected = decision === "reject";
+  return <span className={`responseBadge ${rejected ? "rejected" : "approved"}`}>{rejected ? "Changes Requested" : decision === "comment" ? "Commented" : "Approved"}</span>;
+}
+
+function rectangleAnnotation(start: [number, number], end: [number, number], color: string): ReviewAnnotation {
+  return {
+    id: annotationId(),
+    type: "rectangle",
+    x: Math.min(start[0], end[0]),
+    y: Math.min(start[1], end[1]),
+    width: Math.abs(end[0] - start[0]),
+    height: Math.abs(end[1] - start[1]),
+    color,
+    stroke_width: 3
+  };
+}
+
+function draftAnnotation(tool: ReviewTool, draw: DrawState, color: string): ReviewAnnotation | null {
+  const end = draw.points.at(-1) ?? draw.start;
+  if (tool === "arrow") return { id: "draft", type: "arrow", start_x: draw.start[0], start_y: draw.start[1], end_x: end[0], end_y: end[1], color, stroke_width: 3, head: "end" };
+  if (tool === "rectangle") return { ...rectangleAnnotation(draw.start, end, color), id: "draft" };
+  if (tool === "path") return { id: "draft", type: "path", points: draw.points, color, stroke_width: 3 };
+  return null;
+}
+
+function annotationId(): string {
+  return `web-${crypto.randomUUID()}`;
+}
+
+function thumbnailCrop(value: unknown): { x: number; y: number; width: number; height: number; sourceWidth: number; sourceHeight: number } | null {
+  if (!value || typeof value !== "object") return null;
+  const crop = value as Record<string, unknown>;
+  const values = [crop.x, crop.y, crop.width, crop.height, crop.sourceWidth, crop.sourceHeight];
+  if (!values.every((item) => typeof item === "number" && Number.isFinite(item))) return null;
+  return crop as { x: number; y: number; width: number; height: number; sourceWidth: number; sourceHeight: number };
+}
+
+function requestIdFromPath(): string | null {
+  const match = window.location.pathname.match(/^\/r\/([^/]+)\/?$/);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function isPending(request: RequestRecord): boolean {
+  const expired = request.expiresAt ? new Date(request.expiresAt).getTime() <= Date.now() : false;
+  return !expired && ["open", "viewed", "stale"].includes(request.status) && request.responses.length === 0;
+}
+
+function isCompleted(request: RequestRecord): boolean {
+  return request.responses.length > 0 || ["answered", "acted", "resolved"].includes(request.status);
+}
+
+function byNewest(a: RequestRecord, b: RequestRecord): number {
+  return b.updatedAt.localeCompare(a.updatedAt);
+}
+
+function byOldest(a: RequestRecord, b: RequestRecord): number {
+  return a.updatedAt.localeCompare(b.updatedAt);
+}
+
+function upsertRequest(requests: RequestRecord[], request: RequestRecord): RequestRecord[] {
+  const found = requests.some((item) => item.id === request.id);
+  return found ? requests.map((item) => item.id === request.id ? request : item) : [request, ...requests];
+}
+
+function relativeTime(timestamp: string): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(timestamp).getTime()) / 1000));
+  if (seconds < 60) return "now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+async function notificationStatus(): Promise<boolean> {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return false;
+  const registration = await navigator.serviceWorker.ready;
+  return Boolean(await registration.pushManager.getSubscription());
+}
+
+async function enableNotifications(): Promise<boolean> {
+  if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+    throw new Error("Notifications are not available in this browser.");
+  }
+  if (await Notification.requestPermission() !== "granted") throw new Error("Notifications were not enabled.");
+  const [{ publicKey }, registration] = await Promise.all([
+    nibFetch("/api/notifications/vapid-public-key").then((response) => response.json() as Promise<{ publicKey: string }>),
+    navigator.serviceWorker.ready
+  ]);
+  const subscription = await registration.pushManager.getSubscription() ?? await registration.pushManager.subscribe({
+    userVisibleOnly: true,
+    applicationServerKey: urlBase64ToArrayBuffer(publicKey)
   });
-})();
-</script>`;
-  if (/<head\b[^>]*>/i.test(html)) return html.replace(/<head\b([^>]*)>/i, `<head$1>${bridge}`);
-  if (/<html\b[^>]*>/i.test(html)) return html.replace(/<html\b([^>]*)>/i, `<html$1>${bridge}`);
-  return `${bridge}${html}`;
+  const response = await nibFetch("/api/notifications/subscribe", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ subscription: subscription.toJSON() })
+  });
+  if (!response.ok) throw new Error(`Notification setup failed: ${response.status}`);
+  return true;
 }
 
-interface FeedbackSurfaceMessage {
-  type: string;
-  kind?: unknown;
-  text?: string;
-  choice?: string;
-  data?: unknown;
-  height?: number;
-}
-
-function normalizeFeedbackSurfaceMessage(value: unknown): FeedbackSurfaceMessage | null {
-  if (!value || typeof value !== "object" || !("type" in value)) return null;
-  const message = value as FeedbackSurfaceMessage;
-  if (typeof message.type !== "string" || !message.type.startsWith("nib.feedback.")) return null;
-  return message;
-}
-
-function normalizeFeedbackKind(value: unknown): FeedbackResponseKind {
-  const allowed = new Set<FeedbackResponseKind>(["approve", "reject", "unsure", "note", "broken", "another_version"]);
-  return typeof value === "string" && allowed.has(value as FeedbackResponseKind) ? value as FeedbackResponseKind : "note";
-}
-
-function normalizeSurfaceData(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function clampFeedbackSurfaceHeight(value: number): number {
-  if (!Number.isFinite(value)) return 280;
-  return Math.max(180, Math.min(520, Math.ceil(value)));
-}
-
-function getQueryParam(name: string): string | null {
-  return new URLSearchParams(window.location.search).get(name);
-}
-
-function appendAppPath(routeUrl: string, appPath: string): string {
-  const normalized = appPath.trim() || "/";
-  if (normalized === "/") return routeUrl;
-  const [pathAndQuery, hash = ""] = normalized.split("#", 2);
-  const [pathname, search = ""] = pathAndQuery.split("?", 2);
-  const suffix = `${pathname.replace(/^\/+/, "")}${search ? `?${search}` : ""}${hash ? `#${hash}` : ""}`;
-  return routeUrl.endsWith("/") ? `${routeUrl}${suffix}` : `${routeUrl}/${suffix}`;
+function urlBase64ToArrayBuffer(value: string): ArrayBuffer {
+  const padding = "=".repeat((4 - value.length % 4) % 4);
+  const binary = atob((value + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0)).buffer;
 }

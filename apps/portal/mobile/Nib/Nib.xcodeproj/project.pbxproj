@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		37F822AF467694674AC36EA1 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
 		4B438EC7D7A3493230078A0F /* NibNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5F3A60DF0DDD4FF95BABCC49 /* NibWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 52933EB23EA0231EF0204C9E /* NibWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		8BEA52BEE9EDD618F946DE28 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
 		8E9478F05C959AB8BAD64249 /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
 		CA1430F5410E7E744F84DB92 /* NibWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */; };
@@ -25,9 +26,27 @@
 			remoteGlobalIDString = 9982A9051D627A814D37131A;
 			remoteInfo = NibNotificationService;
 		};
+		68ABF81266D6250A8D6B06BA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DE190AA07A7FBA8D7BC434E9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E8F5C2720E0225B25CC638C0;
+			remoteInfo = NibWatch;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		9E58B4435F0DE8C7765D3287 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				5F3A60DF0DDD4FF95BABCC49 /* NibWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		D383732B9572964C7F01868A /* Embed Foundation Extensions */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -109,11 +128,13 @@
 			buildPhases = (
 				CFD6067CD8549F2097C3AE7E /* Sources */,
 				D383732B9572964C7F01868A /* Embed Foundation Extensions */,
+				9E58B4435F0DE8C7765D3287 /* Embed Watch Content */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				3D86699877AD2B690B442A76 /* PBXTargetDependency */,
+				46B66C3A6E663A5D41389BF1 /* PBXTargetDependency */,
 			);
 			name = Nib;
 			packageProductDependencies = (
@@ -217,6 +238,11 @@
 			target = 9982A9051D627A814D37131A /* NibNotificationService */;
 			targetProxy = 6785C00143E26B4442C48ED1 /* PBXContainerItemProxy */;
 		};
+		46B66C3A6E663A5D41389BF1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E8F5C2720E0225B25CC638C0 /* NibWatch */;
+			targetProxy = 68ABF81266D6250A8D6B06BA /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -298,7 +324,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.3.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -412,7 +438,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.3.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

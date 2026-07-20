@@ -4,7 +4,7 @@ import WatchKit
 
 @main
 struct NibWatchApp: App {
-    @WKExtensionDelegateAdaptor(NibWatchDelegate.self) private var delegate
+    @WKApplicationDelegateAdaptor(NibWatchDelegate.self) private var delegate
     @StateObject private var client = NibClient()
     @AppStorage("nib.baseURL") private var baseURLString = NibDefaults.defaultBaseURLString
 
@@ -22,7 +22,7 @@ struct NibWatchApp: App {
     }
 }
 
-final class NibWatchDelegate: NSObject, WKExtensionDelegate, @preconcurrency UNUserNotificationCenterDelegate {
+final class NibWatchDelegate: NSObject, WKApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
     func applicationDidFinishLaunching() {
         NibWatchNotificationActions.register()
         UNUserNotificationCenter.current().delegate = self
@@ -42,7 +42,7 @@ final class NibWatchDelegate: NSObject, WKExtensionDelegate, @preconcurrency UNU
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
-        Task {
+        Task { @MainActor in
             await NibWatchNotificationActions.handle(response: response)
             completionHandler()
         }
@@ -228,7 +228,7 @@ struct WatchRequestListView: View {
                 notice = "Notifications were not allowed."
                 return
             }
-            WKExtension.shared().registerForRemoteNotifications()
+            WKApplication.shared().registerForRemoteNotifications()
         } catch {
             self.error = error.localizedDescription
         }
@@ -877,6 +877,7 @@ struct WatchSettingsView: View {
     }
 }
 
+@MainActor
 enum NibWatchNotificationActions {
     static let open = "NIB_OPEN"
     static let choice0 = "NIB_CHOICE_0"

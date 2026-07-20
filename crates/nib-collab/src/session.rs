@@ -518,7 +518,7 @@ mod tests {
         let image_path = temp_dir.path().join("test.png");
 
         // Create empty image file
-        std::fs::write(&image_path, &[]).unwrap();
+        std::fs::write(&image_path, []).unwrap();
 
         let session = Session::from_annotations(&image_path, vec![], ClientType::Cli).unwrap();
 
@@ -530,7 +530,7 @@ mod tests {
     async fn test_add_annotation() {
         let temp_dir = tempfile::tempdir().unwrap();
         let image_path = temp_dir.path().join("test.png");
-        std::fs::write(&image_path, &[]).unwrap();
+        std::fs::write(&image_path, []).unwrap();
 
         let session = Session::from_annotations(&image_path, vec![], ClientType::Cli).unwrap();
 

@@ -137,10 +137,14 @@ fn create_request(
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("Visual review");
+    let title = nib_path
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("Visual review");
     let prompt = args.message.as_deref().unwrap_or("Review this image");
     let body = json!({
         "kind": "visual-review",
-        "title": file_name,
+        "title": title,
         "prompt": prompt,
         "source": request_source(),
         "metadata": {"contract":"nib.visual-review/v1","fileName":file_name},
@@ -149,6 +153,7 @@ fn create_request(
     send_json(agent.post(&format!("{base_url}/api/requests")), &body)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn upload_attachment(
     agent: &ureq::Agent,
     base_url: &str,

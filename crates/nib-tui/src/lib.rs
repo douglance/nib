@@ -637,6 +637,7 @@ pub fn kitty_transmit(
     kitty_transmit_inner(rgba, image_id, cols, rows, width, height, false)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn kitty_transmit_inner(
     rgba: &[u8],
     image_id: u32,

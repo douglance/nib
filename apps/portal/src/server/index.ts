@@ -469,6 +469,11 @@ const server = http.createServer(async (req, res) => {
         res.end("Request not found");
         return;
       }
+      if (request.kind === "visual-review") {
+        if (process.env.NODE_ENV !== "production") proxyToVite(req, res);
+        else serveFile(res, path.join(process.cwd(), "dist/client/index.html"));
+        return;
+      }
       sendHtml(res, requestPageHtml(request));
       return;
     }

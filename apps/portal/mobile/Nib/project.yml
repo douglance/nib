@@ -7,7 +7,7 @@ options:
 settings:
   base:
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: 0.1.0
+    MARKETING_VERSION: 0.3.0
     SWIFT_VERSION: 6.0
     DEVELOPMENT_TEAM: ""
 targets:
@@ -21,6 +21,8 @@ targets:
     dependencies:
       - target: NibNotificationService
         embed: true
+      - target: NibWatch
+        embed: true
     info:
       path: Nib-Info.plist
       properties:
@@ -30,6 +32,15 @@ targets:
             CFBundleURLSchemes:
               - nib
         UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: Nib attaches photos to requests so agents can see what you see.
         NSPhotoLibraryUsageDescription: Nib attaches selected images to requests.
         NSAppTransportSecurity:

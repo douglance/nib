@@ -1,7 +1,8 @@
 import Foundation
-import UserNotifications
+@preconcurrency import UserNotifications
 
-final class NotificationService: UNNotificationServiceExtension {
+final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
+    private let stateLock = NSLock()
     private var contentHandler: ((UNNotificationContent) -> Void)?
     private var bestAttemptContent: UNMutableNotificationContent?
 
@@ -9,20 +10,22 @@ final class NotificationService: UNNotificationServiceExtension {
         _ request: UNNotificationRequest,
         withContentHandler contentHandler: @escaping (UNNotificationContent) -> Void
     ) {
-        self.contentHandler = contentHandler
         guard let bestAttemptContent = request.content.mutableCopy() as? UNMutableNotificationContent else {
             contentHandler(request.content)
             return
         }
+        stateLock.lock()
+        self.contentHandler = contentHandler
         self.bestAttemptContent = bestAttemptContent
+        stateLock.unlock()
 
         guard let attachment = richAttachment(from: request.content.userInfo) else {
-            contentHandler(bestAttemptContent)
+            complete(bestAttemptContent)
             return
         }
 
         URLSession.shared.downloadTask(with: attachment.url) { [weak self] temporaryURL, response, _ in
-            guard let self, let bestAttemptContent = self.bestAttemptContent else { return }
+            guard let self else { return }
             if let temporaryURL,
                let localURL = try? moveAttachment(
                 from: temporaryURL,
@@ -41,14 +44,19 @@ final class NotificationService: UNNotificationServiceExtension {
     }
 
     override func serviceExtensionTimeWillExpire() {
-        if let contentHandler, let bestAttemptContent {
-            contentHandler(bestAttemptContent)
-        }
+        stateLock.lock()
+        let content = bestAttemptContent
+        stateLock.unlock()
+        if let content { complete(content) }
     }
 
     private func complete(_ content: UNNotificationContent) {
-        contentHandler?(content)
+        stateLock.lock()
+        let handler = contentHandler
         contentHandler = nil
+        bestAttemptContent = nil
+        stateLock.unlock()
+        handler?(content)
     }
 }
 

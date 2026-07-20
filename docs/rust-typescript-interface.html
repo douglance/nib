@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nib Rust and TypeScript Interface</title>
+  <style>
+    html {
+      background: #f6f4ef;
+      color: #242826;
+      font-family: system-ui, sans-serif;
+      font-size: 18px;
+    }
+
+    body {
+      margin: 0;
+      padding: 34px 22px;
+      line-height: 1.6;
+    }
+
+    header, main, footer {
+      max-width: 820px;
+      margin: 0 auto;
+    }
+
+    header {
+      padding-bottom: 22px;
+      border-bottom: 2px solid #242826;
+    }
+
+    main {
+      display: block;
+    }
+
+    section {
+      margin: 34px 0;
+    }
+
+    footer {
+      margin-top: 42px;
+      padding-top: 18px;
+      border-top: 1px solid #c8c2b8;
+      color: #626962;
+      font-size: 15px;
+    }
+
+    aside {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 18px;
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-size: 36px;
+      line-height: 1.12;
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 23px;
+      line-height: 1.25;
+    }
+
+    h3 {
+      margin: 22px 0 8px;
+      font-size: 18px;
+    }
+
+    p {
+      margin: 0 0 14px;
+    }
+
+    ul, ol {
+      margin: 0 0 14px;
+      padding-left: 24px;
+    }
+
+    li {
+      margin: 7px 0;
+    }
+
+    button {
+      border: 1px solid #242826;
+      border-radius: 5px;
+      background: #242826;
+      color: #f6f4ef;
+      padding: 8px 12px;
+      font: inherit;
+      font-size: 15px;
+      cursor: pointer;
+    }
+
+    code {
+      color: #33413b;
+      font-family: ui-monospace, monospace;
+      font-size: 0.92em;
+      font-weight: 650;
+    }
+
+    pre {
+      margin: 14px 0;
+      padding: 14px 16px;
+      overflow-x: auto;
+      background: #e6e2d8;
+      border-left: 4px solid #242826;
+      border-radius: 6px;
+      font-size: 15px;
+      line-height: 1.45;
+    }
+
+    figure {
+      box-sizing: border-box;
+      width: calc(100vw - 44px);
+      margin: 18px 0 18px calc((820px - (100vw - 44px)) / 2);
+      padding: 12px;
+      overflow-x: auto;
+      background: #ffffff;
+      border: 1px solid #c8c2b8;
+      border-radius: 6px;
+    }
+
+    svg {
+      display: block;
+      width: 100%;
+      max-width: none;
+      height: auto;
+    }
+
+    table {
+      width: 100%;
+      margin: 14px 0;
+      border-collapse: collapse;
+      font-size: 16px;
+    }
+
+    th {
+      padding: 8px 6px;
+      text-align: left;
+      border-bottom: 2px solid #242826;
+    }
+
+    td {
+      padding: 8px 6px;
+      vertical-align: top;
+      border-bottom: 1px solid #c8c2b8;
+    }
+
+    strong {
+      font-weight: 750;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>How Nib's TypeScript and Rust code connect</h1>
+    <p><strong>They do not share a process.</strong> Rust and TypeScript communicate through the portal's HTTP API using JSON. Rust owns the canonical <code>.nib</code> file and rendering; TypeScript owns remote requests, persistence, browser UI, notifications, and optional tmux actuation.</p>
+    <aside>
+      <button type="button">Download PDF</button>
+      <button type="button">Download PNG</button>
+    </aside>
+  </header>
+
+  <main>
+    <section>
+      <h2>The boundary</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Side</th>
+            <th>Owns</th>
+            <th>Interface role</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Rust CLI</td>
+            <td><code>.nib</code> storage, PNG rendering, annotation serialization and merge, CLI fallback behavior</td>
+            <td>Creates a remote review, uploads artifacts, polls for a response, and writes returned annotations into the originating file.</td>
+          </tr>
+          <tr>
+            <td>TypeScript server</td>
+            <td>HTTP routes, request state, attachment files, response validation, SSE events, notifications</td>
+            <td>Acts as the workflow coordinator and shared source of remote request state.</td>
+          </tr>
+          <tr>
+            <td>React client</td>
+            <td>Inbox, review canvas, comments, decisions, browser-side annotation drafts</td>
+            <td>Reads request JSON and posts a structured human response.</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>The default transport endpoint is <code>https://dave.tail5d92b4.ts.net</code>. Rust can redirect to another server with <code>NIB_PORTAL_URL</code>.</p>
+    </section>
+
+    <section>
+      <h2>One visual-review lifecycle</h2>
+      <pre><code>sequenceDiagram
+  participant R as Rust nib CLI
+  participant T as TypeScript portal
+  participant W as React or iPhone client
+  participant F as Local .nib file
+  R->>F: Ensure canonical .nib exists
+  R->>T: POST /api/requests with nib.visual-review/v1
+  T-->>R: Draft request and ID
+  R->>F: Render review.png and read canonical bytes
+  R->>T: POST preview and canonical attachments as base64
+  R->>T: POST /api/requests/:id/publish
+  T-->>W: SSE request event and request JSON
+  W->>T: POST /api/requests/:id/respond
+  loop Every 500 ms
+    R->>T: GET /api/requests/:id
+  end
+  T-->>R: Decision, comment, serialized annotations
+  R->>F: Deserialize and merge annotations</code></pre>
+    </section>
+
+    <section>
+      <h2>The concrete JSON contract</h2>
+      <p>Rust creates a request with <code>kind: visual-review</code> and marks it with the version string <code>nib.visual-review/v1</code>. It uploads two required attachments:</p>
+      <ul>
+        <li><code>image/png</code> with role <code>preview</code>, rendered by Rust.</li>
+        <li><code>application/x-nib</code> with role <code>canonical</code>, the original file bytes.</li>
+      </ul>
+      <p>The TypeScript server refuses to publish the draft until both attachments exist. A valid response contains a decision, optional comment, and annotation JSON:</p>
+      <pre><code>{
+  "contract": "nib.visual-review/v1",
+  "decision": "approve",
+  "comment": "Optional note",
+  "annotations": []
+}</code></pre>
+      <p>Rust validates the contract version before accepting the response. It then converts every returned serialized annotation back into a Rust annotation and appends it to the local <code>.nib</code>.</p>
+    </section>
+
+    <section>
+      <h2>Important nuance: the types are mirrored</h2>
+      <p>The interface is versioned, but it is not currently generated from one schema. TypeScript declares <code>RequestRecord</code>, <code>RequestAttachment</code>, and <code>RequestResponse</code>; Rust separately declares the smaller response shapes it consumes with Serde.</p>
+      <p>That makes the version string and integration tests important. A stronger future boundary would generate Rust and TypeScript types from one JSON Schema, but the present implementation relies on explicit validation and tests.</p>
+    </section>
+
+    <section>
+      <h2>What is not the interface</h2>
+      <ul>
+        <li>There is no FFI, WebAssembly bridge, Node native module, or shared-memory channel between the languages.</li>
+        <li>The TypeScript command runner can spawn shell commands, including <code>nib</code> if asked, but that is a generic operator feature rather than the review protocol.</li>
+        <li>TypeScript can write responses into tmux panes for tmux-targeted requests. That path uses the <code>tmux</code> executable, not Rust APIs.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Source map</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>File</th>
+            <th>Responsibility</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>src/cli/web_feedback.rs</code></td>
+            <td>Rust HTTP client, uploads, polling, contract check, local annotation merge.</td>
+          </tr>
+          <tr>
+            <td><code>apps/portal/src/server/index.ts</code></td>
+            <td>HTTP routing for requests, attachments, publish, respond, and events.</td>
+          </tr>
+          <tr>
+            <td><code>apps/portal/src/server/requests.ts</code></td>
+            <td>Workflow rules, persistence mutations, response normalization, publish gates.</td>
+          </tr>
+          <tr>
+            <td><code>apps/portal/src/shared/types.ts</code></td>
+            <td>TypeScript-side request and response model.</td>
+          </tr>
+          <tr>
+            <td><code>apps/portal/src/client/ui/App.tsx</code></td>
+            <td>React inbox, SSE subscription, annotation UI, and response submission.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    <p>Current checkout: the interface is a tailnet HTTP/JSON protocol with Rust as artifact owner and TypeScript as workflow coordinator.</p>
+  </footer>
+
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+    import zenuml from "https://esm.sh/@mermaid-js/mermaid-zenuml@0.2.3?bundle";
+
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: "base",
+      themeVariables: {
+        background: "#f6f4ef",
+        primaryColor: "#e6e2d8",
+        primaryTextColor: "#242826",
+        primaryBorderColor: "#242826",
+        lineColor: "#58605a",
+        secondaryColor: "#ffffff",
+        tertiaryColor: "#f6f4ef",
+        fontFamily: "system-ui, sans-serif"
+      }
+    });
+    await mermaid.registerExternalDiagrams([zenuml]);
+
+    for (const code of document.querySelectorAll("pre code")) {
+      const source = code.textContent.trim();
+      if (!/^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|quadrantChart|requirementDiagram|gitGraph|C4Context|C4Container|C4Component|C4Dynamic|mindmap|timeline|zenuml|sankey|xychart|block|packet|kanban|architecture-beta|radar-beta|eventmodeling|treemap-beta|venn-beta|ishikawa-beta|wardley-beta|treeView-beta)\b/.test(source)) continue;
+      const host = document.createElement("figure");
+      const result = await mermaid.render(`nib-interface-${Math.random().toString(36).slice(2)}`, source);
+      host.innerHTML = result.svg;
+      code.parentElement.replaceWith(host);
+    }
+    document.documentElement.dataset.mermaid = "ready";
+
+    async function captureCanvas() {
+      const { default: html2canvas } = await import("https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.esm.js");
+      const controls = document.querySelector("aside");
+      controls.hidden = true;
+      await document.fonts.ready;
+      try {
+        return await html2canvas(document.body, {
+          backgroundColor: "#f6f4ef",
+          scale: 2,
+          useCORS: true,
+          windowWidth: document.documentElement.scrollWidth,
+          windowHeight: document.documentElement.scrollHeight
+        });
+      } finally {
+        controls.hidden = false;
+      }
+    }
+
+    function download(name, url) {
+      const link = document.createElement("a");
+      link.download = name;
+      link.href = url;
+      link.click();
+    }
+
+    async function downloadPng() {
+      const canvas = await captureCanvas();
+      download("nib-rust-typescript-interface.png", canvas.toDataURL("image/png"));
+    }
+
+    async function downloadPdf() {
+      const { jsPDF } = await import("https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.es.min.js");
+      const canvas = await captureCanvas();
+      const image = canvas.toDataURL("image/jpeg", 0.92);
+      const pdf = new jsPDF({ unit: "pt", format: "a4", orientation: "portrait" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imageHeight = canvas.height * pageWidth / canvas.width;
+      let remaining = imageHeight;
+      let position = 0;
+      pdf.addImage(image, "JPEG", 0, position, pageWidth, imageHeight);
+      remaining -= pageHeight;
+      while (remaining > 0) {
+        position -= pageHeight;
+        pdf.addPage();
+        pdf.addImage(image, "JPEG", 0, position, pageWidth, imageHeight);
+        remaining -= pageHeight;
+      }
+      pdf.save("nib-rust-typescript-interface.pdf");
+    }
+
+    const buttons = document.querySelectorAll("button");
+    buttons[0].addEventListener("click", downloadPdf);
+    buttons[1].addEventListener("click", downloadPng);
+    window.explan = { capture: { png: downloadPng, pdf: downloadPdf } };
+  </script>
+</body>
+</html>
