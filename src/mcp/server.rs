@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
+use base64::{engine::general_purpose, Engine as _};
 use rmcp::{
     handler::server::tool::{ToolCallContext, ToolRouter},
     handler::server::wrapper::Parameters,
@@ -19,6 +20,7 @@ use tokio::sync::Mutex;
 
 use crate::core::{ImageSource, NibImage, Result as NibResult};
 use crate::storage::export;
+use crate::storage::{encode_composited_png, nib_file::NibFile, ExportOptions};
 use crate::{
     annotations_file_path, deserialize_annotation, AnnotationGeometry, AnnotationsFile,
     SerializedAnnotation,
@@ -48,6 +50,37 @@ impl NibMcpServer {
             tool_router: Self::tool_router(),
             watcher: Arc::new(Mutex::new(watcher)),
         }
+    }
+
+    /// Present an image as first-class MCP image content. Codex renders this
+    /// inline in the current thread, so the next user message can be treated as
+    /// feedback without opening a GUI or terminal UI.
+    #[tool(
+        description = "Display a PNG, JPEG, WebP, or .nib image inline in the current Codex thread and ask a feedback question. Returns first-class MCP image content, not a local path or terminal escape sequence. After calling, wait for the user's next thread message as the feedback response."
+    )]
+    async fn present_image(
+        &self,
+        Parameters(request): Parameters<PresentImageRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let image_path = PathBuf::from(&request.image_path);
+        if !image_path.exists() {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "Error: File not found: {}",
+                request.image_path
+            ))]));
+        }
+
+        let (data, mime_type) =
+            inline_image_content(&image_path).map_err(|e| McpError::internal_error(e, None))?;
+        let prompt = format!(
+            "{}\n\nReply in this Codex thread with approval, rejection, or specific corrections.\nSource: {}",
+            request.question,
+            image_path.display()
+        );
+        Ok(CallToolResult::success(vec![
+            Content::image(data, mime_type),
+            Content::text(prompt),
+        ]))
     }
 
     pub fn with_image(image_path: PathBuf) -> Self {
@@ -637,6 +670,48 @@ impl NibMcpServer {
     }
 }
 
+fn inline_image_content(image_path: &std::path::Path) -> Result<(String, String), String> {
+    let is_nib = image_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("nib"));
+
+    let (bytes, mime_type) = if is_nib {
+        let nib = NibFile::open(image_path).map_err(|e| e.to_string())?;
+        let (image_data, info) = nib.get_image().map_err(|e| e.to_string())?;
+        let image = NibImage {
+            image_data,
+            width: info.width,
+            height: info.height,
+            source: ImageSource::File(image_path.to_path_buf()),
+            annotations: nib.list_annotations().map_err(|e| e.to_string())?,
+            assets: nib.get_all_assets().map_err(|e| e.to_string())?,
+            title: None,
+            description: None,
+            tags: Vec::new(),
+            file_path: Some(image_path.to_path_buf()),
+            created_at: SystemTime::now(),
+            modified_at: SystemTime::now(),
+        };
+        (
+            encode_composited_png(&image, &ExportOptions::default()).map_err(|e| e.to_string())?,
+            "image/png".to_string(),
+        )
+    } else {
+        let bytes = std::fs::read(image_path).map_err(|e| e.to_string())?;
+        let format = image::guess_format(&bytes).map_err(|e| e.to_string())?;
+        let mime_type = match format {
+            image::ImageFormat::Png => "image/png",
+            image::ImageFormat::Jpeg => "image/jpeg",
+            image::ImageFormat::WebP => "image/webp",
+            _ => return Err("Unsupported image format; use PNG, JPEG, WebP, or .nib".into()),
+        };
+        (bytes, mime_type.to_string())
+    };
+
+    Ok((general_purpose::STANDARD.encode(bytes), mime_type))
+}
+
 impl Default for NibMcpServer {
     fn default() -> Self {
         Self::new()
@@ -658,8 +733,9 @@ impl ServerHandler for NibMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Nib MCP Server - Visual annotation tool for human↔AI communication.\n\n\
+                "Nib MCP Server - Visual communication for Codex. For human feedback, call present_image so the image is returned as first-class inline MCP content, then treat the user's next message in the same thread as the response. Do not substitute terminal graphics or local file links.\n\n\
                 Tools:\n\
+                - present_image: Display an image inline in Codex and ask for thread-native feedback\n\
                 - add_annotation: Add arrow, rectangle, text, number, ellipse, line, highlight, or blur\n\
                 - read_annotations: List all annotations on an image\n\
                 - remove_annotation: Remove an annotation by ID (e.g., 'a1')\n\
@@ -669,10 +745,9 @@ impl ServerHandler for NibMcpServer {
                 - generate_image: Generate an image via the configured generator (default: imago)\n\
                 - judge_pair: Compare expected vs actual images via the configured judge tool (default: imago compare)\n\n\
                 Collaboration Workflow:\n\
-                1. Use add_annotation to mark up images, then render\n\
-                2. Call wait_for_events to block until human responds\n\
-                3. When events arrive, read the annotations or process events\n\
-                4. Use since_seq from response to avoid duplicate events".to_string()
+                1. For thread-native review, call present_image and wait for the next user message\n\
+                2. For canvas annotation workflows, use add_annotation/render and wait_for_events\n\
+                3. Use since_seq from event responses to avoid duplicates".to_string()
             ),
         }
     }
@@ -697,6 +772,33 @@ impl ServerHandler for NibMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let tool_context = ToolCallContext::new(self, request, context);
         self.tool_router.call(tool_context).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_png_is_returned_byte_identical() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sample.png");
+        let image = image::RgbaImage::from_pixel(2, 1, image::Rgba([1, 2, 3, 255]));
+        image.save(&path).unwrap();
+        let expected = std::fs::read(&path).unwrap();
+
+        let (data, mime_type) = inline_image_content(&path).unwrap();
+        assert_eq!(mime_type, "image/png");
+        assert_eq!(general_purpose::STANDARD.decode(data).unwrap(), expected);
+    }
+
+    #[test]
+    fn present_image_is_registered() {
+        assert!(NibMcpServer::new()
+            .tool_router
+            .list_all()
+            .iter()
+            .any(|tool| tool.name == "present_image"));
     }
 }
 

@@ -1,0 +1,508 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		37F822AF467694674AC36EA1 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
+		4B438EC7D7A3493230078A0F /* NibNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		5F3A60DF0DDD4FF95BABCC49 /* NibWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 52933EB23EA0231EF0204C9E /* NibWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		8BEA52BEE9EDD618F946DE28 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
+		8E9478F05C959AB8BAD64249 /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
+		CA1430F5410E7E744F84DB92 /* NibWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */; };
+		E253523F19968EEF08FEA4C4 /* NibApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71EE9945059B827CA14650BA /* NibApp.swift */; };
+		F240C4B0F79FC092B68766D8 /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
+		FD0C0CA9CB4F264679BABDC9 /* NibNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		6785C00143E26B4442C48ED1 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DE190AA07A7FBA8D7BC434E9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9982A9051D627A814D37131A;
+			remoteInfo = NibNotificationService;
+		};
+		68ABF81266D6250A8D6B06BA /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = DE190AA07A7FBA8D7BC434E9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = E8F5C2720E0225B25CC638C0;
+			remoteInfo = NibWatch;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		9E58B4435F0DE8C7765D3287 /* Embed Watch Content */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/Watch";
+			dstSubfolderSpec = 16;
+			files = (
+				5F3A60DF0DDD4FF95BABCC49 /* NibWatch.app in Embed Watch Content */,
+			);
+			name = "Embed Watch Content";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D383732B9572964C7F01868A /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				4B438EC7D7A3493230078A0F /* NibNotificationService.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		07765833BEFC7FA59A4738B2 /* NibClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibClient.swift; sourceTree = "<group>"; };
+		1461BAB1131EA851E89E5D76 /* NibModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibModels.swift; sourceTree = "<group>"; };
+		2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibNotificationService.swift; sourceTree = "<group>"; };
+		336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = NibNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		52933EB23EA0231EF0204C9E /* NibWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NibWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6B7405E10F9BFBDBF72AC385 /* Nib.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Nib.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		71EE9945059B827CA14650BA /* NibApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibApp.swift; sourceTree = "<group>"; };
+		A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibWatchApp.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		27B2721DA17FDD6803048B2B /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				71EE9945059B827CA14650BA /* NibApp.swift */,
+				07765833BEFC7FA59A4738B2 /* NibClient.swift */,
+				1461BAB1131EA851E89E5D76 /* NibModels.swift */,
+				2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */,
+				A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		3C409D27FA4E25C19389555F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				6B7405E10F9BFBDBF72AC385 /* Nib.app */,
+				336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */,
+				52933EB23EA0231EF0204C9E /* NibWatch.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		58251BB91F1BCC484FBC9342 = {
+			isa = PBXGroup;
+			children = (
+				27B2721DA17FDD6803048B2B /* Sources */,
+				3C409D27FA4E25C19389555F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		9982A9051D627A814D37131A /* NibNotificationService */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 88218B242E9D49980E925E08 /* Build configuration list for PBXNativeTarget "NibNotificationService" */;
+			buildPhases = (
+				9F10BB3E63C7A2AF7206C082 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NibNotificationService;
+			packageProductDependencies = (
+			);
+			productName = NibNotificationService;
+			productReference = 336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		C15769AED6F15C320C8DC4B3 /* Nib */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1359862000C9CB3750885AD8 /* Build configuration list for PBXNativeTarget "Nib" */;
+			buildPhases = (
+				CFD6067CD8549F2097C3AE7E /* Sources */,
+				D383732B9572964C7F01868A /* Embed Foundation Extensions */,
+				9E58B4435F0DE8C7765D3287 /* Embed Watch Content */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				3D86699877AD2B690B442A76 /* PBXTargetDependency */,
+				46B66C3A6E663A5D41389BF1 /* PBXTargetDependency */,
+			);
+			name = Nib;
+			packageProductDependencies = (
+			);
+			productName = Nib;
+			productReference = 6B7405E10F9BFBDBF72AC385 /* Nib.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E8F5C2720E0225B25CC638C0 /* NibWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EF2E5AF735A0ED33BBC9C7DF /* Build configuration list for PBXNativeTarget "NibWatch" */;
+			buildPhases = (
+				44EF127FE4FB47F34890A255 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = NibWatch;
+			packageProductDependencies = (
+			);
+			productName = NibWatch;
+			productReference = 52933EB23EA0231EF0204C9E /* NibWatch.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		DE190AA07A7FBA8D7BC434E9 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					9982A9051D627A814D37131A = {
+						DevelopmentTeam = "";
+					};
+					C15769AED6F15C320C8DC4B3 = {
+						DevelopmentTeam = "";
+					};
+					E8F5C2720E0225B25CC638C0 = {
+						DevelopmentTeam = "";
+					};
+				};
+			};
+			buildConfigurationList = 0CED075021F6DBA547911651 /* Build configuration list for PBXProject "Nib" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 58251BB91F1BCC484FBC9342;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 3C409D27FA4E25C19389555F /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C15769AED6F15C320C8DC4B3 /* Nib */,
+				9982A9051D627A814D37131A /* NibNotificationService */,
+				E8F5C2720E0225B25CC638C0 /* NibWatch */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		44EF127FE4FB47F34890A255 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8E9478F05C959AB8BAD64249 /* NibClient.swift in Sources */,
+				37F822AF467694674AC36EA1 /* NibModels.swift in Sources */,
+				CA1430F5410E7E744F84DB92 /* NibWatchApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9F10BB3E63C7A2AF7206C082 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FD0C0CA9CB4F264679BABDC9 /* NibNotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CFD6067CD8549F2097C3AE7E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E253523F19968EEF08FEA4C4 /* NibApp.swift in Sources */,
+				F240C4B0F79FC092B68766D8 /* NibClient.swift in Sources */,
+				8BEA52BEE9EDD618F946DE28 /* NibModels.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		3D86699877AD2B690B442A76 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9982A9051D627A814D37131A /* NibNotificationService */;
+			targetProxy = 6785C00143E26B4442C48ED1 /* PBXContainerItemProxy */;
+		};
+		46B66C3A6E663A5D41389BF1 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = E8F5C2720E0225B25CC638C0 /* NibWatch */;
+			targetProxy = 68ABF81266D6250A8D6B06BA /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		4F3633DFC3A98AB4A665EB53 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = NibWatch.entitlements;
+				INFOPLIST_FILE = "NibWatch-Info.plist";
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib.watchkitapp;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+			};
+			name = Debug;
+		};
+		51354063BCD8539DDCCC302B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Nib.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "Nib-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		6B1A84871DD3A3777E5BFFC8 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = "";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 0.3.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 6.0;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Release;
+		};
+		9A32E55E9ECBCBC750C42252 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = "NibNotificationService-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib.NotificationService;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		B6E0116376357E15C55867A6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Nib.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = "Nib-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		BDD3BA802813B51F30E01819 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = "NibNotificationService-Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib.NotificationService;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		DE43AA37DAD54A200810DB03 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				MARKETING_VERSION = 0.3.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 6.0;
+				WATCHOS_DEPLOYMENT_TARGET = 11.0;
+			};
+			name = Debug;
+		};
+		E20754C5F394051509995A18 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = NibWatch.entitlements;
+				INFOPLIST_FILE = "NibWatch-Info.plist";
+				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib.watchkitapp;
+				SDKROOT = watchos;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = 4;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0CED075021F6DBA547911651 /* Build configuration list for PBXProject "Nib" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DE43AA37DAD54A200810DB03 /* Debug */,
+				6B1A84871DD3A3777E5BFFC8 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		1359862000C9CB3750885AD8 /* Build configuration list for PBXNativeTarget "Nib" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B6E0116376357E15C55867A6 /* Debug */,
+				51354063BCD8539DDCCC302B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		88218B242E9D49980E925E08 /* Build configuration list for PBXNativeTarget "NibNotificationService" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9A32E55E9ECBCBC750C42252 /* Debug */,
+				BDD3BA802813B51F30E01819 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EF2E5AF735A0ED33BBC9C7DF /* Build configuration list for PBXNativeTarget "NibWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4F3633DFC3A98AB4A665EB53 /* Debug */,
+				E20754C5F394051509995A18 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = DE190AA07A7FBA8D7BC434E9 /* Project object */;
+}

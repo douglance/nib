@@ -8,6 +8,7 @@ members = [
     "crates/nib-collab",
     "crates/nib-grid",
     "crates/nib-gui",
+    "crates/nib-tui",
 ]
 
 [workspace.package]
@@ -27,6 +28,7 @@ nib-capture = { path = "crates/nib-capture" }
 nib-collab = { path = "crates/nib-collab" }
 nib-grid = { path = "crates/nib-grid" }
 nib-gui = { path = "crates/nib-gui" }
+nib-tui = { path = "crates/nib-tui" }
 
 # Shared external dependencies
 thiserror = "2.0"
@@ -42,6 +44,8 @@ imageproc = "0.25"
 ab_glyph = "0.2"
 tokio = { version = "1.42", features = ["rt-multi-thread", "fs", "sync", "macros"] }
 tracing = "0.1"
+ratatui = "0.29"
+crossterm = "0.28"
 
 # Root crate dependencies
 gpui = "0.2"
@@ -71,6 +75,7 @@ rmcp = { version = "0.12", features = ["server", "transport-io", "macros"] }
 schemars = "1.0"
 libc = "0.2"
 xcap = "0.8"
+ureq = { version = "2.12", features = ["json"] }
 
 # Dev dependencies
 tempfile = "3.14"
@@ -80,7 +85,7 @@ insta = { version = "1.41", features = ["yaml"] }
 
 [package]
 name = "nib"
-version = "0.2.3"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 description = "Fast, native screenshot annotation tool with semantic visual communication"
@@ -115,6 +120,7 @@ nib-capture.workspace = true
 nib-collab.workspace = true
 nib-grid.workspace = true
 nib-gui = { workspace = true, optional = true }
+nib-tui.workspace = true
 
 # GUI Framework
 gpui.workspace = true
@@ -145,6 +151,7 @@ anyhow.workspace = true
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
+base64.workspace = true
 
 # Cryptographic hashing
 sha2.workspace = true
@@ -195,6 +202,7 @@ schemars = { workspace = true, optional = true }
 
 # Window capture
 xcap.workspace = true
+ureq.workspace = true
 
 # Platform-specific utilities
 [target.'cfg(unix)'.dependencies]

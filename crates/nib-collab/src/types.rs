@@ -131,6 +131,7 @@ impl Hash for LogicalTimestamp {
 pub enum ClientType {
     Cli,
     Gui,
+    Tui,
 }
 
 impl std::fmt::Display for ClientType {
@@ -138,6 +139,7 @@ impl std::fmt::Display for ClientType {
         match self {
             ClientType::Cli => write!(f, "CLI"),
             ClientType::Gui => write!(f, "GUI"),
+            ClientType::Tui => write!(f, "TUI"),
         }
     }
 }

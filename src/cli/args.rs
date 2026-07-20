@@ -34,9 +34,12 @@ pub enum Command {
     /// Capture a screen region
     Capture(CaptureArgs),
 
-    /// Ask human for visual feedback (spawns GUI, awaits response)
+    /// Ask a human for visual feedback and await structured JSON
     #[command(name = "feedback", alias = "ask-human")]
     Feedback(FeedbackArgs),
+
+    /// Open an existing feedback session in the terminal reviewer
+    Review(ReviewArgs),
 
     /// Wait for annotation submit event from GUI
     AwaitSubmit(AwaitSubmitArgs),
@@ -189,7 +192,7 @@ pub struct FeedbackArgs {
     /// Image or .nib file to get feedback on
     pub file: PathBuf,
 
-    /// Message to display in GUI (question for human)
+    /// Question to display in the selected review surface
     #[arg(short = 'm', long)]
     pub message: Option<String>,
 
@@ -200,6 +203,32 @@ pub struct FeedbackArgs {
     /// Timeout in seconds (0 = no timeout, default: 60)
     #[arg(short = 't', long, default_value = "60")]
     pub timeout: u64,
+
+    /// Human review surface
+    #[arg(long, value_enum, default_value = "auto")]
+    pub ui: FeedbackUi,
+
+    /// Open the review and return its session without waiting
+    #[arg(long)]
+    pub detach: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum FeedbackUi {
+    Gui,
+    Terminal,
+    Web,
+    Auto,
+}
+
+#[derive(Parser, Debug)]
+pub struct ReviewArgs {
+    /// .nib file backing the deterministic collaboration session
+    pub session: PathBuf,
+
+    /// Review request shown above the decision controls
+    #[arg(short = 'm', long)]
+    pub message: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -222,6 +251,10 @@ pub struct AwaitSubmitArgs {
     /// Poll interval in milliseconds
     #[arg(long, default_value = "100")]
     pub interval: u64,
+
+    /// Wait for a terminal/GUI feedback decision instead of annotation changes
+    #[arg(long)]
+    pub feedback: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -391,6 +424,10 @@ pub struct GenerateArgs {
     /// Message to show in the feedback GUI (question for the human, used with --feedback)
     #[arg(short = 'm', long)]
     pub message: Option<String>,
+
+    /// Human review surface used with --feedback
+    #[arg(long, value_enum, default_value = "auto")]
+    pub feedback_ui: FeedbackUi,
 }
 
 #[derive(Parser, Debug)]
@@ -609,4 +646,18 @@ pub struct McpServerArgs {
 pub enum OutputFormat {
     Text,
     Json,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feedback_defaults_to_web_first_auto_mode() {
+        let cli = Cli::try_parse_from(["nib", "feedback", "review.png"]).unwrap();
+        let Command::Feedback(args) = cli.command else {
+            panic!("expected feedback command");
+        };
+        assert_eq!(args.ui, FeedbackUi::Auto);
+    }
 }

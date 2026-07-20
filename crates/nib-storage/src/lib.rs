@@ -17,7 +17,10 @@ pub use convert::{
     annotation_to_sidecar, load_sidecar_annotations, save_sidecar_annotations,
     sidecar_path_for_image, sidecar_to_annotation,
 };
-pub use export::{export_image, export_to_clipboard, ExportFormat, ExportOptions};
+pub use export::{
+    compose_image, encode_composited_png, export_image, export_to_clipboard, ExportFormat,
+    ExportOptions,
+};
 pub use index::{ImageEntry, Index, SearchQuery};
 pub use nib_file::{ImageInfo, NibFile, OcrCacheEntry};
 pub use qml_file::{load_qml_file, load_qml_image, save_qml_file, save_qml_image};

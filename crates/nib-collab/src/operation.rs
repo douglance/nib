@@ -865,7 +865,7 @@ mod tests {
         })
         .with_owner("human");
 
-        let annotations = vec![claude_arrow.clone(), human_text.clone(), human_box.clone()];
+        let annotations = [claude_arrow.clone(), human_text.clone(), human_box.clone()];
         let sent_annotation_ids: HashSet<u64> = HashSet::new();
 
         // Filter: only human annotations that haven't been sent
@@ -908,7 +908,7 @@ mod tests {
         })
         .with_owner("human");
 
-        let annotations = vec![human_arrow.clone(), human_text.clone()];
+        let annotations = [human_arrow.clone(), human_text.clone()];
 
         // First send: both should be included
         let mut sent_annotation_ids: HashSet<u64> = HashSet::new();

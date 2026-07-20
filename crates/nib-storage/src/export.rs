@@ -92,17 +92,44 @@ pub fn export_image(
 ) -> StorageResult<()> {
     let path = path.as_ref();
 
-    // Load base image
+    let img = compose_image(image, options)?;
+
+    // Save in specified format
+    match options.format {
+        ExportFormat::Png => img
+            .save_with_format(path, image::ImageFormat::Png)
+            .map_err(|e| StorageError::InvalidFormat(e.to_string()))?,
+        ExportFormat::Jpeg { quality } => {
+            let rgb = DynamicImage::ImageRgba8(img).into_rgb8();
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                std::fs::File::create(path)?,
+                quality,
+            );
+            encoder
+                .encode_image(&rgb)
+                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+        }
+        ExportFormat::WebP { quality: _ } => {
+            img.save_with_format(path, image::ImageFormat::WebP)
+                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Compose an image in memory using the exact same path as file export.
+/// Terminal frontends use this to transmit a lossless PNG without a temporary
+/// rendered file or a second annotation renderer.
+pub fn compose_image(image: &NibImage, options: &ExportOptions) -> StorageResult<RgbaImage> {
     let mut img = image::load_from_memory(&image.image_data)
         .map_err(|e| StorageError::InvalidFormat(e.to_string()))?
         .to_rgba8();
 
-    // Render annotations if requested
     if options.bake_annotations {
         render_annotations(&mut img, &image.annotations, &image.assets);
     }
 
-    // Apply crop if specified
     let img = if let Some(ref crop) = options.crop {
         let cropped = image::imageops::crop_imm(
             &img,
@@ -130,29 +157,22 @@ pub fn export_image(
         img
     };
 
-    // Save in specified format
-    match options.format {
-        ExportFormat::Png => img
-            .save_with_format(path, image::ImageFormat::Png)
-            .map_err(|e| StorageError::InvalidFormat(e.to_string()))?,
-        ExportFormat::Jpeg { quality } => {
-            let rgb = DynamicImage::ImageRgba8(img).into_rgb8();
-            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
-                std::fs::File::create(path)?,
-                quality,
-            );
-            encoder
-                .encode_image(&rgb)
-                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
-        }
-        ExportFormat::WebP { quality: _ } => {
-            // WebP support through image crate
-            img.save_with_format(path, image::ImageFormat::WebP)
-                .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
-        }
-    }
+    Ok(img)
+}
 
-    Ok(())
+/// Encode the composited image as a lossless PNG for terminal graphics
+/// protocols. No resizing or lossy conversion occurs unless requested through
+/// `ExportOptions`.
+pub fn encode_composited_png(image: &NibImage, options: &ExportOptions) -> StorageResult<Vec<u8>> {
+    let img = compose_image(image, options)?;
+    let mut bytes = Vec::new();
+    DynamicImage::ImageRgba8(img)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .map_err(|e| StorageError::InvalidFormat(e.to_string()))?;
+    Ok(bytes)
 }
 
 /// Render all annotations onto an image

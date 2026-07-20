@@ -1,0 +1,101 @@
+name: Nib
+options:
+  bundleIdPrefix: com.douglance
+  deploymentTarget:
+    iOS: "18.0"
+    watchOS: "11.0"
+settings:
+  base:
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.3.0
+    SWIFT_VERSION: 6.0
+    DEVELOPMENT_TEAM: ""
+targets:
+  Nib:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/NibModels.swift
+      - path: Sources/NibClient.swift
+      - path: Sources/NibApp.swift
+    dependencies:
+      - target: NibNotificationService
+        embed: true
+      - target: NibWatch
+        embed: true
+    info:
+      path: Nib-Info.plist
+      properties:
+        CFBundleDisplayName: Nib
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleURLTypes:
+          - CFBundleURLName: com.douglance.nib
+            CFBundleURLSchemes:
+              - nib
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSCameraUsageDescription: Nib attaches photos to requests so agents can see what you see.
+        NSPhotoLibraryUsageDescription: Nib attaches selected images to requests.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib
+    entitlements:
+      path: Nib.entitlements
+      properties:
+        aps-environment: development
+  NibNotificationService:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/NibNotificationService.swift
+    info:
+      path: NibNotificationService-Info.plist
+      properties:
+        CFBundleDisplayName: Nib rich notifications
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.NotificationService
+        SKIP_INSTALL: YES
+  NibWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - path: Sources/NibModels.swift
+      - path: Sources/NibClient.swift
+      - path: Sources/NibWatchApp.swift
+    info:
+      path: NibWatch-Info.plist
+      properties:
+        CFBundleDisplayName: Nib
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: com.douglance.nib
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.watchkitapp
+    entitlements:
+      path: NibWatch.entitlements
+      properties:
+        aps-environment: development

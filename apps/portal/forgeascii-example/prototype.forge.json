@@ -1,0 +1,200 @@
+{
+  "schema": "forgeascii.spec",
+  "version": 1,
+  "title": "Checkout Interaction For Failed Payment",
+  "prompt": "checkout interaction for failed payment recovery with support modal",
+  "revision": 1,
+  "density": "medium",
+  "style": "ascii",
+  "screens": [
+    {
+      "id": "main",
+      "title": "Checkout Interaction For Failed Payment",
+      "width": 100,
+      "height": 34,
+      "elements": [
+        {
+          "id": "obj-1",
+          "kind": "box",
+          "left": 0,
+          "top": 0,
+          "right": 99,
+          "bottom": 33,
+          "style": "light"
+        },
+        {
+          "id": "obj-2",
+          "kind": "text",
+          "x": 2,
+          "y": 1,
+          "content": "CHECKOUT INTERACTION FOR FAILED PAYMENT",
+          "border": "none"
+        },
+        {
+          "id": "obj-3",
+          "kind": "line",
+          "x1": 1,
+          "y1": 3,
+          "x2": 98,
+          "y2": 3,
+          "style": "light"
+        },
+        {
+          "id": "obj-4",
+          "kind": "text",
+          "x": 0,
+          "y": 3,
+          "content": "+",
+          "border": "none"
+        },
+        {
+          "id": "obj-5",
+          "kind": "text",
+          "x": 99,
+          "y": 3,
+          "content": "+",
+          "border": "none"
+        },
+        {
+          "id": "obj-6",
+          "kind": "text",
+          "x": 2,
+          "y": 32,
+          "content": "[Tab] Focus   [Enter] Activate   [q] Quit",
+          "border": "none"
+        },
+        {
+          "id": "obj-7",
+          "kind": "box",
+          "left": 4,
+          "top": 5,
+          "right": 95,
+          "bottom": 29,
+          "style": "light"
+        },
+        {
+          "id": "obj-8",
+          "kind": "text",
+          "x": 7,
+          "y": 7,
+          "content": "Payment recovery",
+          "border": "none"
+        },
+        {
+          "id": "obj-9",
+          "kind": "text",
+          "x": 7,
+          "y": 10,
+          "content": "Card failed. Keep the user in flow with one clear next action.",
+          "border": "none"
+        },
+        {
+          "id": "obj-10",
+          "kind": "text",
+          "x": 7,
+          "y": 14,
+          "content": "[ Try again ]",
+          "border": "none"
+        },
+        {
+          "id": "obj-11",
+          "kind": "text",
+          "x": 21,
+          "y": 14,
+          "content": "[ Use saved card ]",
+          "border": "none"
+        },
+        {
+          "id": "obj-12",
+          "kind": "text",
+          "x": 40,
+          "y": 14,
+          "content": "[ Contact support ]",
+          "border": "none"
+        }
+      ],
+      "focusables": [
+        {
+          "id": "focus-11",
+          "elementId": "obj-10",
+          "label": "Try again",
+          "x": 7,
+          "y": 14,
+          "width": 13,
+          "action": "noop"
+        },
+        {
+          "id": "focus-12",
+          "elementId": "obj-11",
+          "label": "Use saved card",
+          "x": 21,
+          "y": 14,
+          "width": 18,
+          "action": "noop"
+        },
+        {
+          "id": "focus-13",
+          "elementId": "obj-12",
+          "label": "Contact support",
+          "x": 40,
+          "y": 14,
+          "width": 19,
+          "action": "modal",
+          "target": "support-modal"
+        }
+      ],
+      "interactions": {
+        "initialState": {
+          "focusedIndex": 0,
+          "modal": null,
+          "route": null,
+          "toggles": {}
+        },
+        "keyboard": {
+          "next": [
+            "tab",
+            "arrow-right",
+            "arrow-down"
+          ],
+          "previous": [
+            "shift-tab",
+            "arrow-left",
+            "arrow-up"
+          ],
+          "activate": [
+            "enter",
+            "space"
+          ],
+          "close": [
+            "escape"
+          ],
+          "quit": [
+            "q",
+            "ctrl-c"
+          ]
+        },
+        "audioIntents": [
+          {
+            "phrase": "try again",
+            "event": "click:focus-11"
+          },
+          {
+            "phrase": "use saved card",
+            "event": "click:focus-12"
+          },
+          {
+            "phrase": "contact support",
+            "event": "click:focus-13"
+          }
+        ]
+      }
+    }
+  ],
+  "history": [
+    {
+      "at": "2026-05-08T14:25:12.909Z",
+      "command": "new",
+      "prompt": "checkout interaction for failed payment recovery with support modal"
+    }
+  ]
+}
