@@ -54,6 +54,8 @@ targets:
       path: Nib.entitlements
       properties:
         aps-environment: development
+        com.apple.developer.associated-domains:
+          - "applinks:dave.tail5d92b4.ts.net?mode=developer"
   NibNotificationService:
     type: app-extension
     platform: iOS

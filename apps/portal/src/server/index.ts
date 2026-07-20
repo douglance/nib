@@ -59,6 +59,8 @@ import { appendActivity, getWorkspace, listActivity, patchWorkspace } from "./wo
 
 await ensureDataDirs();
 
+const IOS_APP_ID = process.env.NIB_IOS_APP_ID ?? "2AS3V73632.com.douglance.nib";
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
@@ -66,6 +68,11 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "OPTIONS") {
       res.writeHead(204, corsHeaders());
       res.end();
+      return;
+    }
+
+    if (url.pathname === "/.well-known/apple-app-site-association" || url.pathname === "/apple-app-site-association") {
+      sendJson(res, appleAppSiteAssociation());
       return;
     }
 
@@ -469,6 +476,14 @@ const server = http.createServer(async (req, res) => {
         res.end("Request not found");
         return;
       }
+      if (isIOSBrowser(req) && url.searchParams.get("web") !== "1") {
+        res.writeHead(302, {
+          location: nativeRequestUrl(requestId),
+          "cache-control": "no-store"
+        });
+        res.end();
+        return;
+      }
       if (request.kind === "visual-review") {
         if (process.env.NODE_ENV !== "production") proxyToVite(req, res);
         else serveFile(res, path.join(process.cwd(), "dist/client/index.html"));
@@ -636,6 +651,28 @@ function corsHeaders(): Record<string, string> {
     "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
     "access-control-allow-headers": "content-type,authorization"
   };
+}
+
+function appleAppSiteAssociation(): Record<string, unknown> {
+  return {
+    applinks: {
+      apps: [],
+      details: [{
+        appID: IOS_APP_ID,
+        paths: ["/r/*"]
+      }]
+    }
+  };
+}
+
+function isIOSBrowser(req: http.IncomingMessage): boolean {
+  return /iPhone|iPad|iPod/i.test(req.headers["user-agent"] ?? "");
+}
+
+function nativeRequestUrl(requestId: string): string {
+  const url = new URL(`nib://request/${encodeURIComponent(requestId)}`);
+  url.searchParams.set("server", PUBLIC_BASE_URL);
+  return url.toString();
 }
 
 function feedbackLabHtml(): string {

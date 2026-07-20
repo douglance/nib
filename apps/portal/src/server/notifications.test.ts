@@ -81,7 +81,7 @@ test("creates APNs JWTs with a verifiable ES256 signature", () => {
   );
 });
 
-test("visual-review notifications only open the web reviewer", () => {
+test("visual-review notifications use the canonical review link without quick actions", () => {
   const now = new Date().toISOString();
   const request: RequestRecord = {
     id: "visual-review-1",
