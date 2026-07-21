@@ -1110,3 +1110,423 @@ button:disabled {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Desktop-derived product language. Keep these overrides last: the native
+   editor is the visual source of truth for every review surface. */
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #f2f2f2;
+  background: #101010;
+  --paper: #181818;
+  --paper-deep: #101010;
+  --line: rgba(255, 255, 255, 0.14);
+  --line-dark: rgba(255, 255, 255, 0.28);
+  --ink: #f2f2f2;
+  --muted: #a3a3a3;
+  --green: #2e7d32;
+  --green-soft: rgba(46, 125, 50, 0.22);
+  --red: #c62828;
+  --amber: #b7791f;
+  --amber-soft: rgba(183, 121, 31, 0.18);
+  --blue: #0078d4;
+  --surface: rgba(44, 44, 44, 0.91);
+  --surface-soft: rgba(255, 255, 255, 0.05);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.34);
+  --shadow-soft: 0 4px 14px rgba(0, 0, 0, 0.24);
+}
+
+body {
+  font-family: inherit;
+  background: #101010;
+  color: var(--ink);
+}
+
+.inboxShell {
+  width: min(1240px, 100%);
+  padding: 24px 28px 64px;
+}
+
+.inboxHeader {
+  min-height: 52px;
+  margin-bottom: 28px;
+  gap: 20px;
+}
+
+.nibMark,
+.reviewHeader .nibMark {
+  font-family: inherit;
+  font-size: 1.85rem;
+  font-weight: 760;
+  letter-spacing: -0.055em;
+  line-height: 1;
+  color: #f2f2f2;
+}
+
+.inboxActions {
+  gap: 8px;
+}
+
+.connectionPill,
+.pendingCount,
+.textButton,
+.iconButton,
+.backButton {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  box-shadow: none;
+  color: #e8e8e8;
+}
+
+.connectionPill {
+  gap: 8px;
+  padding: 0 12px;
+  font-size: 0.86rem;
+  font-weight: 520;
+}
+
+.connectionPill.connected,
+.inboxActions .connectionPill.connected,
+.reviewConnection .connectionPill {
+  border-color: var(--line);
+  background: var(--surface-soft);
+  box-shadow: none;
+  color: #e8e8e8;
+}
+
+.connectionPill > span {
+  width: 8px;
+  height: 8px;
+}
+
+.pendingCount {
+  padding: 0 12px;
+  font-size: 0.86rem;
+  font-weight: 600;
+}
+
+.textButton { padding: 0 13px; }
+.iconButton { width: 40px; }
+.iconButton.active { color: #9bd5ff; background: rgba(0, 120, 212, 0.2); }
+.badgeSeparator { color: #666; }
+
+button:hover:not(:disabled) {
+  filter: none;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+button:focus-visible,
+textarea:focus-visible,
+input:focus-visible {
+  outline: 2px solid rgba(0, 120, 212, 0.9);
+  outline-offset: 2px;
+}
+
+.reconnectBanner,
+.errorBanner {
+  margin: -12px 0 18px;
+  border-radius: 8px;
+  background: rgba(183, 121, 31, 0.16);
+  color: #f1c27d;
+}
+
+.errorBanner {
+  border-color: rgba(198, 40, 40, 0.55);
+  background: rgba(198, 40, 40, 0.16);
+  color: #ff9c9c;
+}
+
+.eyebrow {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 540;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.requestQueue,
+.completedList {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: none;
+}
+
+.requestRow {
+  min-height: 96px;
+  grid-template-columns: 112px minmax(0, 1fr) auto auto;
+  gap: 16px;
+  padding: 10px;
+  border-bottom-color: var(--line);
+  color: var(--ink);
+}
+
+.requestRow:hover { background: rgba(255, 255, 255, 0.045); }
+.requestRow.priority {
+  background: rgba(0, 120, 212, 0.17);
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+
+.requestThumbnail {
+  height: 74px;
+  border-color: var(--line);
+  border-radius: 7px;
+  background: #080808;
+  color: var(--muted);
+}
+
+.requestIdentity { gap: 4px; }
+.requestIdentity strong { font-size: 1rem; font-weight: 590; }
+.requestIdentity small,
+.reviewIdentity small,
+.requestRow time { color: var(--muted); font-size: 0.84rem; }
+
+.statusBadge,
+.responseBadge {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.055);
+  color: #cfcfcf;
+  font-size: 0.76rem;
+}
+
+.requestRow.priority .statusBadge {
+  border-color: rgba(0, 120, 212, 0.55);
+  background: rgba(0, 120, 212, 0.2);
+  color: #cce7ff;
+}
+
+.emptyInbox {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.emptyCheck { background: var(--green-soft); color: #8fd29a; }
+.completedSection { margin-top: 32px; }
+.completedSection h2 { color: var(--muted); font-size: 0.88rem; }
+.responseBadge.approved { color: #9ed7a5; background: var(--green-soft); }
+.responseBadge.rejected { color: #ff9c9c; background: rgba(198, 40, 40, 0.2); }
+
+.reviewShell,
+.reviewShell.activeReview {
+  background: #101010;
+  color: var(--ink);
+}
+
+.reviewHeader {
+  min-height: 58px;
+  gap: 14px;
+  padding: 8px 12px;
+  border-bottom-color: var(--line);
+  background: rgba(24, 24, 24, 0.94);
+  backdrop-filter: blur(18px);
+}
+
+.backButton {
+  min-height: 38px;
+  padding: 0 11px;
+  font-size: 0.86rem;
+}
+
+.reviewIdentity { gap: 1px; }
+.reviewIdentity strong { font-size: 0.95rem; font-weight: 590; }
+.reviewConnection { gap: 8px; }
+.reviewConnection time { color: var(--muted); font-size: 0.8rem; }
+.reviewConnection .connectionPill { min-width: 0; font-size: 0.8rem; }
+
+.reviewLayout {
+  min-height: calc(100dvh - 58px);
+  grid-template-columns: minmax(0, 1fr) 338px;
+}
+
+.canvasPanel {
+  position: relative;
+  padding: 18px;
+  border-right-color: var(--line);
+  background: #181818;
+}
+
+.canvasViewport {
+  min-height: calc(100dvh - 94px);
+  border-color: var(--line);
+  border-radius: 8px;
+  background: #202020;
+}
+
+.imageCanvas {
+  top: 18px;
+  left: 0;
+  width: min(72vw, 760px);
+  max-height: calc(100dvh - 160px);
+  filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.45));
+}
+
+.imageCanvas img,
+.canvasSource { max-height: calc(100dvh - 160px); border-radius: 6px; }
+.missingPreview { border-color: var(--line-dark); border-radius: 8px; background: #141414; }
+
+.reviewToolbar {
+  top: 78px;
+  left: calc((100% - 338px) / 2);
+  width: auto;
+  min-height: 50px;
+  justify-content: flex-start;
+  padding: 4px 6px;
+  border-color: var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.reviewToolbar button,
+.colorButton {
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  color: #e8e8e8;
+}
+
+.reviewToolbar button.active {
+  background: var(--blue);
+  box-shadow: none;
+  color: white;
+}
+
+.toolbarDivider { height: 28px; background: var(--line); }
+
+.decisionPanel {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+  border-left: 0;
+  background: #101010;
+}
+
+.decisionPanel h2 {
+  grid-column: 1 / -1;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(8, 8, 8, 0.35);
+  font-size: 0.95rem;
+  font-weight: 520;
+  line-height: 1.45;
+}
+
+.decisionPanel textarea {
+  grid-column: 1 / -1;
+  min-height: 104px;
+  margin: 0;
+  padding: 11px;
+  border-color: var(--line);
+  border-radius: 8px;
+  background: rgba(8, 8, 8, 0.35);
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.decisionPanel textarea::placeholder { color: #888; }
+
+.decisionButton {
+  width: 100%;
+  min-height: 52px;
+  margin: 0;
+  border-radius: 8px;
+  box-shadow: none;
+  font-size: 0.86rem;
+  font-weight: 590;
+}
+
+.decisionButton.approve { border-color: #17451a; background: #2e7d32; }
+.decisionButton.reject { border-color: #661010; background: #c62828; }
+.decisionButton.comment { border-color: #262626; background: #4a4a4a; color: white; }
+.decisionButton.approve,
+.decisionButton.reject,
+.decisionButton.comment { margin: 2px 0 0; }
+.decisionButton.comment:disabled { opacity: 0.45; }
+.submitError { grid-column: 1 / -1; color: #ff8a8a; }
+
+.reviewLoading { min-height: calc(100dvh - 58px); }
+
+@media (max-width: 800px) {
+  body,
+  .reviewShell,
+  .reviewShell button,
+  .reviewShell textarea { font-family: inherit; }
+
+  .inboxShell { padding: max(16px, env(safe-area-inset-top)) 14px max(32px, env(safe-area-inset-bottom)); }
+  .inboxHeader { margin-bottom: 20px; }
+  .nibMark { font-size: 1.75rem; }
+  .inboxActions { gap: 6px; }
+  .inboxActions .connectionPill,
+  .inboxActions .pendingCount { min-height: 36px; font-size: 0.78rem; }
+  .eyebrow { font-size: 0.72rem; }
+
+  .requestRow {
+    min-height: 92px;
+    grid-template-columns: 58px minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 8px;
+  }
+  .requestThumbnail { height: 66px; }
+  .requestIdentity strong { font-size: 0.9rem; }
+  .requestIdentity small { font-size: 0.76rem; }
+  .requestRow time { font-size: 0.7rem; }
+  .requestRow .statusBadge { font-size: 0.67rem; }
+
+  .reviewHeader {
+    min-height: 58px;
+    padding: max(8px, env(safe-area-inset-top)) 10px 8px;
+  }
+  .reviewHeader .nibMark { font-family: inherit; font-size: 1.65rem; color: #f2f2f2; }
+  .backButton { min-height: 38px; background: var(--surface-soft); }
+  .reviewIdentity { top: 68px; }
+  .reviewIdentity strong { font-size: 0.95rem; }
+  .reviewIdentity small { font-size: 0.8rem; }
+  .reviewConnection .connectionPill { min-height: 34px; font-size: 0.74rem; }
+
+  .reviewLayout { min-height: calc(100dvh - 58px); padding-top: 56px; }
+  .canvasViewport {
+    min-height: 0;
+    height: min(43dvh, 344px);
+    margin: 0 12px;
+    border-radius: 8px;
+    background: #202020;
+  }
+  .imageCanvas { width: calc(100vw - 56px); height: 304px; max-height: 304px; }
+  .canvasSource { max-height: 304px; }
+
+  .reviewToolbar {
+    position: relative;
+    top: auto;
+    left: auto;
+    transform: none;
+    width: calc(100% - 24px);
+    min-height: 58px;
+    margin: 10px 12px 0;
+    padding: 4px;
+    border-radius: 8px;
+    background: var(--surface);
+    color: #e8e8e8;
+  }
+  .reviewToolbar::before,
+  .reviewToolbar::after { background: var(--line); }
+  .reviewToolbar button,
+  .colorButton { flex-basis: 40px; width: 40px; height: 46px; }
+
+  .decisionPanel { padding: 12px 12px max(12px, env(safe-area-inset-bottom)); }
+  .decisionPanel textarea { height: 62px; min-height: 62px; margin: 0 0 2px; font-size: 0.95rem; }
+  .decisionButton { width: 100%; min-height: 44px; margin: 0; font-size: 0.82rem; }
+  .decisionButton.reject,
+  .decisionButton.comment { height: auto; min-height: 44px; margin: 0; }
+  .decisionButton.approve { background: #2e7d32; }
+  .decisionButton.reject { background: #c62828; }
+}
