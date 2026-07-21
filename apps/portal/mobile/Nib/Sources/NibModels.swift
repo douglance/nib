@@ -60,6 +60,36 @@ struct NibRequest: Identifiable, Codable, Hashable {
     }
 }
 
+struct NibReviewAnnotation: Identifiable, Codable, Hashable {
+    var id: String
+    var type: String
+    var color: String
+    var x: Double? = nil
+    var y: Double? = nil
+    var width: Double? = nil
+    var height: Double? = nil
+    var startX: Double? = nil
+    var startY: Double? = nil
+    var endX: Double? = nil
+    var endY: Double? = nil
+    var points: [[Double]]? = nil
+    var content: String? = nil
+    var strokeWidth: Double? = nil
+    var fontSize: Double? = nil
+    var align: String? = nil
+    var head: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, color, x, y, width, height, points, content, align, head
+        case startX = "start_x"
+        case startY = "start_y"
+        case endX = "end_x"
+        case endY = "end_y"
+        case strokeWidth = "stroke_width"
+        case fontSize = "font_size"
+    }
+}
+
 struct NibDevice: Identifiable, Codable, Hashable {
     var id: String
     var name: String

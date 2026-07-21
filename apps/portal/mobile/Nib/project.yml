@@ -18,6 +18,7 @@ targets:
       - path: Sources/NibModels.swift
       - path: Sources/NibClient.swift
       - path: Sources/NibApp.swift
+      - path: Sources/NativeVisualReviewWorkspace.swift
     dependencies:
       - target: NibNotificationService
         embed: true

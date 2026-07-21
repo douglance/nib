@@ -144,10 +144,25 @@ final class NibClient: ObservableObject {
         try await get("/api/waiting")
     }
 
-    func respond(requestId: String, text: String? = nil, choice: String? = nil, choiceIndex: Int? = nil) async throws -> NibRequest {
+    func respond(
+        requestId: String,
+        text: String? = nil,
+        choice: String? = nil,
+        choiceIndex: Int? = nil,
+        decision: String? = nil,
+        comment: String? = nil,
+        annotations: [NibReviewAnnotation]? = nil
+    ) async throws -> NibRequest {
         try await post(
             "/api/requests/\(requestId)/respond",
-            body: ResponseBody(text: text, choice: choice, choiceIndex: choiceIndex)
+            body: ResponseBody(
+                text: text,
+                choice: choice,
+                choiceIndex: choiceIndex,
+                decision: decision,
+                comment: comment,
+                annotations: annotations
+            )
         )
     }
 
@@ -245,6 +260,9 @@ private struct ResponseBody: Encodable {
     var text: String?
     var choice: String?
     var choiceIndex: Int?
+    var decision: String?
+    var comment: String?
+    var annotations: [NibReviewAnnotation]?
 }
 
 private struct DeviceBody: Encodable {

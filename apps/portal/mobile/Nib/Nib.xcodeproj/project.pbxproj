@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		261D94BDBD3E423E922250DB /* NativeVisualReviewWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8488F2721352FEA04DDCE390 /* NativeVisualReviewWorkspace.swift */; };
+		2A9678DA20C8443C942F5AB1 /* NibNotificationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C8D38CDEB0D4DBF814A1325 /* NibNotificationActions.swift */; };
 		37F822AF467694674AC36EA1 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
 		4B438EC7D7A3493230078A0F /* NibNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		5F3A60DF0DDD4FF95BABCC49 /* NibWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 52933EB23EA0231EF0204C9E /* NibWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -66,8 +68,10 @@
 		2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibNotificationService.swift; sourceTree = "<group>"; };
 		336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = NibNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		52933EB23EA0231EF0204C9E /* NibWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NibWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		6C8D38CDEB0D4DBF814A1325 /* NibNotificationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibNotificationActions.swift; sourceTree = "<group>"; };
 		6B7405E10F9BFBDBF72AC385 /* Nib.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Nib.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		71EE9945059B827CA14650BA /* NibApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibApp.swift; sourceTree = "<group>"; };
+		8488F2721352FEA04DDCE390 /* NativeVisualReviewWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeVisualReviewWorkspace.swift; sourceTree = "<group>"; };
 		A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibWatchApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -75,7 +79,9 @@
 		27B2721DA17FDD6803048B2B /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				8488F2721352FEA04DDCE390 /* NativeVisualReviewWorkspace.swift */,
 				71EE9945059B827CA14650BA /* NibApp.swift */,
+				6C8D38CDEB0D4DBF814A1325 /* NibNotificationActions.swift */,
 				07765833BEFC7FA59A4738B2 /* NibClient.swift */,
 				1461BAB1131EA851E89E5D76 /* NibModels.swift */,
 				2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */,
@@ -224,7 +230,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				261D94BDBD3E423E922250DB /* NativeVisualReviewWorkspace.swift in Sources */,
 				E253523F19968EEF08FEA4C4 /* NibApp.swift in Sources */,
+				2A9678DA20C8443C942F5AB1 /* NibNotificationActions.swift in Sources */,
 				F240C4B0F79FC092B68766D8 /* NibClient.swift in Sources */,
 				8BEA52BEE9EDD618F946DE28 /* NibModels.swift in Sources */,
 			);
