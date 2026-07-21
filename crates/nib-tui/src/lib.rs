@@ -27,15 +27,21 @@ use ratatui::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    fs::{File, OpenOptions},
     io::{self, Stdout, Write},
+    os::fd::AsRawFd,
     path::PathBuf,
     process::Command,
+    thread,
     time::{Duration, SystemTime},
 };
 
 // Use an 8-bit image ID so tmux clients without the RGB feature preserve the
 // placeholder foreground value instead of quantizing a 24-bit ID.
 const IMAGE_ID: u32 = 42;
+const CODEX_INLINE_IMAGE_ID: u32 = 43;
+pub const CODEX_INLINE_RESERVED_ROWS: usize = 12;
+const CODEX_BOTTOM_RESERVED_ROWS: u16 = 3;
 const GRAPHITE_BORDER: Color = Color::Rgb(74, 74, 74);
 const GRAPHITE_MUTED: Color = Color::Rgb(204, 204, 204);
 const NIB_BLUE: Color = Color::Rgb(0, 120, 212);
@@ -684,6 +690,98 @@ pub fn kitty_transmit(
     kitty_transmit_inner(rgba, image_id, cols, rows, width, height, false)
 }
 
+/// Best-effort terminal rendering for MCP clients whose textual TUI does not
+/// draw first-class image result blocks.
+///
+/// MCP stdio remains untouched: the image is written to the process's
+/// controlling terminal after the tool result has had time to reserve its
+/// transcript rows. Callers must still return the normal MCP image content so
+/// graphical clients retain the protocol-native path.
+pub fn try_schedule_codex_inline_image(png: Vec<u8>, width: u32, height: u32) -> bool {
+    let Ok(report) = TerminalReport::detect() else {
+        return false;
+    };
+    if !matches!(
+        report.protocol,
+        GraphicsProtocol::KittyPlaceholder | GraphicsProtocol::KittyDirect
+    ) {
+        return false;
+    }
+
+    let Ok(mut tty) = OpenOptions::new().read(true).write(true).open("/dev/tty") else {
+        return false;
+    };
+    let Ok((columns, rows)) = terminal_size(&tty) else {
+        return false;
+    };
+    let mut sequence = codex_inline_sequence(&png, columns, rows, width, height);
+    if report.tmux_version.is_some() {
+        sequence = tmux_wrap(&sequence);
+    }
+
+    thread::spawn(move || {
+        for delay in [350_u64, 250, 250] {
+            thread::sleep(Duration::from_millis(delay));
+            if tty.write_all(sequence.as_bytes()).is_err() || tty.flush().is_err() {
+                break;
+            }
+        }
+    });
+    true
+}
+
+fn terminal_size(tty: &File) -> io::Result<(u16, u16)> {
+    let mut size = libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: `size` points to writable storage for TIOCGWINSZ and `tty`
+    // remains open for the duration of the call.
+    let result = unsafe { libc::ioctl(tty.as_raw_fd(), libc::TIOCGWINSZ, &mut size) };
+    if result == -1 || size.ws_col == 0 || size.ws_row == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((size.ws_col, size.ws_row))
+}
+
+fn codex_inline_sequence(
+    png: &[u8],
+    columns: u16,
+    rows: u16,
+    image_width: u32,
+    image_height: u32,
+) -> String {
+    let max_rows_by_height = rows
+        .saturating_sub(CODEX_BOTTOM_RESERVED_ROWS + 1)
+        .min(CODEX_INLINE_RESERVED_ROWS as u16)
+        .max(1);
+    let image_aspect = image_width as f64 / image_height.max(1) as f64;
+    let max_rows_by_width = ((columns.saturating_sub(4) as f64)
+        / (2.0 * image_aspect.max(f64::EPSILON)))
+    .floor()
+    .max(1.0) as u16;
+    let image_rows = max_rows_by_height.min(max_rows_by_width).max(1);
+    let y = rows.saturating_sub(
+        image_rows
+            .saturating_add(CODEX_BOTTOM_RESERVED_ROWS)
+            .saturating_add(1),
+    );
+    let placement = DirectPlacement {
+        x: 2,
+        y,
+        cols: None,
+        rows: Some(image_rows),
+    };
+    format!(
+        "\x1b7\x1b[{};{}H{}\x1b8",
+        placement.y + 1,
+        placement.x + 1,
+        kitty_transmit_direct(png, CODEX_INLINE_IMAGE_ID, placement, false)
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn kitty_transmit_inner(
     rgba: &[u8],
@@ -869,6 +967,16 @@ mod tests {
         assert!(sequence.contains("a=T,f=100,t=d,i=42,p=1,c=80,C=1"));
         assert!(!sequence.contains(",r="));
         assert!(!sequence.contains("U=1"));
+    }
+
+    #[test]
+    fn codex_inline_sequence_targets_reserved_transcript_rows_without_moving_cursor() {
+        let png = vec![1_u8; 5000];
+        let sequence = codex_inline_sequence(&png, 120, 40, 1024, 1024);
+
+        assert!(sequence.starts_with("\x1b7\x1b[25;3H"));
+        assert!(sequence.contains("a=T,f=100,t=d,i=43,p=1,r=12,C=1,q=2,m=1"));
+        assert!(sequence.ends_with("\x1b8"));
     }
 
     #[test]

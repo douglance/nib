@@ -15,13 +15,15 @@ import {
   ZoomIn
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ComponentType, PointerEvent as ReactPointerEvent, SVGProps } from "react";
+import type { ComponentType, CSSProperties, PointerEvent as ReactPointerEvent, SVGProps } from "react";
 import type { RequestRecord } from "../../shared/types";
 import { apiUrl, assetUrl, nibFetch } from "../native";
+import motionContract from "../../../../../design/motion.json";
 
 type ConnectionState = "connecting" | "connected" | "reconnecting";
 type ReviewTool = "select" | "pan" | "cursor" | "arrow" | "rectangle" | "text" | "path";
 type Decision = "approve" | "reject" | "comment";
+type MotionMode = "full" | "reduced" | "off";
 
 interface ReviewAnnotation {
   id: string;
@@ -327,6 +329,8 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [submitting, setSubmitting] = useState<Decision | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [motionMode] = useState<MotionMode>(configuredMotionMode);
+  const [exiting, setExiting] = useState(false);
   const [draw, setDraw] = useState<DrawState | null>(null);
   const [imageSize, setImageSize] = useState({ width: canvasCrop?.width ?? 1, height: canvasCrop?.height ?? 1 });
   const canvasRef = useRef<HTMLDivElement>(null);
@@ -423,6 +427,7 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
     setSubmitting(decision);
     setSubmitError(null);
     try {
+      await playExit();
       const response = await nibFetch(`/api/requests/${encodeURIComponent(request.id)}/respond`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -435,15 +440,33 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
       onSubmitted(await response.json() as RequestRecord);
     } catch (responseError) {
       setSubmitError(responseError instanceof Error ? responseError.message : "Response failed");
+      setExiting(false);
     } finally {
       setSubmitting(null);
     }
   }
 
+  async function playExit() {
+    setExiting(true);
+    const duration = motionMode === "full"
+      ? motionContract.full.exit.duration_ms
+      : motionMode === "reduced" ? motionContract.reduced.fade_ms : 0;
+    if (duration > 0) await new Promise((resolve) => window.setTimeout(resolve, duration));
+  }
+
   const draft = draw ? draftAnnotation(tool, draw, color) : null;
 
   return (
-    <main className="reviewShell activeReview" data-testid="active-review">
+    <main
+      className={`reviewShell activeReview motion-${motionMode}${exiting ? " is-exiting" : ""}`}
+      data-testid="active-review"
+      style={{
+        "--motion-materialize": `${motionContract.full.enter.materialize_ms}ms`,
+        "--motion-settle": `${motionContract.full.enter.settle_ms}ms`,
+        "--motion-exit": `${motionContract.full.exit.duration_ms}ms`,
+        "--motion-reduced": `${motionContract.reduced.fade_ms}ms`
+      } as CSSProperties}
+    >
       <ReviewHeader request={request} connection={connection} onBack={onBack} />
       <div className="reviewLayout">
         <section className="canvasPanel">
@@ -658,6 +681,12 @@ function draftAnnotation(tool: ReviewTool, draw: DrawState, color: string): Revi
 
 function annotationId(): string {
   return `web-${crypto.randomUUID()}`;
+}
+
+function configuredMotionMode(): MotionMode {
+  const override = window.localStorage.getItem("nib.motion");
+  if (override === "full" || override === "reduced" || override === "off") return override;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "full";
 }
 
 function thumbnailCrop(value: unknown): { x: number; y: number; width: number; height: number; sourceWidth: number; sourceHeight: number } | null {

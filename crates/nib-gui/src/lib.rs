@@ -15,6 +15,7 @@ pub mod style_panel;
 pub mod tool_flyout;
 pub mod toolbar;
 pub mod tools;
+mod window_motion;
 pub mod zorder;
 
 pub use app::NibApp;

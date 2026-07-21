@@ -2,7 +2,8 @@
 //!
 //! Provides tools for Claude to interact with Nib annotations.
 
-use std::path::PathBuf;
+use std::io::Cursor;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
@@ -52,11 +53,11 @@ impl NibMcpServer {
         }
     }
 
-    /// Present an image as first-class MCP image content. Codex renders this
-    /// inline in the current thread, so the next user message can be treated as
-    /// feedback without opening a GUI or terminal UI.
+    /// Present an image as first-class MCP image content. Text-only Codex TUI
+    /// clients also receive a best-effort render through their controlling
+    /// graphics terminal without contaminating MCP stdio.
     #[tool(
-        description = "Display a PNG, JPEG, WebP, or .nib image inline in the current Codex thread and ask a feedback question. Returns first-class MCP image content, not a local path or terminal escape sequence. After calling, wait for the user's next thread message as the feedback response."
+        description = "Display a PNG, JPEG, WebP, or .nib image inline and ask a feedback question. Returns first-class MCP image content; when Codex CLI is running in a supported graphics terminal, Nib also renders into transcript rows reserved for the result. After calling, wait for the user's next thread message as the feedback response."
     )]
     async fn present_image(
         &self,
@@ -70,15 +71,16 @@ impl NibMcpServer {
             ))]));
         }
 
-        let (data, mime_type) =
+        let (bytes, mime_type) =
             inline_image_content(&image_path).map_err(|e| McpError::internal_error(e, None))?;
-        let prompt = format!(
-            "{}\n\nReply in this Codex thread with approval, rejection, or specific corrections.\nSource: {}",
-            request.question,
-            image_path.display()
-        );
+        let terminal_rendered = terminal_png(&bytes)
+            .map(|(png, width, height)| {
+                nib_tui::try_schedule_codex_inline_image(png, width, height)
+            })
+            .unwrap_or(false);
+        let prompt = present_image_prompt(&request.question, &image_path, terminal_rendered);
         Ok(CallToolResult::success(vec![
-            Content::image(data, mime_type),
+            Content::image(general_purpose::STANDARD.encode(bytes), mime_type),
             Content::text(prompt),
         ]))
     }
@@ -670,7 +672,29 @@ impl NibMcpServer {
     }
 }
 
-fn inline_image_content(image_path: &std::path::Path) -> Result<(String, String), String> {
+fn present_image_prompt(question: &str, image_path: &Path, reserve_terminal_rows: bool) -> String {
+    let reserved_rows = if reserve_terminal_rows {
+        "\n".repeat(nib_tui::CODEX_INLINE_RESERVED_ROWS)
+    } else {
+        String::new()
+    };
+    format!(
+        "{reserved_rows}{question}\n\nReply in this Codex thread with approval, rejection, or specific corrections.\nSource: {}",
+        image_path.display()
+    )
+}
+
+fn terminal_png(bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
+    let image = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    let (width, height) = (image.width(), image.height());
+    let mut png = Vec::new();
+    image
+        .write_to(&mut Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+    Ok((png, width, height))
+}
+
+fn inline_image_content(image_path: &Path) -> Result<(Vec<u8>, String), String> {
     let is_nib = image_path
         .extension()
         .and_then(|extension| extension.to_str())
@@ -709,7 +733,7 @@ fn inline_image_content(image_path: &std::path::Path) -> Result<(String, String)
         (bytes, mime_type.to_string())
     };
 
-    Ok((general_purpose::STANDARD.encode(bytes), mime_type))
+    Ok((bytes, mime_type))
 }
 
 impl Default for NibMcpServer {
@@ -733,7 +757,7 @@ impl ServerHandler for NibMcpServer {
                 website_url: None,
             },
             instructions: Some(
-                "Nib MCP Server - Visual communication for Codex. For human feedback, call present_image so the image is returned as first-class inline MCP content, then treat the user's next message in the same thread as the response. Do not substitute terminal graphics or local file links.\n\n\
+                "Nib MCP Server - Visual communication for Codex. For human feedback, call present_image so the image is returned as first-class inline MCP content, then treat the user's next message in the same thread as the response. Codex CLI terminals may also receive a lossless inline rendering fallback. Do not substitute local file links.\n\n\
                 Tools:\n\
                 - present_image: Display an image inline in Codex and ask for thread-native feedback\n\
                 - add_annotation: Add arrow, rectangle, text, number, ellipse, line, highlight, or blur\n\
@@ -789,7 +813,14 @@ mod tests {
 
         let (data, mime_type) = inline_image_content(&path).unwrap();
         assert_eq!(mime_type, "image/png");
-        assert_eq!(general_purpose::STANDARD.decode(data).unwrap(), expected);
+        assert_eq!(data, expected);
+    }
+
+    #[test]
+    fn terminal_prompt_reserves_exact_image_rows_before_the_question() {
+        let prompt = present_image_prompt("Visible?", Path::new("/tmp/image.png"), true);
+        assert!(prompt.starts_with(&"\n".repeat(nib_tui::CODEX_INLINE_RESERVED_ROWS)));
+        assert!(prompt.contains("Visible?\n\nReply in this Codex thread"));
     }
 
     #[test]

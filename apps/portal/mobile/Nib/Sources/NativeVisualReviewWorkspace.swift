@@ -1,6 +1,87 @@
 import SwiftUI
 import UIKit
 
+private extension View {
+    @ViewBuilder
+    func nibGlassSurface(
+        tint: Color = Color.white.opacity(0.035),
+        cornerRadius: CGFloat,
+        interactive: Bool = false,
+        reduceTransparency: Bool
+    ) -> some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            if interactive {
+                self
+                    .background(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.32), tint.opacity(0.58), tint.opacity(0.26)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    )
+                    .glassEffect(.regular.tint(tint.opacity(0.72)).interactive(), in: .rect(cornerRadius: cornerRadius))
+                    .shadow(color: tint.opacity(0.28), radius: 10, y: 4)
+                    .shadow(color: .black.opacity(0.30), radius: 12, y: 7)
+            } else {
+                self
+                    .background(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.24), tint.opacity(0.34), Color.black.opacity(0.16)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    )
+                    .glassEffect(.regular.tint(tint.opacity(0.58)), in: .rect(cornerRadius: cornerRadius))
+                    .nibSpecularEdge(cornerRadius: cornerRadius, tint: tint)
+            }
+        } else {
+            self
+                .background(
+                    reduceTransparency ? tint.opacity(0.92) : tint.opacity(0.68),
+                    in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                )
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(Color.white.opacity(0.18))
+                )
+        }
+    }
+
+    func reviewChromeMotion(scaleX: Double, opacity: Double, blur: Double) -> some View {
+        self
+            .scaleEffect(x: scaleX, y: 1, anchor: .center)
+            .opacity(opacity)
+            .blur(radius: blur)
+    }
+
+    func nibSpecularEdge(cornerRadius: CGFloat, tint: Color) -> some View {
+        self
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.88), tint.opacity(0.52), Color.white.opacity(0.18)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+            .overlay(alignment: .top) {
+                Capsule()
+                    .fill(Color.white.opacity(0.22))
+                    .frame(height: 2)
+                    .padding(.horizontal, cornerRadius)
+                    .padding(.top, 1)
+            }
+            .shadow(color: tint.opacity(0.34), radius: 11, y: 3)
+            .shadow(color: .black.opacity(0.34), radius: 12, y: 7)
+    }
+}
+
 enum NativeReviewTool: String, Identifiable {
     case select
     case pan
@@ -34,7 +115,31 @@ enum NativeReviewTool: String, Identifiable {
     }
 }
 
+// Mirrors design/motion.json for the native renderer.
+private enum NibReviewMotion {
+    enum Mode: String { case full, reduced, off }
+
+    static let enterStartScale = 1.06
+    static let enterSettleScale = 0.987
+    static let enterStartOpacity = 0.05
+    static let blurRadius = 8.0
+    static let materializeSeconds = 0.14
+    static let settleSeconds = 0.14
+    static let exitSeconds = 0.12
+    static let reducedSeconds = 0.10
+
+    static func mode(reduceMotion: Bool) -> Mode {
+        if let override = UserDefaults.standard.string(forKey: "nib.motion"),
+           let mode = Mode(rawValue: override) {
+            return mode
+        }
+        return reduceMotion ? .reduced : .full
+    }
+}
+
 struct NativeVisualReviewWorkspace: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     var request: NibRequest
     var imageURL: URL?
     var sending: Bool
@@ -53,6 +158,9 @@ struct NativeVisualReviewWorkspace: View {
     @State private var showingTextPrompt = false
     @State private var textAnnotation = ""
     @State private var textPoint: CGPoint?
+    @State private var chromeScaleX = NibReviewMotion.enterStartScale
+    @State private var chromeOpacity = NibReviewMotion.enterStartOpacity
+    @State private var chromeBlur = NibReviewMotion.blurRadius
 
     var body: some View {
         VStack(spacing: 0) {
@@ -89,21 +197,25 @@ struct NativeVisualReviewWorkspace: View {
             annotationToolbar
                 .padding(.horizontal, 18)
                 .padding(.top, 14)
+                .reviewChromeMotion(scaleX: chromeScaleX, opacity: chromeOpacity, blur: chromeBlur)
 
             commentField
                 .padding(.horizontal, 18)
                 .padding(.top, 12)
+                .reviewChromeMotion(scaleX: chromeScaleX, opacity: chromeOpacity, blur: chromeBlur)
 
             decisionDock
                 .padding(.horizontal, 18)
                 .padding(.top, 12)
                 .padding(.bottom, 12)
+                .reviewChromeMotion(scaleX: chromeScaleX, opacity: chromeOpacity, blur: chromeBlur)
         }
         .background(NibTheme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .statusBarHidden(true)
+        .statusBarHidden(false)
         .preferredColorScheme(.dark)
         .task(id: imageURL) { await loadImage() }
+        .task { await materializeChrome() }
         .fullScreenCover(isPresented: $showingExpandedImage) {
             ExpandedReviewImage(image: image, annotations: annotations)
         }
@@ -113,6 +225,55 @@ struct NativeVisualReviewWorkspace: View {
             Button("Add") { addTextAnnotation() }
                 .disabled(textAnnotation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+    }
+
+    @MainActor
+    private func materializeChrome() async {
+        switch NibReviewMotion.mode(reduceMotion: reduceMotion) {
+        case .off:
+            chromeScaleX = 1
+            chromeOpacity = 1
+            chromeBlur = 0
+        case .reduced:
+            chromeScaleX = 1
+            chromeBlur = 0
+            chromeOpacity = 0
+            withAnimation(.easeOut(duration: NibReviewMotion.reducedSeconds)) { chromeOpacity = 1 }
+        case .full:
+            chromeScaleX = NibReviewMotion.enterStartScale
+            chromeOpacity = NibReviewMotion.enterStartOpacity
+            chromeBlur = NibReviewMotion.blurRadius
+            withAnimation(.easeInOut(duration: NibReviewMotion.materializeSeconds)) {
+                chromeScaleX = NibReviewMotion.enterSettleScale
+                chromeOpacity = 1
+                chromeBlur = 0
+            }
+            try? await Task.sleep(for: .milliseconds(140))
+            withAnimation(.easeInOut(duration: NibReviewMotion.settleSeconds)) { chromeScaleX = 1 }
+        }
+    }
+
+    @MainActor
+    private func submitAfterDissolve(_ decision: String) async {
+        let mode = NibReviewMotion.mode(reduceMotion: reduceMotion)
+        switch mode {
+        case .off:
+            chromeOpacity = 0
+        case .reduced:
+            withAnimation(.easeIn(duration: NibReviewMotion.reducedSeconds)) { chromeOpacity = 0 }
+            try? await Task.sleep(for: .milliseconds(100))
+        case .full:
+            withAnimation(.easeIn(duration: NibReviewMotion.exitSeconds)) {
+                chromeScaleX = 1.06
+                chromeOpacity = 0
+                chromeBlur = NibReviewMotion.blurRadius
+            }
+            try? await Task.sleep(for: .milliseconds(120))
+        }
+        await submit(decision, normalizedComment, annotations)
+        chromeScaleX = 1
+        chromeOpacity = 1
+        chromeBlur = 0
     }
 
     private var requestContent: AttributedString {
@@ -170,8 +331,7 @@ struct NativeVisualReviewWorkspace: View {
             }
             .padding(5)
         }
-        .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.white.opacity(0.14)))
+        .nibGlassSurface(tint: Color.white.opacity(0.20), cornerRadius: 13, reduceTransparency: reduceTransparency)
     }
 
     private var toolbarDivider: some View {
@@ -223,16 +383,25 @@ struct NativeVisualReviewWorkspace: View {
         .accessibilityLabel(label)
     }
 
+    @ViewBuilder
     private var decisionDock: some View {
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 9) { decisionDockContent }
+        } else {
+            decisionDockContent
+        }
+    }
+
+    private var decisionDockContent: some View {
         HStack(spacing: 9) {
             decisionButton("Approve", color: NibTheme.green) {
-                await submit("approve", normalizedComment, annotations)
+                await submitAfterDissolve("approve")
             }
             decisionButton("Reject", color: NibTheme.red) {
-                await submit("reject", normalizedComment, annotations)
+                await submitAfterDissolve("reject")
             }
             decisionButton("Comment", color: Color(red: 0.290, green: 0.290, blue: 0.290), disabled: normalizedComment == nil) {
-                await submit("comment", normalizedComment, annotations)
+                await submitAfterDissolve("comment")
             }
         }
     }
@@ -245,8 +414,7 @@ struct NativeVisualReviewWorkspace: View {
             .tint(.white)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.white.opacity(0.24)))
+            .nibGlassSurface(tint: Color.white.opacity(0.20), cornerRadius: 13, reduceTransparency: reduceTransparency)
             .accessibilityLabel("Comment text")
     }
 
@@ -280,7 +448,12 @@ struct NativeVisualReviewWorkspace: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
-        .background(color, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .nibGlassSurface(
+            tint: color,
+            cornerRadius: 14,
+            interactive: true,
+            reduceTransparency: reduceTransparency
+        )
         .disabled(sending || !request.isActive || disabled)
         .accessibilityLabel(label)
     }

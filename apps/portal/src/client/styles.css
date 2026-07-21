@@ -1530,3 +1530,101 @@ input:focus-visible {
   .decisionButton.approve { background: #2e7d32; }
   .decisionButton.reject { background: #c62828; }
 }
+
+/* Shared materialize-settle-dissolve recipe: design/motion.json. */
+.activeReview .reviewToolbar,
+.activeReview .decisionPanel {
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  background:
+    radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.26), transparent 38%),
+    linear-gradient(145deg, rgba(255, 255, 255, 0.18), rgba(58, 58, 58, 0.82) 26%, rgba(24, 24, 24, 0.74) 72%),
+    rgba(38, 38, 38, 0.72);
+  -webkit-backdrop-filter: saturate(1.25) blur(22px);
+  backdrop-filter: saturate(1.25) blur(22px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.62),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 0 22px rgba(255, 255, 255, 0.10),
+    0 18px 42px rgba(0, 0, 0, 0.48);
+  transform-origin: center;
+  will-change: transform, filter, opacity;
+}
+
+@media (min-width: 801px) {
+  .activeReview .reviewToolbar { left: 84px; }
+}
+
+.activeReview .decisionPanel {
+  margin: 12px;
+  border-radius: 14px;
+  align-self: start;
+}
+
+.activeReview .decisionPanel h2,
+.activeReview .decisionPanel textarea {
+  border-color: rgba(255, 255, 255, 0.32);
+  background: radial-gradient(circle at 12% 0%, rgba(255, 255, 255, 0.14), transparent 42%), linear-gradient(160deg, rgba(255, 255, 255, 0.10), rgba(18, 18, 18, 0.52));
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.activeReview .decisionButton {
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.38), inset 0 -1px 0 rgba(0, 0, 0, 0.3), 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.activeReview .decisionButton.approve {
+  background: radial-gradient(circle at 24% 0%, rgba(204, 255, 208, 0.55), transparent 52%), linear-gradient(155deg, rgba(100, 199, 109, 0.72), rgba(35, 112, 41, 0.82));
+  box-shadow: inset 0 1px 0 rgba(235, 255, 237, 0.68), 0 0 26px rgba(76, 211, 87, 0.44), 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+.activeReview .decisionButton.reject {
+  background: radial-gradient(circle at 24% 0%, rgba(255, 211, 211, 0.52), transparent 52%), linear-gradient(155deg, rgba(229, 92, 92, 0.76), rgba(151, 25, 25, 0.84));
+  box-shadow: inset 0 1px 0 rgba(255, 237, 237, 0.68), 0 0 26px rgba(255, 69, 69, 0.40), 0 8px 18px rgba(0, 0, 0, 0.28);
+}
+.activeReview .decisionButton.comment {
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.18), rgba(74, 74, 74, 0.64) 52%, rgba(39, 39, 39, 0.72));
+}
+
+.activeReview.motion-full .reviewToolbar,
+.activeReview.motion-full .decisionPanel {
+  animation: nib-materialize calc(var(--motion-materialize) + var(--motion-settle)) cubic-bezier(0.33, 1, 0.68, 1) both;
+}
+
+.activeReview.motion-full.is-exiting .reviewToolbar,
+.activeReview.motion-full.is-exiting .decisionPanel {
+  animation: nib-dissolve var(--motion-exit) ease-in both;
+  pointer-events: none;
+}
+
+.activeReview.motion-reduced .reviewToolbar,
+.activeReview.motion-reduced .decisionPanel { animation: nib-fade-in var(--motion-reduced) ease-out both; }
+
+.activeReview.motion-reduced.is-exiting .reviewToolbar,
+.activeReview.motion-reduced.is-exiting .decisionPanel {
+  animation: nib-fade-out var(--motion-reduced) ease-in both;
+  pointer-events: none;
+}
+
+.activeReview.motion-off .reviewToolbar,
+.activeReview.motion-off .decisionPanel { animation: none; }
+
+.activeReview.motion-off.is-exiting .reviewToolbar,
+.activeReview.motion-off.is-exiting .decisionPanel { opacity: 0; pointer-events: none; }
+
+@keyframes nib-materialize {
+  0% { opacity: 0.05; filter: blur(8px); transform: scaleX(1.06); }
+  50% { opacity: 1; filter: blur(0); transform: scaleX(0.987); }
+  100% { opacity: 1; filter: blur(0); transform: scaleX(1); }
+}
+
+@keyframes nib-dissolve {
+  from { opacity: 1; filter: blur(0); transform: scaleX(1); }
+  to { opacity: 0; filter: blur(8px); transform: scaleX(1.06); }
+}
+
+@keyframes nib-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes nib-fade-out { from { opacity: 1; } to { opacity: 0; } }
+
+@media (max-width: 800px) {
+  .activeReview .decisionPanel { margin: 10px 12px 12px; }
+}

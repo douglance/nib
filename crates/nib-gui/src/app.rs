@@ -101,6 +101,7 @@ use crate::tools::{
     images_from_dropped_paths, Modifiers, MouseButton as ToolMouseButton, StyleState, TextTool,
     ToolContext, ToolEvent, ToolId, ToolManager, ToolMode, ToolPreview, ToolResult,
 };
+use crate::window_motion;
 use crate::zorder;
 use nib_collab::session::Session;
 use nib_collab::types::ClientType;
@@ -1455,8 +1456,7 @@ fn force_frontmost_application() {
         }
         window.setLevel(NSFloatingWindowLevel);
         window.setSharingType(NSWindowSharingType::ReadOnly);
-        window.orderFrontRegardless();
-        window.makeKeyAndOrderFront(None);
+        window_motion::show_with_entry_animation(&window);
     }
     application.activate();
     NSRunningApplication::currentApplication()
@@ -1586,6 +1586,10 @@ impl NibApp {
 
                 let window_handle = cx
                     .open_window(options, |window, cx| {
+                        window.on_window_should_close(cx, |_window, _cx| {
+                            window_motion::request_exit();
+                            false
+                        });
                         let view = cx.new(|cx| {
                             let view = EditorView::new(file_path.clone(), cx);
                             view.focus_handle.focus(window);
@@ -1696,8 +1700,6 @@ pub struct EditorView {
     sent_annotation_ids: std::collections::HashSet<u64>,
     /// Question/message from Claude to display to user
     claude_question: Option<String>,
-    /// Whether GUI should quit after sending response
-    quit_requested: bool,
 }
 
 impl EditorView {
@@ -1816,7 +1818,6 @@ impl EditorView {
             collab_session: None,
             sent_annotation_ids: std::collections::HashSet::new(),
             claude_question: None,
-            quit_requested: false,
         };
 
         view.load_annotations();
@@ -2004,7 +2005,7 @@ impl EditorView {
                         self.claude_question = None;
 
                         // Feedback is deliberately one-shot: one payload, then close.
-                        std::process::exit(0);
+                        window_motion::request_exit();
                     }
                     Err(e) => {
                         tracing::error!("Collab send failed: {}", e);
@@ -2026,7 +2027,6 @@ impl EditorView {
 
     /// Send to Claude and request GUI exit
     fn send_to_claude_and_quit(&mut self, cx: &mut Context<Self>) {
-        self.quit_requested = true;
         self.send_to_claude(cx);
     }
 
@@ -2086,8 +2086,7 @@ impl EditorView {
                 }
                 CollabMessage::RequestQuit { client_id: _ } => {
                     tracing::info!("Received quit request");
-                    self.quit_requested = true;
-                    cx.notify();
+                    window_motion::request_exit();
                 }
                 _ => {
                     // Other messages handled elsewhere or ignored

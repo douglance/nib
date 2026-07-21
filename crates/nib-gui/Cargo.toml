@@ -40,8 +40,12 @@ tokio.workspace = true
 anyhow.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSGraphics", "NSResponder", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow"] }
+objc2-core-image = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-quartz-core = "0.3.2"
 
 [dev-dependencies]
 tempfile.workspace = true
