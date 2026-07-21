@@ -99,7 +99,7 @@ struct NativeVisualReviewWorkspace: View {
                 .padding(.top, 12)
                 .padding(.bottom, 12)
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(NibTheme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden(true)
         .preferredColorScheme(.dark)
@@ -122,7 +122,7 @@ struct NativeVisualReviewWorkspace: View {
 
     private var annotationToolbar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+            HStack(spacing: 4) {
                 ForEach([NativeReviewTool.select]) { item in
                     ReviewToolButton(tool: item, selected: tool == item) {
                         tool = item
@@ -225,13 +225,13 @@ struct NativeVisualReviewWorkspace: View {
 
     private var decisionDock: some View {
         HStack(spacing: 9) {
-            decisionButton("Approve", color: Color(red: 0.20, green: 0.65, blue: 0.31)) {
+            decisionButton("Approve", color: NibTheme.green) {
                 await submit("approve", normalizedComment, annotations)
             }
-            decisionButton("Request Changes", color: Color(red: 0.82, green: 0.19, blue: 0.18)) {
+            decisionButton("Reject", color: NibTheme.red) {
                 await submit("reject", normalizedComment, annotations)
             }
-            decisionButton("Comment", color: Color(white: 0.22), disabled: normalizedComment == nil) {
+            decisionButton("Comment", color: Color(red: 0.290, green: 0.290, blue: 0.290), disabled: normalizedComment == nil) {
                 await submit("comment", normalizedComment, annotations)
             }
         }
@@ -411,7 +411,7 @@ struct ReviewToolButton: View {
                 .foregroundStyle(Color.white.opacity(0.92))
                 .frame(width: 34, height: 34)
                 .background(
-                    selected ? (tool == .select ? Color.white.opacity(0.14) : Color.blue) : Color.clear,
+                    selected ? (tool == .select ? Color.white.opacity(0.14) : NibTheme.blue) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
         }

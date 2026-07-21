@@ -10,12 +10,11 @@ purpose.
 
 ## Palette
 
-- Background: warm off-white or deep graphite, depending on system appearance.
-- Text: near-black or soft white, never pure saturated color as the main voice.
-- Surfaces: warm gray, subtle glass white, gentle borders.
-- Accents: use muted blue, deep teal, soft green, warm amber, dusty rose, or
-  charcoal only for state and selection.
-- Avoid neon, harsh primaries, saturated gradients, and decorative color fields.
+- Background: desktop graphite (`#101010`) across iPhone and Watch.
+- Text: desktop soft white (`#f2f2f2`) with `#cccccc` secondary text.
+- Surfaces: `#181818` and translucent `#2c2c2c`, with thin white hairlines.
+- Accents: desktop blue (`#0078d4`), green (`#2e7d32`), and red (`#c62828`).
+- Reserve semantic color for focus and decisions; avoid gradients.
 
 ## Typography
 

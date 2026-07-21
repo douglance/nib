@@ -489,8 +489,8 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
           <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add a comment..." />
           {submitError ? <p className="submitError">{submitError}</p> : null}
           <button className="decisionButton approve" disabled={Boolean(submitting)} onClick={() => void submit("approve")}>{submitting === "approve" ? "Sending..." : "Approve"}</button>
-          <button className="decisionButton reject" disabled={Boolean(submitting)} onClick={() => void submit("reject")}>{submitting === "reject" ? "Sending..." : "Request changes"}</button>
-          <button className="decisionButton comment" disabled={Boolean(submitting) || !comment.trim()} onClick={() => void submit("comment")}>{submitting === "comment" ? "Sending..." : "Send comment"}</button>
+          <button className="decisionButton reject" disabled={Boolean(submitting)} onClick={() => void submit("reject")}>{submitting === "reject" ? "Sending..." : "Reject"}</button>
+          <button className="decisionButton comment" disabled={Boolean(submitting) || !comment.trim()} onClick={() => void submit("comment")}>{submitting === "comment" ? "Sending..." : "Comment"}</button>
         </aside>
       </div>
     </main>
@@ -632,7 +632,7 @@ function RequestThumbnail({ request }: { request: RequestRecord }) {
 function ResponseBadge({ request }: { request: RequestRecord }) {
   const decision = request.responses[0]?.data?.decision ?? request.responses[0]?.choice ?? "Completed";
   const rejected = decision === "reject";
-  return <span className={`responseBadge ${rejected ? "rejected" : "approved"}`}>{rejected ? "Changes Requested" : decision === "comment" ? "Commented" : "Approved"}</span>;
+  return <span className={`responseBadge ${rejected ? "rejected" : "approved"}`}>{rejected ? "Rejected" : decision === "comment" ? "Commented" : "Approved"}</span>;
 }
 
 function rectangleAnnotation(start: [number, number], end: [number, number], color: string): ReviewAnnotation {

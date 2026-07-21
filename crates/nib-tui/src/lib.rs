@@ -36,6 +36,11 @@ use std::{
 // Use an 8-bit image ID so tmux clients without the RGB feature preserve the
 // placeholder foreground value instead of quantizing a 24-bit ID.
 const IMAGE_ID: u32 = 42;
+const GRAPHITE_BORDER: Color = Color::Rgb(74, 74, 74);
+const GRAPHITE_MUTED: Color = Color::Rgb(204, 204, 204);
+const NIB_BLUE: Color = Color::Rgb(0, 120, 212);
+const NIB_GREEN: Color = Color::Rgb(46, 125, 50);
+const NIB_RED: Color = Color::Rgb(198, 40, 40);
 
 #[derive(Debug, Clone)]
 pub struct ReviewRequest {
@@ -379,74 +384,116 @@ impl ReviewApp {
                     .constraints([
                         Constraint::Length(3),
                         Constraint::Min(6),
-                        Constraint::Length(if self.editing { 5 } else { 3 }),
                         Constraint::Length(2),
                     ])
                     .split(area);
-                let title = format!(" Nib review | {}x{} ", self.image_width, self.image_height);
+                let title = format!(" nib review | {}x{} ", self.image_width, self.image_height);
                 frame.render_widget(
-                    Paragraph::new(self.report.status())
-                        .block(Block::default().title(title).borders(Borders::ALL)),
+                    Paragraph::new(Span::styled(
+                        self.report.status(),
+                        Style::default().fg(NIB_GREEN),
+                    ))
+                    .block(
+                        Block::default()
+                            .title(Span::styled(title, Style::default().fg(NIB_BLUE)))
+                            .borders(Borders::ALL)
+                            .border_style(Style::default().fg(GRAPHITE_BORDER)),
+                    ),
                     rows[0],
                 );
-                image_area = rows[1].inner(ratatui::layout::Margin {
+
+                let body = if area.width >= 100 {
+                    Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
+                        .split(rows[1])
+                } else {
+                    Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Percentage(72), Constraint::Percentage(28)])
+                        .split(rows[1])
+                };
+                image_area = body[0].inner(ratatui::layout::Margin {
                     horizontal: 1,
                     vertical: 1,
                 });
                 frame.render_widget(
                     Block::default()
                         .title(" Full-quality image ")
-                        .borders(Borders::ALL),
-                    rows[1],
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(GRAPHITE_BORDER)),
+                    body[0],
                 );
                 let question = self
                     .request
                     .message
                     .as_deref()
                     .unwrap_or("Review this image");
+                let rail_rows = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Min(3),
+                        Constraint::Length(if self.editing { 7 } else { 3 }),
+                    ])
+                    .split(body[1]);
+                frame.render_widget(
+                    Paragraph::new(question)
+                        .wrap(Wrap { trim: true })
+                        .style(Style::default().fg(GRAPHITE_MUTED))
+                        .block(
+                            Block::default()
+                                .title(" Request ")
+                                .borders(Borders::ALL)
+                                .border_style(Style::default().fg(GRAPHITE_BORDER)),
+                        ),
+                    rail_rows[0],
+                );
                 if self.editing {
                     frame.render_widget(
                         Paragraph::new(self.comment.as_str())
                             .wrap(Wrap { trim: false })
                             .block(
                                 Block::default()
-                                    .title(question)
+                                    .title(" Comment | Enter sends | Esc cancels ")
                                     .borders(Borders::ALL)
-                                    .border_style(Style::default().fg(Color::Cyan)),
+                                    .border_style(Style::default().fg(NIB_BLUE)),
                             ),
-                        rows[2],
+                        rail_rows[1],
                     );
                 } else {
                     frame.render_widget(
-                        Paragraph::new(question)
-                            .wrap(Wrap { trim: true })
-                            .block(Block::default().title(" Request ").borders(Borders::ALL)),
-                        rows[2],
+                        Paragraph::new("Press c to write a response")
+                            .style(Style::default().fg(GRAPHITE_MUTED))
+                            .block(
+                                Block::default()
+                                    .title(" Comment ")
+                                    .borders(Borders::ALL)
+                                    .border_style(Style::default().fg(GRAPHITE_BORDER)),
+                            ),
+                        rail_rows[1],
                     );
                 }
                 frame.render_widget(
                     Paragraph::new(Line::from(vec![
                         Span::styled(
-                            "[a] approve",
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(Modifier::BOLD),
+                            "[a] Approve",
+                            Style::default().fg(NIB_GREEN).add_modifier(Modifier::BOLD),
                         ),
                         Span::raw("  "),
                         Span::styled(
-                            "[r] reject",
-                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                            "[r] Reject",
+                            Style::default().fg(NIB_RED).add_modifier(Modifier::BOLD),
                         ),
                         Span::raw("  "),
                         Span::styled(
-                            "[c] comment",
+                            "[c] Comment",
                             Style::default()
-                                .fg(Color::Cyan)
+                                .fg(GRAPHITE_MUTED)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::raw("  [q] cancel"),
+                        Span::raw("  [q] Cancel"),
                     ])),
-                    rows[3],
+                    rows[2],
                 );
             })?;
 

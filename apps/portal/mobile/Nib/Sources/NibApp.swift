@@ -803,7 +803,7 @@ struct NibSidebarView: View {
             .padding(.bottom, 18)
         }
         .foregroundStyle(NibTheme.text)
-        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        .background(NibTheme.background.ignoresSafeArea())
         .overlay(alignment: .trailing) {
             Rectangle()
                 .fill(NibTheme.border)
@@ -2694,16 +2694,17 @@ struct NibWebView: UIViewRepresentable {
 }
 
 enum NibTheme {
-    static let background = Color(uiColor: .systemGroupedBackground)
-    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
-    static let text = Color(uiColor: .label)
-    static let muted = Color(uiColor: .secondaryLabel)
-    static let muted2 = Color(uiColor: .tertiaryLabel)
-    static let border = Color(uiColor: .separator).opacity(0.62)
-    static let blue = Color(uiColor: .systemBlue)
-    static let green = Color(uiColor: .systemGreen)
-    static let amber = Color(uiColor: .systemOrange)
-    static let shadow = Color.black.opacity(0.12)
+    static let background = Color(red: 0.063, green: 0.063, blue: 0.063)
+    static let surface = Color(red: 0.094, green: 0.094, blue: 0.094)
+    static let text = Color(red: 0.949, green: 0.949, blue: 0.949)
+    static let muted = Color(red: 0.800, green: 0.800, blue: 0.800)
+    static let muted2 = Color(red: 0.620, green: 0.620, blue: 0.620)
+    static let border = Color.white.opacity(0.14)
+    static let blue = Color(red: 0.000, green: 0.471, blue: 0.831)
+    static let green = Color(red: 0.180, green: 0.490, blue: 0.196)
+    static let red = Color(red: 0.776, green: 0.157, blue: 0.157)
+    static let amber = Color(red: 0.718, green: 0.475, blue: 0.122)
+    static let shadow = Color.black.opacity(0.34)
 }
 
 struct NibPrimaryButtonStyle: ButtonStyle {
@@ -2713,14 +2714,7 @@ struct NibPrimaryButtonStyle: ButtonStyle {
             .foregroundStyle(.white)
             .padding(.horizontal, 16)
             .frame(minHeight: 50)
-            .background(
-                LinearGradient(
-                    colors: [Color(red: 0.220, green: 0.216, blue: 0.200), Color(red: 0.150, green: 0.146, blue: 0.135)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ),
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-            )
+            .background(Color(red: 0.290, green: 0.290, blue: 0.290), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }

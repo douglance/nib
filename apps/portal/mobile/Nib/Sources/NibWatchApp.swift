@@ -57,15 +57,15 @@ extension Notification.Name {
 }
 
 enum WatchTheme {
-    static let background = Color(red: 0.055, green: 0.052, blue: 0.047)
-    static let surface = Color(red: 0.12, green: 0.115, blue: 0.105)
-    static let surfaceSoft = Color(red: 0.17, green: 0.16, blue: 0.145)
-    static let text = Color(red: 0.96, green: 0.94, blue: 0.9)
-    static let muted = Color(red: 0.68, green: 0.65, blue: 0.59)
-    static let blue = Color(red: 0.48, green: 0.63, blue: 0.72)
-    static let green = Color(red: 0.43, green: 0.63, blue: 0.47)
-    static let amber = Color(red: 0.78, green: 0.55, blue: 0.28)
-    static let border = Color.white.opacity(0.09)
+    static let background = Color(red: 0.063, green: 0.063, blue: 0.063)
+    static let surface = Color(red: 0.094, green: 0.094, blue: 0.094)
+    static let surfaceSoft = Color(red: 0.173, green: 0.173, blue: 0.173)
+    static let text = Color(red: 0.949, green: 0.949, blue: 0.949)
+    static let muted = Color(red: 0.800, green: 0.800, blue: 0.800)
+    static let blue = Color(red: 0.000, green: 0.471, blue: 0.831)
+    static let green = Color(red: 0.180, green: 0.490, blue: 0.196)
+    static let amber = Color(red: 0.718, green: 0.475, blue: 0.122)
+    static let border = Color.white.opacity(0.14)
 }
 
 struct WatchRequestListView: View {
