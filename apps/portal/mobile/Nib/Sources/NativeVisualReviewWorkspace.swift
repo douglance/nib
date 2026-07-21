@@ -35,7 +35,6 @@ enum NativeReviewTool: String, Identifiable {
 }
 
 struct NativeVisualReviewWorkspace: View {
-    @Environment(\.dismiss) private var dismiss
     var request: NibRequest
     var imageURL: URL?
     var sending: Bool
@@ -49,15 +48,22 @@ struct NativeVisualReviewWorkspace: View {
     @State private var redoAnnotations: [NibReviewAnnotation] = []
     @State private var zoom = 1.0
     @State private var panOffset: CGSize = .zero
-    @State private var showingComment = false
     @State private var comment = ""
+    @State private var showingExpandedImage = false
     @State private var showingTextPrompt = false
     @State private var textAnnotation = ""
     @State private var textPoint: CGPoint?
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            Text(requestContent)
+                .font(.title3)
+                .lineSpacing(4)
+                .foregroundStyle(Color.white.opacity(0.96))
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 18)
+                .padding(.top, 18)
 
             NativeReviewCanvas(
                 image: image,
@@ -72,80 +78,46 @@ struct NativeVisualReviewWorkspace: View {
                     textPoint = point
                     textAnnotation = ""
                     showingTextPrompt = true
-                }
+                },
+                expand: { showingExpandedImage = true }
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(.horizontal, 14)
+            .layoutPriority(1)
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
 
             annotationToolbar
-                .padding(.horizontal, 14)
-                .padding(.top, 8)
+                .padding(.horizontal, 18)
+                .padding(.top, 14)
 
-            Text(request.prompt)
-                .font(.subheadline)
-                .foregroundStyle(Color.white.opacity(0.86))
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 16)
+            commentField
+                .padding(.horizontal, 18)
                 .padding(.top, 12)
 
             decisionDock
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 18)
                 .padding(.top, 12)
-                .padding(.bottom, 10)
+                .padding(.bottom, 12)
         }
         .background(Color.black.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .statusBarHidden(true)
         .preferredColorScheme(.dark)
         .task(id: imageURL) { await loadImage() }
+        .fullScreenCover(isPresented: $showingExpandedImage) {
+            ExpandedReviewImage(image: image, annotations: annotations)
+        }
         .alert("Add text annotation", isPresented: $showingTextPrompt) {
             TextField("Annotation", text: $textAnnotation)
             Button("Cancel", role: .cancel) {}
             Button("Add") { addTextAnnotation() }
                 .disabled(textAnnotation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
-        .sheet(isPresented: $showingComment) {
-            commentComposer
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
-                .preferredColorScheme(.dark)
-        }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Button(action: { dismiss() }) {
-                Image(systemName: "chevron.left")
-                    .font(.title2.weight(.medium))
-                    .frame(width: 36, height: 44)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Back to inbox")
-
-            Text("nib")
-                .font(.system(size: 35, weight: .black, design: .rounded))
-                .tracking(-2)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(request.title.count > 20 ? "\(request.title)..." : request.title)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 7, height: 7)
-                    Text("Connected to Dave")
-                        .font(.caption)
-                        .foregroundStyle(Color.green.opacity(0.86))
-                }
-            }
-            .frame(width: 280, alignment: .leading)
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 12)
-        .padding(.bottom, 8)
+    private var requestContent: AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return (try? AttributedString(markdown: request.prompt, options: options)) ?? AttributedString(request.prompt)
     }
 
     private var annotationToolbar: some View {
@@ -198,13 +170,13 @@ struct NativeVisualReviewWorkspace: View {
             }
             .padding(5)
         }
-        .background(Color(white: 0.94), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.white.opacity(0.22)))
+        .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.white.opacity(0.14)))
     }
 
     private var toolbarDivider: some View {
         Rectangle()
-            .fill(Color.black.opacity(0.16))
+            .fill(Color.white.opacity(0.18))
             .frame(width: 1, height: 25)
     }
 
@@ -224,7 +196,7 @@ struct NativeVisualReviewWorkspace: View {
             let item: NativeReviewTool = tool == .arrow ? .arrow : .pan
             Image(systemName: item.systemImage)
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle([.pan, .arrow].contains(tool) ? Color.white : Color.black.opacity(0.88))
+                .foregroundStyle(Color.white.opacity(0.92))
                 .frame(width: 34, height: 34)
                 .background(
                     [.pan, .arrow].contains(tool) ? Color.blue : Color.clear,
@@ -243,7 +215,7 @@ struct NativeVisualReviewWorkspace: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(disabled ? Color.black.opacity(0.48) : Color.black.opacity(0.88))
+                .foregroundStyle(disabled ? Color.white.opacity(0.28) : Color.white.opacity(0.92))
                 .frame(width: 34, height: 34)
         }
         .buttonStyle(.plain)
@@ -254,20 +226,39 @@ struct NativeVisualReviewWorkspace: View {
     private var decisionDock: some View {
         HStack(spacing: 9) {
             decisionButton("Approve", color: Color(red: 0.20, green: 0.65, blue: 0.31)) {
-                await submit("approve", nil, annotations)
+                await submit("approve", normalizedComment, annotations)
             }
-            decisionButton("Reject", color: Color(red: 0.82, green: 0.19, blue: 0.18)) {
-                await submit("reject", nil, annotations)
+            decisionButton("Request Changes", color: Color(red: 0.82, green: 0.19, blue: 0.18)) {
+                await submit("reject", normalizedComment, annotations)
             }
-            decisionButton("Comment", color: Color(white: 0.22)) {
-                showingComment = true
+            decisionButton("Comment", color: Color(white: 0.22), disabled: normalizedComment == nil) {
+                await submit("comment", normalizedComment, annotations)
             }
         }
+    }
+
+    private var commentField: some View {
+        TextField("Write a comment...", text: $comment, axis: .vertical)
+            .lineLimit(1...3)
+            .font(.body)
+            .foregroundStyle(.white)
+            .tint(.white)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.white.opacity(0.24)))
+            .accessibilityLabel("Comment text")
+    }
+
+    private var normalizedComment: String? {
+        let value = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
     }
 
     private func decisionButton(
         _ label: String,
         color: Color,
+        disabled: Bool = false,
         action: @escaping () async -> Void
     ) -> some View {
         Button {
@@ -278,7 +269,10 @@ struct NativeVisualReviewWorkspace: View {
                     ProgressView().tint(.white)
                 } else {
                     Text(label)
-                        .font(.headline)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.78)
+                        .multilineTextAlignment(.center)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -287,52 +281,8 @@ struct NativeVisualReviewWorkspace: View {
         .buttonStyle(.plain)
         .foregroundStyle(.white)
         .background(color, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .disabled(sending || !request.isActive)
+        .disabled(sending || !request.isActive || disabled)
         .accessibilityLabel(label)
-    }
-
-    private var commentComposer: some View {
-        NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Text(request.prompt)
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .lineLimit(3)
-
-                TextEditor(text: $comment)
-                    .scrollContentBackground(.hidden)
-                    .padding(10)
-                    .frame(minHeight: 150)
-                    .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(Color.white.opacity(0.12)))
-                    .accessibilityLabel("Comment text")
-
-                Button {
-                    let value = comment.trimmingCharacters(in: .whitespacesAndNewlines)
-                    Task {
-                        await submit("comment", value, annotations)
-                        showingComment = false
-                    }
-                } label: {
-                    Text("Send comment")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 50)
-                }
-                .buttonStyle(.plain)
-                .background(Color(white: 0.22), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .disabled(comment.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
-            }
-            .padding(18)
-            .background(Color.black.ignoresSafeArea())
-            .navigationTitle("Comment")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { showingComment = false }
-                }
-            }
-        }
     }
 
     private func undo() {
@@ -394,6 +344,54 @@ struct NativeVisualReviewWorkspace: View {
     }
 }
 
+private struct ExpandedReviewImage: View {
+    @Environment(\.dismiss) private var dismiss
+    var image: UIImage?
+    var annotations: [NibReviewAnnotation]
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            GeometryReader { proxy in
+                if let image {
+                    let fitted = aspectFitSize(image: image.size, container: proxy.size)
+                    ZStack {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                        NativeAnnotationOverlay(annotations: annotations, imageSize: image.size)
+                            .allowsHitTesting(false)
+                    }
+                    .frame(width: fitted.width, height: fitted.height)
+                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                }
+            }
+            .padding(12)
+
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 42, height: 42)
+                    .background(.black.opacity(0.72), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .padding(16)
+            .accessibilityLabel("Close expanded image")
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func aspectFitSize(image: CGSize, container: CGSize) -> CGSize {
+        guard image.width > 0, image.height > 0, container.width > 0, container.height > 0 else { return .zero }
+        let scale = min(container.width / image.width, container.height / image.height)
+        return CGSize(width: image.width * scale, height: image.height * scale)
+    }
+}
+
 struct ReviewToolButton: View {
     var tool: NativeReviewTool
     var selected: Bool
@@ -410,10 +408,10 @@ struct ReviewToolButton: View {
                         .font(.system(size: 16, weight: .medium))
                 }
             }
-                .foregroundStyle(selected && tool != .select ? Color.white : Color.black.opacity(0.88))
+                .foregroundStyle(Color.white.opacity(0.92))
                 .frame(width: 34, height: 34)
                 .background(
-                    selected ? (tool == .select ? Color.black.opacity(0.10) : Color.blue) : Color.clear,
+                    selected ? (tool == .select ? Color.white.opacity(0.14) : Color.blue) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
         }
@@ -433,6 +431,7 @@ struct NativeReviewCanvas: View {
     @Binding var annotations: [NibReviewAnnotation]
     @Binding var redoAnnotations: [NibReviewAnnotation]
     var requestText: (CGPoint) -> Void
+    var expand: () -> Void
 
     @State private var dragStart: CGPoint?
     @State private var dragCurrent: CGPoint?
@@ -449,6 +448,20 @@ struct NativeReviewCanvas: View {
                         .frame(width: fitted.width, height: fitted.height)
                         .scaleEffect(zoom)
                         .offset(panOffset)
+
+                    Button(action: expand) {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                            .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .position(
+                        x: (proxy.size.width + fitted.width) / 2 - 24,
+                        y: (proxy.size.height - fitted.height) / 2 + 24
+                    )
+                    .accessibilityLabel("Expand image")
                 } else if let loadError {
                     ContentUnavailableView(loadError, systemImage: "photo.badge.exclamationmark")
                         .foregroundStyle(.white)
@@ -699,4 +712,3 @@ extension Color {
         )
     }
 }
-
