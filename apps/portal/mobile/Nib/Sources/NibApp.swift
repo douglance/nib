@@ -10,11 +10,13 @@ struct NibApp: App {
     @UIApplicationDelegateAdaptor(NibAppDelegate.self) private var appDelegate
     @StateObject private var client = NibClient()
     @AppStorage("nib.baseURL") private var baseURLString = NibDefaults.defaultBaseURLString
+    @AppStorage("nib.darkMode") private var darkMode = false
 
     var body: some Scene {
         WindowGroup {
             RequestInboxView(baseURLString: $baseURLString)
                 .environmentObject(client)
+                .preferredColorScheme(darkMode ? .dark : .light)
                 .onAppear {
                     client.configure(baseURLString: baseURLString)
                 }
@@ -73,119 +75,139 @@ struct RequestInboxView: View {
     @State private var error: String?
     @State private var notice: String?
     @State private var showingSettings = false
+    @State private var showingSidebar = false
+    @State private var sidebarDestination: NibSidebarDestination?
     @State private var loading = false
     @State private var sendingTestNotification = false
-    @State private var navigationPath: [NibRequest] = []
+    @State private var selectedRequest: NibRequest?
     @State private var selectedProject: NibProject?
     @State private var safariRoute: SafariRoute?
     @State private var webRoute: WebRoute?
+    @GestureState private var sidebarDragTranslation: CGFloat = 0
     @AppStorage("nib.autoRegisteredNotifications") private var autoRegisteredNotifications = false
+    @AppStorage("nib.darkMode") private var darkMode = false
 
     private var activeRequests: [NibRequest] {
         requests.filter(\.isActive)
     }
 
+    private var historyRequests: [NibRequest] {
+        requests.filter { !$0.isActive }
+    }
+
     var body: some View {
-        NavigationStack(path: $navigationPath) {
-            ZStack {
+        NavigationStack {
+            GeometryReader { proxy in
+                let drawerWidth = min(proxy.size.width * 0.76, 380)
+                let drawerProgress = sidebarProgress(drawerWidth: drawerWidth)
+
+                ZStack(alignment: .leading) {
                 NibTheme.background.ignoresSafeArea()
-                List {
-                    Section {
-                        NibStatusSurface(
-                            activeCount: activeRequests.count,
-                            server: client.baseURL.host() ?? client.baseURL.absoluteString,
-                            deviceCount: notificationStatus?.deviceCount ?? devices.count,
-                            apnsConfigured: notificationStatus?.apnsConfigured,
-                            nativeReady: notificationStatus?.nativeReady,
-                            apnsLastError: notificationStatus?.apnsLastError,
-                            loading: loading,
-                            refresh: { Task { await load() } },
-                            configure: { showingSettings = true },
-                            register: { Task { await registerForNotifications() } }
-                        )
-                        .listRowBackground(Color.clear)
-                        .listRowSeparator(.hidden)
-                    }
-
-                    if !devices.isEmpty || notificationStatus != nil {
-                        Section {
-                            DeviceHealthSurface(
-                                devices: devices,
-                                status: notificationStatus,
-                                sendingTest: sendingTestNotification,
-                                sendTest: { Task { await sendTestNotification() } }
-                            )
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                        } header: {
-                            Text("Devices")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(NibTheme.muted)
-                        }
-                    }
-
-                    if !waitingPanes.isEmpty {
-                        Section {
-                            WaitingPaneSurface(waitingPanes: waitingPanes)
-                                .listRowBackground(Color.clear)
-                                .listRowSeparator(.hidden)
-                        } header: {
-                            Text("Waiting")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(NibTheme.muted)
-                        }
-                    }
-
-                    if !projects.isEmpty {
-                        Section {
-                            ProjectSurface(projects: projects.prefix(6).map { $0 }) { project in
-                                selectedProject = project
+                VStack(spacing: 0) {
+                    HStack(alignment: .center, spacing: 12) {
+                        Button {
+                            withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                                showingSidebar = true
                             }
-                            .listRowBackground(Color.clear)
-                            .listRowSeparator(.hidden)
-                        } header: {
-                            Text("Projects")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(NibTheme.muted)
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                                .font(.title3.weight(.semibold))
+                                .frame(width: 44, height: 44)
                         }
-                    }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(NibTheme.text)
+                        .accessibilityLabel("Open sidebar")
 
-                    Section {
-                        ForEach(requests) { request in
-                            NavigationLink(value: request) {
-                                RequestRow(request: request)
-                                    .padding(.vertical, 10)
-                            }
-                            .listRowBackground(NibTheme.surface)
-                        }
-                    } header: {
-                        Text(activeRequests.isEmpty ? "Recent" : "Waiting")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(NibTheme.muted)
+                        NibWordmark()
+                        Spacer()
                     }
+                    .padding(.leading, 10)
+                    .padding(.trailing, 20)
+                    .padding(.top, 8)
+                    .padding(.bottom, 18)
 
-                    if !activity.isEmpty {
-                        Section {
-                            ForEach(activity.prefix(4)) { event in
-                                ActivityRow(event: event)
-                                    .padding(.vertical, 8)
-                                    .listRowBackground(NibTheme.surface)
-                            }
-                        } header: {
-                            Text("Activity")
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(NibTheme.muted)
+                    if activeRequests.isEmpty {
+                        ContentUnavailableView {
+                            Label("Nothing to review", systemImage: "checkmark.circle")
+                        } description: {
+                            Text("New actionable requests will appear here.")
                         }
+                        .foregroundStyle(NibTheme.text)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 0) {
+                                Text("Ready for review")
+                                    .font(.largeTitle.weight(.bold))
+                                    .foregroundStyle(NibTheme.text)
+                                    .padding(.bottom, 18)
+
+                                ForEach(activeRequests) { request in
+                                    Button {
+                                        selectedRequest = request
+                                    } label: {
+                                        ActionableRequestRow(request: request)
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    if request.id != activeRequests.last?.id {
+                                        Divider()
+                                            .padding(.leading, 52)
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 24)
+                        }
+                        .refreshable { await load() }
                     }
                 }
-                .scrollContentBackground(.hidden)
-                .listStyle(.insetGrouped)
+
+                if drawerProgress > 0.001 {
+                    Color.black.opacity(0.42 * drawerProgress)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                                showingSidebar = false
+                            }
+                        }
+                }
+
+                NibSidebarView(
+                    serverName: serverDisplayName,
+                    deviceLine: sidebarDeviceLine,
+                    darkMode: $darkMode,
+                    close: {
+                        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                            showingSidebar = false
+                        }
+                    },
+                    open: openSidebarDestination,
+                    notifications: {
+                        showingSidebar = false
+                        Task { await registerForNotifications() }
+                    },
+                    reload: {
+                        showingSidebar = false
+                        Task { await load() }
+                    },
+                    settings: {
+                        showingSidebar = false
+                        showingSettings = true
+                    }
+                )
+                .frame(width: drawerWidth)
+                .frame(maxHeight: .infinity)
+                .offset(x: -drawerWidth * (1 - drawerProgress))
+                .shadow(color: Color.black.opacity(0.22 * drawerProgress), radius: 24, x: 10)
+                .allowsHitTesting(drawerProgress > 0.98)
             }
-            .navigationTitle("Nib")
-            .toolbarTitleDisplayMode(.large)
-            .navigationDestination(for: NibRequest.self) { request in
-                RequestDetailView(request: request)
+                .contentShape(Rectangle())
+                .simultaneousGesture(sidebarDragGesture(drawerWidth: drawerWidth))
+                .animation(.spring(response: 0.34, dampingFraction: 0.86), value: showingSidebar)
             }
+            .toolbar(.hidden, for: .navigationBar)
             .task {
                 if let server = launchArgument("nib.server") {
                     baseURLString = server
@@ -207,8 +229,40 @@ struct RequestInboxView: View {
             .refreshable { await load() }
             .sheet(isPresented: $showingSettings) {
                 NavigationStack {
-                    SettingsView(baseURLString: $baseURLString)
+                    SettingsView(
+                        baseURLString: $baseURLString,
+                        notificationStatus: notificationStatus,
+                        devices: devices,
+                        waitingPanes: waitingPanes,
+                        sendingTestNotification: sendingTestNotification,
+                        registerNotifications: { Task { await registerForNotifications() } },
+                        sendTestNotification: { Task { await sendTestNotification() } }
+                    )
                 }
+            }
+            .sheet(item: $sidebarDestination) { destination in
+                NavigationStack {
+                    sidebarContent(destination)
+                        .navigationTitle(destination.title)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { sidebarDestination = nil }
+                            }
+                        }
+                }
+            }
+            .sheet(item: $selectedRequest, onDismiss: {
+                Task { await load() }
+            }) { request in
+                RequestDetailView(request: request)
+                    .presentationDetents(
+                        request.kind == "visual-review"
+                            ? Set([.large])
+                            : Set([.medium, .large])
+                    )
+                    .presentationDragIndicator(.visible)
+                    .presentationCornerRadius(30)
             }
             .sheet(item: $safariRoute) { route in
                 SafariView(url: route.url)
@@ -255,6 +309,44 @@ struct RequestInboxView: View {
                     .padding(.bottom, 10)
             }
         }
+    }
+
+    private func sidebarProgress(drawerWidth: CGFloat) -> CGFloat {
+        guard drawerWidth > 0 else { return 0 }
+        let restingPosition = showingSidebar ? drawerWidth : 0
+        let translation = showingSidebar
+            ? min(0, sidebarDragTranslation)
+            : max(0, sidebarDragTranslation)
+        return min(max((restingPosition + translation) / drawerWidth, 0), 1)
+    }
+
+    private func sidebarDragGesture(drawerWidth: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 10, coordinateSpace: .global)
+            .updating($sidebarDragTranslation) { value, state, _ in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                guard showingSidebar || value.startLocation.x <= 28 else { return }
+                state = showingSidebar
+                    ? min(0, value.translation.width)
+                    : max(0, value.translation.width)
+            }
+            .onEnded { value in
+                guard abs(value.translation.width) > abs(value.translation.height) else { return }
+                guard showingSidebar || value.startLocation.x <= 28 else { return }
+
+                let projected = value.predictedEndTranslation.width
+                let shouldOpen: Bool
+                if showingSidebar {
+                    shouldOpen = value.translation.width > -drawerWidth * 0.28
+                        && projected > -drawerWidth * 0.55
+                } else {
+                    shouldOpen = value.translation.width > drawerWidth * 0.28
+                        || projected > drawerWidth * 0.55
+                }
+
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                    showingSidebar = shouldOpen
+                }
+            }
     }
 
     private func load() async {
@@ -332,7 +424,7 @@ struct RequestInboxView: View {
             let request = try await client.request(id: id)
             requests.removeAll { $0.id == request.id }
             requests.insert(request, at: 0)
-            navigationPath = [request]
+            selectedRequest = request
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -433,6 +525,358 @@ struct RequestInboxView: View {
         return arguments[valueIndex]
     }
 
+    private var serverDisplayName: String {
+        guard let host = URL(string: baseURLString)?.host(), !host.isEmpty else {
+            return "Nib server"
+        }
+        let name = host.split(separator: ".").first.map(String.init) ?? host
+        return name.capitalized
+    }
+
+    private var sidebarDeviceLine: String {
+        let deviceName = UIDevice.current.userInterfaceIdiom == .phone ? "iPhone" : UIDevice.current.name
+        if let lastError = notificationStatus?.apnsLastError, !lastError.isEmpty {
+            return "\(deviceName) · APNs needs attention"
+        }
+        if notificationStatus?.nativeReady == true {
+            return "\(deviceName) · APNs ready"
+        }
+        if notificationStatus?.apnsConfigured == false {
+            return "\(deviceName) · APNs not configured"
+        }
+        return "\(deviceName) · Connected"
+    }
+
+    private func openSidebarDestination(_ destination: NibSidebarDestination) {
+        showingSidebar = false
+        sidebarDestination = destination
+    }
+
+    @ViewBuilder
+    private func sidebarContent(_ destination: NibSidebarDestination) -> some View {
+        switch destination {
+        case .projects:
+            ScrollView {
+                ProjectSurface(projects: projects) { project in
+                    sidebarDestination = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        selectedProject = project
+                    }
+                }
+                .padding(20)
+            }
+            .background(NibTheme.background)
+        case .devices:
+            SidebarDevicesView(devices: devices, status: notificationStatus)
+                .background(NibTheme.background)
+        case .history:
+            if historyRequests.isEmpty {
+                ContentUnavailableView("No history yet", systemImage: "clock.arrow.circlepath")
+                    .background(NibTheme.background)
+            } else {
+                List(historyRequests) { request in
+                    Button {
+                        sidebarDestination = nil
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                            selectedRequest = request
+                        }
+                    } label: {
+                        RequestRow(request: request)
+                            .padding(.vertical, 6)
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(NibTheme.surface)
+                }
+                .scrollContentBackground(.hidden)
+                .background(NibTheme.background)
+            }
+        case .activity:
+            if activity.isEmpty && waitingPanes.isEmpty {
+                ContentUnavailableView("No recent activity", systemImage: "waveform.path.ecg")
+                    .background(NibTheme.background)
+            } else {
+                List {
+                    if !waitingPanes.isEmpty {
+                        Section("Waiting") {
+                            ForEach(waitingPanes) { pane in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(pane.reason)
+                                        .font(.subheadline.weight(.semibold))
+                                    Text("\(pane.session):\(pane.paneId)")
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(NibTheme.muted)
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                    }
+                    if !activity.isEmpty {
+                        Section("Recent") {
+                            ForEach(activity) { event in
+                                ActivityRow(event: event)
+                                    .padding(.vertical, 5)
+                            }
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .background(NibTheme.background)
+            }
+        }
+    }
+
+}
+
+enum NibSidebarDestination: String, Identifiable, CaseIterable {
+    case projects
+    case devices
+    case history
+    case activity
+
+    var id: String { rawValue }
+
+    var title: String {
+        rawValue.capitalized
+    }
+
+    var icon: String {
+        switch self {
+        case .projects: return "folder"
+        case .devices: return "iphone"
+        case .history: return "clock"
+        case .activity: return "chart.line.uptrend.xyaxis"
+        }
+    }
+}
+
+struct NibWordmark: View {
+    var body: some View {
+        Text("nib")
+            .font(.system(size: 30, weight: .black, design: .rounded))
+            .tracking(-1.5)
+            .foregroundStyle(NibTheme.text)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+struct ActionableRequestRow: View {
+    var request: NibRequest
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(NibTheme.blue)
+                .frame(width: 38, height: 38)
+                .background(NibTheme.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(request.title)
+                    .font(.headline)
+                    .foregroundStyle(NibTheme.text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(request.prompt)
+                    .font(.subheadline)
+                    .foregroundStyle(NibTheme.muted)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(NibTheme.muted2)
+                    .lineLimit(1)
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(NibTheme.muted2)
+                .padding(.top, 12)
+        }
+        .padding(.vertical, 16)
+        .contentShape(Rectangle())
+    }
+
+    private var detail: String {
+        if let projectName = request.target.projectName, !projectName.isEmpty {
+            return projectName
+        }
+        return request.kind.replacingOccurrences(of: "-", with: " ").capitalized
+    }
+
+    private var icon: String {
+        switch request.kind {
+        case "visual-review": return "photo"
+        case "choice": return "list.bullet.circle"
+        case "confirmation": return "checkmark.circle"
+        default: return "text.bubble"
+        }
+    }
+}
+
+struct NibSidebarView: View {
+    var serverName: String
+    var deviceLine: String
+    @Binding var darkMode: Bool
+    var close: () -> Void
+    var open: (NibSidebarDestination) -> Void
+    var notifications: () -> Void
+    var reload: () -> Void
+    var settings: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                NibWordmark()
+                Spacer()
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(.body.weight(.semibold))
+                        .frame(width: 44, height: 44)
+                        .background(NibTheme.surface, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close sidebar")
+            }
+            .padding(.leading, 20)
+            .padding(.trailing, 10)
+            .padding(.top, 8)
+
+            HStack(alignment: .top, spacing: 10) {
+                Circle()
+                    .fill(deviceLine.contains("ready") || deviceLine.contains("Connected") ? NibTheme.green : NibTheme.amber)
+                    .frame(width: 9, height: 9)
+                    .padding(.top, 5)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Connected to \(serverName)")
+                        .font(.subheadline.weight(.semibold))
+                    Text(deviceLine)
+                        .font(.caption)
+                        .foregroundStyle(NibTheme.muted)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 22)
+
+            VStack(spacing: 0) {
+                ForEach(Array(NibSidebarDestination.allCases.enumerated()), id: \.element.id) { index, destination in
+                    NibSidebarRow(title: destination.title, icon: destination.icon) {
+                        open(destination)
+                    }
+                    if index < NibSidebarDestination.allCases.count - 1 {
+                        Divider()
+                            .padding(.leading, 50)
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+
+            Spacer(minLength: 20)
+
+            Divider()
+                .padding(.horizontal, 20)
+
+            VStack(spacing: 0) {
+                NibSidebarRow(title: "Notifications", icon: "bell") {
+                    notifications()
+                }
+                Divider()
+                    .padding(.leading, 50)
+                NibSidebarRow(title: "Reload", icon: "arrow.clockwise") {
+                    reload()
+                }
+                Divider()
+                    .padding(.leading, 50)
+                NibSidebarRow(title: "Settings", icon: "gearshape") {
+                    settings()
+                }
+                Toggle(isOn: $darkMode) {
+                    Text("Dark Mode")
+                        .font(.body.weight(.medium))
+                }
+                .tint(NibTheme.green)
+                .frame(minHeight: 50)
+                .padding(.horizontal, 14)
+                .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .padding(.top, 10)
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 18)
+        }
+        .foregroundStyle(NibTheme.text)
+        .background(Color(uiColor: .systemBackground).ignoresSafeArea())
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(NibTheme.border)
+                .frame(width: 0.5)
+        }
+    }
+}
+
+struct NibSidebarRow: View {
+    var title: String
+    var icon: String
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .font(.body.weight(.medium))
+                .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct SidebarDevicesView: View {
+    var devices: [NibDevice]
+    var status: NibNotificationStatus?
+
+    var body: some View {
+        Group {
+            if devices.isEmpty {
+                ContentUnavailableView("No devices", systemImage: "iphone.slash")
+            } else {
+                List(devices) { device in
+                    HStack(spacing: 14) {
+                        Image(systemName: icon(for: device.platform))
+                            .font(.title3)
+                            .foregroundStyle(device.lastError == nil ? NibTheme.green : NibTheme.amber)
+                            .frame(width: 30)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(device.name)
+                                .font(.headline)
+                            Text(deviceStatus(device))
+                                .font(.caption)
+                                .foregroundStyle(device.lastError == nil ? NibTheme.muted : NibTheme.amber)
+                        }
+                    }
+                    .padding(.vertical, 5)
+                    .listRowBackground(NibTheme.surface)
+                }
+                .scrollContentBackground(.hidden)
+            }
+        }
+    }
+
+    private func icon(for platform: String) -> String {
+        switch platform {
+        case "ios": return "iphone"
+        case "macos": return "macbook"
+        case "watchos": return "applewatch"
+        default: return "display"
+        }
+    }
+
+    private func deviceStatus(_ device: NibDevice) -> String {
+        if let error = device.lastError, !error.isEmpty {
+            return "Delivery error"
+        }
+        if device.pushKind == "apns" {
+            return status?.nativeReady == true ? "APNs ready" : "APNs connected"
+        }
+        return device.platform.capitalized
+    }
 }
 
 struct NibStatusSurface: View {
@@ -1565,6 +2009,7 @@ struct RequestRow: View {
 
 struct RequestDetailView: View {
     @EnvironmentObject private var client: NibClient
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
     @State var request: NibRequest
     @State private var reply = ""
@@ -1715,6 +2160,7 @@ struct RequestDetailView: View {
             reply = ""
             notice = "Response sent."
             error = nil
+            dismiss()
         } catch {
             self.error = error.localizedDescription
         }
@@ -1736,6 +2182,7 @@ struct RequestDetailView: View {
             )
             notice = decision == "approve" ? "Approved." : decision == "reject" ? "Rejected." : "Comment sent."
             error = nil
+            dismiss()
         } catch {
             self.error = error.localizedDescription
         }
@@ -2040,9 +2487,23 @@ struct NativeImageViewer: View {
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var baseURLString: String
+    var notificationStatus: NibNotificationStatus?
+    var devices: [NibDevice]
+    var waitingPanes: [NibWaitingPane]
+    var sendingTestNotification: Bool
+    var registerNotifications: () -> Void
+    var sendTestNotification: () -> Void
+    @AppStorage("nib.darkMode") private var darkMode = false
+    @State private var diagnosticsExpanded = false
 
     var body: some View {
         Form {
+            Section("Appearance") {
+                Toggle(isOn: $darkMode) {
+                    Label("Dark Mode", systemImage: darkMode ? "moon.fill" : "sun.max")
+                }
+            }
+
             Section {
                 TextField("Server URL", text: $baseURLString)
                     .textInputAutocapitalization(.never)
@@ -2051,13 +2512,62 @@ struct SettingsView: View {
             } footer: {
                 Text("Use the same nib server URL that web, CLI, and notifications use.")
             }
+
+            Section("Advanced") {
+                DisclosureGroup("Diagnostics", isExpanded: $diagnosticsExpanded) {
+                    LabeledContent("App", value: Bundle.main.bundleIdentifier ?? "Unknown")
+                    LabeledContent("Push entitlement", value: NibEntitlements.hasAPSEnvironment ? "Present" : "Missing")
+                    LabeledContent("Registered devices", value: "\(devices.count)")
+                    LabeledContent("APNs", value: apnsState)
+                    LabeledContent("Waiting panes", value: "\(waitingPanes.count)")
+
+                    if let environment = notificationStatus?.apnsEnvironment, !environment.isEmpty {
+                        LabeledContent("Environment", value: environment)
+                    }
+                    if let topic = notificationStatus?.apnsTopic, !topic.isEmpty {
+                        LabeledContent("Topic", value: topic)
+                    }
+                    if let issue = notificationStatus?.apnsLastError, !issue.isEmpty {
+                        Text(issue)
+                            .font(.caption)
+                            .foregroundStyle(NibTheme.amber)
+                            .textSelection(.enabled)
+                    }
+
+                    Button("Register notifications", action: registerNotifications)
+                    Button(action: sendTestNotification) {
+                        if sendingTestNotification {
+                            HStack {
+                                ProgressView()
+                                Text("Sending test")
+                            }
+                        } else {
+                            Text("Send test notification")
+                        }
+                    }
+                    .disabled(sendingTestNotification)
+                }
+            }
         }
-        .navigationTitle("Server")
+        .navigationTitle("Settings")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { dismiss() }
             }
         }
+    }
+
+    private var apnsState: String {
+        if let error = notificationStatus?.apnsLastError, !error.isEmpty {
+            return "Error"
+        }
+        if notificationStatus?.nativeReady == true {
+            return "Ready"
+        }
+        if notificationStatus?.apnsConfigured == true {
+            return "Configured"
+        }
+        return "Not configured"
     }
 }
 
@@ -2183,258 +2693,17 @@ struct NibWebView: UIViewRepresentable {
     }
 }
 
-enum NibNotificationActions {
-    static let open = "NIB_OPEN"
-    static let choice0 = "NIB_CHOICE_0"
-    static let choice1 = "NIB_CHOICE_1"
-    static let choice2 = "NIB_CHOICE_2"
-    static let text = "NIB_TEXT_REPLY"
-    private static let pendingRequestKey = "nib.pendingNotification.requestId"
-    private static let pendingProjectKey = "nib.pendingNotification.projectId"
-    private static let pendingURLKey = "nib.pendingNotification.url"
-
-    static func register() {
-        let openAction = UNNotificationAction(identifier: open, title: "Open", options: [.foreground])
-        let firstAction = UNNotificationAction(identifier: choice0, title: "First", options: [])
-        let secondAction = UNNotificationAction(identifier: choice1, title: "Second", options: [])
-        let thirdAction = UNNotificationAction(identifier: choice2, title: "Third", options: [])
-        let textAction = UNTextInputNotificationAction(
-            identifier: text,
-            title: "Reply",
-            options: [],
-            textInputButtonTitle: "Send",
-            textInputPlaceholder: "Reply"
-        )
-        var categories = [
-            UNNotificationCategory(identifier: "NIB_OPEN", actions: [openAction], intentIdentifiers: []),
-            choiceCategory("NIB_APPROVAL", "Approve", "Hold", openAction),
-            UNNotificationCategory(identifier: "NIB_CHOICE", actions: [firstAction, secondAction, thirdAction, textAction, openAction], intentIdentifiers: []),
-            UNNotificationCategory(identifier: "NIB_TEXT", actions: [textAction, openAction], intentIdentifiers: [])
-        ]
-        categories.append(contentsOf: choiceCategories(openAction: openAction))
-        UNUserNotificationCenter.current().setNotificationCategories(Set(categories))
-    }
-
-    private static func choiceCategories(openAction: UNNotificationAction) -> [UNNotificationCategory] {
-        [
-            threeChoiceCategory("NIB_SHIP_HOLD_REVISE", "Ship", "Hold", "Revise", openAction),
-            choiceCategory("NIB_APPROVE_HOLD", "Approve", "Hold", openAction),
-            choiceCategory("NIB_APPROVE_REJECT", "Approve", "Reject", openAction),
-            choiceCategory("NIB_ALLOW_DENY", "Allow", "Deny", openAction),
-            choiceCategory("NIB_YES_NO", "Yes", "No", openAction),
-            choiceCategory("NIB_SHIP_HOLD", "Ship", "Hold", openAction),
-            choiceCategory("NIB_USE_REVISE", "Use it", "Revise", openAction)
-        ]
-    }
-
-    private static func choiceCategory(
-        _ identifier: String,
-        _ firstTitle: String,
-        _ secondTitle: String,
-        _ openAction: UNNotificationAction
-    ) -> UNNotificationCategory {
-        UNNotificationCategory(
-            identifier: identifier,
-            actions: [
-                UNNotificationAction(identifier: choice0, title: firstTitle, options: []),
-                UNNotificationAction(identifier: choice1, title: secondTitle, options: []),
-                openAction
-            ],
-            intentIdentifiers: []
-        )
-    }
-
-    private static func threeChoiceCategory(
-        _ identifier: String,
-        _ firstTitle: String,
-        _ secondTitle: String,
-        _ thirdTitle: String,
-        _ openAction: UNNotificationAction
-    ) -> UNNotificationCategory {
-        UNNotificationCategory(
-            identifier: identifier,
-            actions: [
-                UNNotificationAction(identifier: choice0, title: firstTitle, options: []),
-                UNNotificationAction(identifier: choice1, title: secondTitle, options: []),
-                UNNotificationAction(identifier: choice2, title: thirdTitle, options: []),
-                openAction
-            ],
-            intentIdentifiers: []
-        )
-    }
-
-    @MainActor
-    static func handle(response: UNNotificationResponse) async {
-        let payload = nibPayload(from: response.notification.request.content.userInfo)
-        if response.actionIdentifier == UNNotificationDefaultActionIdentifier || response.actionIdentifier == open {
-            guard let requestId = payload["requestId"] as? String else {
-                await openPayload(payload)
-                return
-            }
-            storePendingRequestId(requestId)
-            await markClicked(requestId: requestId)
-            await MainActor.run {
-                NotificationCenter.default.post(name: .nibOpenRequest, object: requestId)
-            }
-            return
-        }
-        guard let requestId = payload["requestId"] as? String else {
-            await openPayload(payload)
-            return
-        }
-        if response.actionIdentifier == choice0 {
-            await respond(requestId: requestId, body: ["choiceIndex": 0, "deviceId": "ios-notification"])
-            return
-        }
-        if response.actionIdentifier == choice1 {
-            await respond(requestId: requestId, body: ["choiceIndex": 1, "deviceId": "ios-notification"])
-            return
-        }
-        if response.actionIdentifier == choice2 {
-            await respond(requestId: requestId, body: ["choiceIndex": 2, "deviceId": "ios-notification"])
-            return
-        }
-        if response.actionIdentifier == text, let textResponse = response as? UNTextInputNotificationResponse {
-            let value = textResponse.userText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !value.isEmpty else { return }
-            await respond(requestId: requestId, body: ["text": value, "deviceId": "ios-notification"])
-        }
-    }
-
-    @MainActor
-    private static func openPayload(_ payload: [String: Any]) async {
-        if let feedbackId = payload["feedbackId"] as? String, !feedbackId.isEmpty {
-            await markFeedbackClicked(feedbackId: feedbackId)
-        }
-        if let projectId = payload["projectId"] as? String, !projectId.isEmpty {
-            storePendingProjectId(projectId)
-            await MainActor.run {
-                NotificationCenter.default.post(name: .nibOpenProject, object: projectId)
-            }
-            return
-        }
-        if let url = payloadURL(payload) {
-            storePendingWebURL(url)
-            await MainActor.run {
-                NotificationCenter.default.post(name: .nibOpenWebURL, object: url)
-            }
-        }
-    }
-
-    static func consumePendingRequestId() -> String? {
-        consumePendingString(pendingRequestKey)
-    }
-
-    static func consumePendingProjectId() -> String? {
-        consumePendingString(pendingProjectKey)
-    }
-
-    static func consumePendingWebURL() -> URL? {
-        guard let value = consumePendingString(pendingURLKey) else { return nil }
-        return URL(string: value)
-    }
-
-    static func clearPendingRequestId(_ requestId: String) {
-        clearPendingString(pendingRequestKey, matching: requestId)
-    }
-
-    static func clearPendingProjectId(_ projectId: String) {
-        clearPendingString(pendingProjectKey, matching: projectId)
-    }
-
-    static func clearPendingWebURL(_ url: URL) {
-        clearPendingString(pendingURLKey, matching: url.absoluteString)
-    }
-
-    private static func nibPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
-        if let payload = userInfo["nib"] as? [String: Any] {
-            return payload
-        }
-        if let payload = userInfo["nib"] as? NSDictionary {
-            return payload as? [String: Any] ?? [:]
-        }
-        return userInfo.reduce(into: [String: Any]()) { result, item in
-            if let key = item.key as? String {
-                result[key] = item.value
-            }
-        }
-    }
-
-    private static func markClicked(requestId: String) async {
-        guard let url = endpoint("/api/requests/\(requestId)/notification-click") else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        _ = try? await URLSession.shared.data(for: request)
-    }
-
-    private static func markFeedbackClicked(feedbackId: String) async {
-        guard let url = endpoint("/api/feedback/\(feedbackId)/notification-click") else { return }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        _ = try? await URLSession.shared.data(for: request)
-    }
-
-    private static func respond(requestId: String, body: [String: Any]) async {
-        guard let url = endpoint("/api/requests/\(requestId)/respond"),
-              JSONSerialization.isValidJSONObject(body),
-              let data = try? JSONSerialization.data(withJSONObject: body)
-        else {
-            return
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "content-type")
-        request.httpBody = data
-        _ = try? await URLSession.shared.data(for: request)
-    }
-
-    private static func endpoint(_ path: String) -> URL? {
-        let base = UserDefaults.standard.string(forKey: "nib.baseURL") ?? NibDefaults.defaultBaseURLString
-        return URL(string: path, relativeTo: URL(string: base))?.absoluteURL
-    }
-
-    private static func payloadURL(_ payload: [String: Any]) -> URL? {
-        guard let value = payload["url"] as? String, !value.isEmpty else { return nil }
-        return endpoint(value)
-    }
-
-    private static func storePendingRequestId(_ requestId: String) {
-        UserDefaults.standard.set(requestId, forKey: pendingRequestKey)
-    }
-
-    private static func storePendingProjectId(_ projectId: String) {
-        UserDefaults.standard.set(projectId, forKey: pendingProjectKey)
-    }
-
-    private static func storePendingWebURL(_ url: URL) {
-        UserDefaults.standard.set(url.absoluteString, forKey: pendingURLKey)
-    }
-
-    private static func consumePendingString(_ key: String) -> String? {
-        let defaults = UserDefaults.standard
-        guard let value = defaults.string(forKey: key), !value.isEmpty else { return nil }
-        defaults.removeObject(forKey: key)
-        return value
-    }
-
-    private static func clearPendingString(_ key: String, matching value: String) {
-        let defaults = UserDefaults.standard
-        guard defaults.string(forKey: key) == value else { return }
-        defaults.removeObject(forKey: key)
-    }
-}
-
 enum NibTheme {
-    static let background = Color(red: 0.956, green: 0.944, blue: 0.918)
-    static let surface = Color(red: 0.992, green: 0.984, blue: 0.960)
-    static let text = Color(red: 0.142, green: 0.137, blue: 0.123)
-    static let muted = Color(red: 0.435, green: 0.416, blue: 0.384)
-    static let muted2 = Color(red: 0.568, green: 0.541, blue: 0.502)
-    static let border = Color(red: 0.850, green: 0.820, blue: 0.768)
-    static let blue = Color(red: 0.350, green: 0.498, blue: 0.600)
-    static let green = Color(red: 0.368, green: 0.541, blue: 0.424)
-    static let amber = Color(red: 0.718, green: 0.506, blue: 0.239)
-    static let shadow = Color.black.opacity(0.08)
+    static let background = Color(uiColor: .systemGroupedBackground)
+    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
+    static let text = Color(uiColor: .label)
+    static let muted = Color(uiColor: .secondaryLabel)
+    static let muted2 = Color(uiColor: .tertiaryLabel)
+    static let border = Color(uiColor: .separator).opacity(0.62)
+    static let blue = Color(uiColor: .systemBlue)
+    static let green = Color(uiColor: .systemGreen)
+    static let amber = Color(uiColor: .systemOrange)
+    static let shadow = Color.black.opacity(0.12)
 }
 
 struct NibPrimaryButtonStyle: ButtonStyle {
