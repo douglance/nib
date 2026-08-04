@@ -2746,7 +2746,7 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
         FeedbackUi::Native => {
             let value = run_native_feedback_value(args).await?;
             println!("{}", serde_json::to_string(&value).unwrap_or_default());
-            return Ok(());
+            Ok(())
         }
         FeedbackUi::Terminal => return run_terminal_feedback(args).await,
         FeedbackUi::Web => {
@@ -2755,7 +2755,7 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
                 .map_err(|error| crate::core::NibError::Other(error.to_string()))
         }
         FeedbackUi::Auto => match super::web_feedback::run(args).await {
-            Ok(()) => return Ok(()),
+            Ok(()) => Ok(()),
             Err(error) if error.allows_local_fallback() => {
                 tracing::warn!("Web review unavailable; using a local reviewer: {error}");
                 if std::env::var_os("TMUX").is_some() && nib_tui::TerminalReport::detect().is_ok() {
@@ -2765,7 +2765,7 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
                 println!("{}", serde_json::to_string(&value).unwrap_or_default());
                 Ok(())
             }
-            Err(error) => return Err(crate::core::NibError::Other(error.to_string())),
+            Err(error) => Err(crate::core::NibError::Other(error.to_string())),
         },
     }
 }

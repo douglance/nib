@@ -100,7 +100,7 @@ fn nearest_snap(candidates: &[f64], targets: &[f64], threshold: f64) -> Option<(
         for &t in targets {
             let d = t - c;
             let ad = d.abs();
-            if ad <= threshold && best.map_or(true, |(bd, _, _)| ad < bd) {
+            if ad <= threshold && best.is_none_or(|(bd, _, _)| ad < bd) {
                 best = Some((ad, d, t));
             }
         }

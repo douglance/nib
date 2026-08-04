@@ -9,3 +9,9 @@ too-many-lines-threshold = 40
 
 # Maximum function arguments (default: 7)
 too-many-arguments-threshold = 6
+
+# Maximum Err-variant size before `result_large_err` fires (default: 128).
+# Incurs command handlers return `incurs::output::CommandResult` as their error
+# type by design, and it exceeds the default. It is a third-party type, so
+# boxing it at every call site would be churn rather than a fix.
+large-error-threshold = 256
