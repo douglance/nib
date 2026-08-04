@@ -250,21 +250,19 @@ async fn run_generate(
     let mut response = generator
         .generate(request, tenant_id, trial_network)
         .await?;
-    if !remote_request {
-        if let Some(image) = response.image.take() {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(image.data)
-                .map_err(|_| VisualizeError::InvalidReferenceData)?;
-            let path = string_option(&context.options, "output")
-                .unwrap_or_else(|| default_output_path(response.format));
-            tokio::fs::write(&path, bytes)
-                .await
-                .map_err(|source| VisualizeError::OutputWrite {
-                    path: path.clone(),
-                    source,
-                })?;
-            response.output_path = Some(path);
-        }
+    if !remote_request && let Some(image) = response.image.take() {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(image.data)
+            .map_err(|_| VisualizeError::InvalidReferenceData)?;
+        let path = string_option(&context.options, "output")
+            .unwrap_or_else(|| default_output_path(response.format));
+        tokio::fs::write(&path, bytes)
+            .await
+            .map_err(|source| VisualizeError::OutputWrite {
+                path: path.clone(),
+                source,
+            })?;
+        response.output_path = Some(path);
     }
     Ok(response)
 }

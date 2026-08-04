@@ -25,10 +25,10 @@ impl HttpGenerator {
             "https://visualize.doug-lance.workers.dev/internal/v1/generate".to_string()
         });
         let mut headers = HeaderMap::new();
-        if let Ok(tenant_id) = std::env::var("VISUALIZE_DEV_TENANT") {
-            if let Some(value) = development_tenant_header(&endpoint, Some(&tenant_id))? {
-                headers.insert("x-visualize-dev-tenant", value);
-            }
+        if let Ok(tenant_id) = std::env::var("VISUALIZE_DEV_TENANT")
+            && let Some(value) = development_tenant_header(&endpoint, Some(&tenant_id))?
+        {
+            headers.insert("x-visualize-dev-tenant", value);
         }
         if let Ok(token) = std::env::var("VISUALIZE_ACCESS_TOKEN") {
             headers.insert(
