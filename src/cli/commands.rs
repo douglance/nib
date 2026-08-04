@@ -2710,14 +2710,6 @@ pub fn run_windows(args: &WindowsArgs) -> Result<()> {
     Ok(())
 }
 
-/// Run the MCP server for Claude Code integration
-#[cfg(feature = "mcp")]
-pub async fn run_mcp_server(args: &McpServerArgs) -> Result<()> {
-    tracing::info!(?args, "Starting MCP server");
-
-    crate::mcp::run_mcp_server(args.image.clone()).await
-}
-
 /// Ask human for visual feedback via GUI
 ///
 /// This command is optimized for Claude-human collaboration:

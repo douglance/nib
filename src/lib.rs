@@ -40,8 +40,6 @@ pub mod external;
 pub mod grid;
 #[cfg(feature = "gui")]
 pub mod gui;
-#[cfg(feature = "mcp")]
-pub mod mcp;
 pub mod media;
 #[cfg(feature = "ocr")]
 pub mod ocr;

@@ -23,21 +23,13 @@ async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
     }
 
     let argv = std::env::args().skip(1).collect::<Vec<_>>();
-    if argv.iter().any(|argument| argument == "--mcp") {
-        if argv.len() != 1 {
-            return Err("`--mcp` cannot be combined with a Nib command".into());
-        }
-        init_logging(0, true);
-        #[cfg(feature = "mcp")]
-        {
-            return cli::run_mcp_server(&cli::McpServerArgs { image: None })
-                .await
-                .map_err(Into::into);
-        }
-        #[cfg(not(feature = "mcp"))]
-        {
-            return Err("MCP support is not enabled; rebuild with --features mcp".into());
-        }
+
+    // Incurs owns `--mcp` and serves the whole command catalog over MCP. The
+    // only thing left to do here is keep the log level down, because the stdio
+    // transport shares this process.
+    let serving_mcp = argv.iter().any(|argument| argument == "--mcp");
+    if serving_mcp && argv.len() != 1 {
+        return Err("`--mcp` cannot be combined with a Nib command".into());
     }
 
     let verbosity = argv.iter().fold(0usize, |count, argument| {
@@ -52,7 +44,7 @@ async fn run() -> std::result::Result<(), Box<dyn std::error::Error>> {
             count
         }
     });
-    init_logging(verbosity, false);
+    init_logging(verbosity, serving_mcp);
 
     if !is_side_effect_free_builtin(&argv) {
         storage::init_storage()?;

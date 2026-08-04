@@ -805,12 +805,6 @@ pub struct WindowsArgs {
     pub json: bool,
 }
 
-#[derive(Parser, Debug)]
-pub struct McpServerArgs {
-    /// Optional image file to work with
-    pub image: Option<PathBuf>,
-}
-
 #[derive(Debug, Clone, ValueEnum)]
 pub enum OutputFormat {
     Text,

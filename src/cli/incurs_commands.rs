@@ -432,6 +432,7 @@ impl CommandHandler for FeedbackHandler {
                 Ok(()) => CommandResult::Ok {
                     data: json!({"completed": true}),
                     cta: None,
+                    exit_code: None,
                 },
                 Err(command_error) => error(command_error),
             }
@@ -458,6 +459,7 @@ impl CommandHandler for ReviewHandler {
             Ok(()) => CommandResult::Ok {
                 data: json!({"completed": true}),
                 cta: None,
+                exit_code: None,
             },
             Err(err) => error(err),
         }
@@ -495,6 +497,7 @@ impl CommandHandler for AwaitSubmitHandler {
             Ok(()) => CommandResult::Ok {
                 data: json!({"completed": true}),
                 cta: None,
+                exit_code: None,
             },
             Err(err) => error(err),
         }
@@ -503,7 +506,11 @@ impl CommandHandler for AwaitSubmitHandler {
 
 fn ok(value: impl serde::Serialize) -> CommandResult {
     match serde_json::to_value(value) {
-        Ok(data) => CommandResult::Ok { data, cta: None },
+        Ok(data) => CommandResult::Ok {
+            data,
+            cta: None,
+            exit_code: None,
+        },
         Err(serialization_error) => error(serialization_error),
     }
 }
@@ -742,6 +749,7 @@ fn command_with_policy(
                     open_world_hint: Some(policy.open_world),
                 }),
                 destructive: policy.destructive,
+                result_content: vec![],
             },
         }),
         middleware: vec![],
@@ -807,6 +815,7 @@ fn mcp_options(policy: Policy) -> McpCommandOptions {
             open_world_hint: Some(policy.open_world),
         }),
         destructive: policy.destructive,
+        result_content: vec![],
     }
 }
 
