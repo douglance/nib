@@ -1,0 +1,9 @@
+.git
+.wrangler
+node_modules
+target
+site/target
+site/.topcoat
+*.png
+*.jpg
+*.webp
