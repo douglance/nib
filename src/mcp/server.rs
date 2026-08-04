@@ -2,17 +2,25 @@
 //!
 //! Provides tools for Claude to interact with Nib annotations.
 
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashSet};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use base64::{engine::general_purpose, Engine as _};
+use incurs::tool::{ToolCallOptions, ToolCallOutcome, ToolCatalog, ToolDefinition};
+use incurs_codemode::{CodeMode, IncurConnector};
+use incurs_codemode_local::{LocalCodeModeService, LocalExecutor};
+use incurs_codemode_mcp::{CodeModeMcpServer, TOOL_NAMES as CODE_MODE_TOOL_NAMES};
 use rmcp::{
     handler::server::tool::{ToolCallContext, ToolRouter},
     handler::server::wrapper::Parameters,
     model::*,
     service::{RequestContext, ServiceExt},
+    task_handler,
+    task_manager::OperationProcessor,
     tool, tool_router,
     transport::stdio,
     ErrorData as McpError, RoleServer, ServerHandler,
@@ -30,6 +38,38 @@ use crate::{
 use super::tools::*;
 use super::watcher::AnnotationWatcher;
 
+const REQUEST_TASK_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
+const REQUEST_TASK_POLL_INTERVAL_MS: u64 = 1_500;
+
+fn request_task(task_id: String, status: TaskStatus, status_message: Option<&str>) -> Task {
+    let timestamp = rmcp::task_manager::current_timestamp();
+    let mut task = Task::new(task_id, status, timestamp.clone(), timestamp)
+        .with_ttl(REQUEST_TASK_TTL_MS)
+        .with_poll_interval(REQUEST_TASK_POLL_INTERVAL_MS);
+    if let Some(message) = status_message {
+        task = task.with_status_message(message);
+    }
+    task
+}
+
+fn completed_task_status(result: &rmcp::task_manager::TaskResult) -> TaskStatus {
+    match &result.result {
+        Ok(transport) => transport
+            .as_any()
+            .downcast_ref::<rmcp::task_manager::ToolCallTaskResult>()
+            .map(|tool| {
+                if tool.result.is_ok() {
+                    TaskStatus::Completed
+                } else {
+                    TaskStatus::Failed
+                }
+            })
+            .unwrap_or(TaskStatus::Completed),
+        Err(error) if error.to_string().contains("cancelled") => TaskStatus::Cancelled,
+        Err(_) => TaskStatus::Failed,
+    }
+}
+
 /// MCP Server for Nib annotations
 #[derive(Clone)]
 pub struct NibMcpServer {
@@ -40,16 +80,26 @@ pub struct NibMcpServer {
     tool_router: ToolRouter<Self>,
     /// Annotation watcher for file change events
     watcher: Arc<Mutex<Option<AnnotationWatcher>>>,
+    /// Task state for durable request waiters
+    processor: Arc<Mutex<OperationProcessor>>,
+    /// Incurs Code Mode lifecycle served through the same MCP connection
+    code_mode: Option<CodeModeMcpServer>,
+    /// Canonical Incurs catalog used for direct MCP commands and Code Mode
+    catalog: Option<ToolCatalog>,
 }
 
 #[tool_router]
 impl NibMcpServer {
     pub fn new() -> Self {
         let watcher = AnnotationWatcher::new().ok();
+        let (catalog, code_mode) = build_catalog_and_code_mode();
         Self {
             current_image: Arc::new(Mutex::new(None)),
             tool_router: Self::tool_router(),
             watcher: Arc::new(Mutex::new(watcher)),
+            processor: Arc::new(Mutex::new(OperationProcessor::new())),
+            code_mode,
+            catalog,
         }
     }
 
@@ -65,7 +115,7 @@ impl NibMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let image_path = PathBuf::from(&request.image_path);
         if !image_path.exists() {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: File not found: {}",
                 request.image_path
             ))]));
@@ -80,18 +130,208 @@ impl NibMcpServer {
             .unwrap_or(false);
         let prompt = present_image_prompt(&request.question, &image_path, terminal_rendered);
         Ok(CallToolResult::success(vec![
-            Content::image(general_purpose::STANDARD.encode(bytes), mime_type),
-            Content::text(prompt),
+            ContentBlock::image(general_purpose::STANDARD.encode(bytes), mime_type),
+            ContentBlock::text(prompt),
         ]))
     }
 
     pub fn with_image(image_path: PathBuf) -> Self {
         let watcher = AnnotationWatcher::new().ok();
+        let (catalog, code_mode) = build_catalog_and_code_mode();
         Self {
             current_image: Arc::new(Mutex::new(Some(image_path))),
             tool_router: Self::tool_router(),
             watcher: Arc::new(Mutex::new(watcher)),
+            processor: Arc::new(Mutex::new(OperationProcessor::new())),
+            code_mode,
+            catalog,
         }
+    }
+
+    /// Publish a visual review without tying its lifetime to this MCP process.
+    #[tool(
+        description = "Create and publish a durable visual feedback request. Returns the request ID, URL, status, and canonical .nib file. Use wait_for_request with the returned request ID.",
+        execution(task_support = "forbidden")
+    )]
+    async fn create_feedback_request(
+        &self,
+        Parameters(request): Parameters<CreateFeedbackRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let path = PathBuf::from(request.image_path);
+        let question = request.question;
+        let annotations = request.annotations;
+        let published = tokio::task::spawn_blocking(move || {
+            crate::cli::web_feedback::create_feedback_request(
+                &path,
+                question.as_deref(),
+                annotations.as_deref(),
+            )
+        })
+        .await
+        .map_err(|error| McpError::internal_error(format!("Feedback task failed: {error}"), None))?
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let json = serde_json::to_string(&published)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+    }
+
+    /// Publish an image or MP4/H.264 review through the same durable contract.
+    #[tool(
+        description = "Create and publish a durable image or MP4/H.264 review. Returns the request ID and URL. Use wait_for_request with the returned request ID.",
+        execution(task_support = "forbidden")
+    )]
+    async fn create_review_request(
+        &self,
+        Parameters(request): Parameters<CreateReviewRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let path = PathBuf::from(request.media_path);
+        let question = request.question;
+        let annotations = request.annotations;
+        let published = tokio::task::spawn_blocking(move || {
+            crate::cli::web_feedback::create_review_request(
+                &path,
+                question.as_deref(),
+                annotations.as_deref(),
+            )
+        })
+        .await
+        .map_err(|error| McpError::internal_error(format!("Review task failed: {error}"), None))?
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        json_tool_result(&published)
+    }
+
+    /// Start a durable screen recording on macOS.
+    #[tool(
+        description = "Start a macOS screen recording. Silent audio is the default. Returns a durable recording ID immediately."
+    )]
+    async fn start_recording(
+        &self,
+        Parameters(request): Parameters<StartRecordingRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let args = crate::cli::RecordStartArgs {
+            output: request.output_path.map(PathBuf::from),
+            duration: request.duration_seconds,
+            display: request.display,
+            window: request.window,
+            region: request.region,
+            interactive: request.interactive.unwrap_or(false),
+            system_audio: request.system_audio.unwrap_or(false),
+            microphone: request.microphone.unwrap_or(false),
+            no_cursor: !request.cursor.unwrap_or(true),
+            show_clicks: request.show_clicks.unwrap_or(false),
+        };
+        let state = tokio::task::spawn_blocking(move || crate::media::start_recording(&args))
+            .await
+            .map_err(|error| {
+                McpError::internal_error(format!("Recording task failed: {error}"), None)
+            })?
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        json_tool_result(&state)
+    }
+
+    /// Inspect active or named recording state.
+    #[tool(
+        description = "Read the current state of a durable recording. Omitting recording_id selects the active recording."
+    )]
+    async fn recording_status(
+        &self,
+        Parameters(request): Parameters<RecordingRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = crate::media::recording_status(request.recording_id.as_deref())
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        json_tool_result(&state)
+    }
+
+    /// Stop and finalize an active recording.
+    #[tool(
+        description = "Idempotently stop and begin finalizing a durable recording. Omitting recording_id selects the active recording."
+    )]
+    async fn stop_recording(
+        &self,
+        Parameters(request): Parameters<RecordingRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = crate::media::stop_recording(request.recording_id.as_deref())
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        json_tool_result(&state)
+    }
+
+    /// Wait for a recording to finish.
+    #[tool(
+        description = "Wait for a durable recording to complete or fail. The recording continues if this call is cancelled."
+    )]
+    async fn wait_for_recording(
+        &self,
+        Parameters(request): Parameters<WaitForRecordingRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let state = crate::media::wait_for_recording(
+            &request.recording_id,
+            request.timeout_seconds.unwrap_or(0),
+        )
+        .await
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        json_tool_result(&state)
+    }
+
+    /// Validate and inspect MP4 media.
+    #[tool(
+        description = "Validate MP4/H.264 media and return dimensions, duration, audio presence, byte size, and SHA-256."
+    )]
+    async fn inspect_media(
+        &self,
+        Parameters(request): Parameters<MediaRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let info = crate::media::inspect_media(Path::new(&request.media_path))
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        json_tool_result(&info)
+    }
+
+    /// Extract a representative poster frame.
+    #[tool(description = "Extract a representative PNG poster frame from MP4/H.264 media.")]
+    async fn extract_poster(
+        &self,
+        Parameters(request): Parameters<MediaRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let path = crate::media::poster_frame(Path::new(&request.media_path), None)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        json_tool_result(&serde_json::json!({"file":path,"contentType":"image/png"}))
+    }
+
+    /// Transcribe media on-device where supported.
+    #[tool(
+        description = "Request an on-device timed transcript for media. Returns an explicit unavailable result when this build cannot transcribe."
+    )]
+    async fn transcribe_media(
+        &self,
+        Parameters(request): Parameters<TranscribeMediaRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        crate::media::inspect_media(Path::new(&request.media_path))
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        json_tool_result(&serde_json::json!({
+            "status":"unavailable",
+            "source":"none",
+            "locale":request.locale,
+            "text":"",
+            "segments":[],
+            "error":"On-device transcription is unavailable in this build; preserve the media and retry on a Nib Apple client"
+        }))
+    }
+
+    /// Wait for a durable request. Cancelling the MCP task stops this waiter;
+    /// the portal request remains available and can be resumed by ID.
+    #[tool(
+        description = "Wait for a durable Nib request to receive its final response. This tool must run as an MCP task. Cancelling the task stops only this waiter; call it again with the same request ID to resume.",
+        execution(task_support = "required")
+    )]
+    async fn wait_for_request(
+        &self,
+        Parameters(request): Parameters<WaitForRequestRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let response = crate::cli::web_feedback::wait_for_request(&request.request_id, 0)
+            .await
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        let json = serde_json::to_string(&response)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
     /// Add an annotation to an image
@@ -105,7 +345,7 @@ impl NibMcpServer {
         let image_path = PathBuf::from(&request.image_path);
 
         if !image_path.exists() {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: File not found: {}",
                 request.image_path
             ))]));
@@ -186,7 +426,7 @@ impl NibMcpServer {
                 content: None,
             },
             _ => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Error: Unknown annotation type '{}'. Valid types: rectangle, arrow, line, ellipse, highlight, blur, text, number",
                     request.annotation_type
                 ))]));
@@ -221,7 +461,9 @@ impl NibMcpServer {
             timestamp, annotation_id, request.annotation_type, request.x, request.y
         );
 
-        Ok(CallToolResult::success(vec![Content::text(result_text)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(
+            result_text,
+        )]))
     }
 
     /// Read all annotations from an image
@@ -235,7 +477,7 @@ impl NibMcpServer {
         let image_path = PathBuf::from(&request.image_path);
 
         if !image_path.exists() {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: File not found: {}",
                 request.image_path
             ))]));
@@ -244,7 +486,7 @@ impl NibMcpServer {
         let annotations_path = annotations_file_path(&image_path);
 
         if !annotations_path.exists() {
-            return Ok(CallToolResult::success(vec![Content::text(
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
                 "No annotations found for this image.",
             )]));
         }
@@ -256,7 +498,7 @@ impl NibMcpServer {
             .map_err(|e| McpError::internal_error(format!("Failed to parse: {}", e), None))?;
 
         if annotations_file.annotations.is_empty() {
-            return Ok(CallToolResult::success(vec![Content::text(
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
                 "No annotations found.",
             )]));
         }
@@ -320,7 +562,7 @@ impl NibMcpServer {
             ));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
     }
 
     /// Remove a specific annotation by ID
@@ -332,7 +574,7 @@ impl NibMcpServer {
         let image_path = PathBuf::from(&request.image_path);
 
         if !image_path.exists() {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: File not found: {}",
                 request.image_path
             ))]));
@@ -341,7 +583,7 @@ impl NibMcpServer {
         let annotations_path = annotations_file_path(&image_path);
 
         if !annotations_path.exists() {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Error: No annotations file found.",
             )]));
         }
@@ -358,7 +600,7 @@ impl NibMcpServer {
             .retain(|a| a.id != request.annotation_id);
 
         if annotations_file.annotations.len() == original_count {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: Annotation '{}' not found.",
                 request.annotation_id
             ))]));
@@ -371,7 +613,7 @@ impl NibMcpServer {
             .map_err(|e| McpError::internal_error(format!("Failed to write: {}", e), None))?;
 
         let timestamp = crate::events::timestamp_ms();
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "[NIB {}] claude removed [{}]. Remaining: {} annotation(s).",
             timestamp,
             request.annotation_id,
@@ -388,7 +630,7 @@ impl NibMcpServer {
         let image_path = PathBuf::from(&request.image_path);
 
         if !image_path.exists() {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: File not found: {}",
                 request.image_path
             ))]));
@@ -414,7 +656,7 @@ impl NibMcpServer {
             .map_err(|e| McpError::internal_error(format!("Failed to write: {}", e), None))?;
 
         let timestamp = crate::events::timestamp_ms();
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "[NIB {}] claude cleared {} annotation(s).",
             timestamp, removed_count
         ))]))
@@ -431,7 +673,7 @@ impl NibMcpServer {
         let image_path = PathBuf::from(&request.image_path);
 
         if !image_path.exists() {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: File not found: {}",
                 request.image_path
             ))]));
@@ -494,7 +736,7 @@ impl NibMcpServer {
             .map_err(|e| McpError::internal_error(format!("Failed to export: {}", e), None))?;
 
         let timestamp = crate::events::timestamp_ms();
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "[NIB {}] Rendered {} annotation(s) to: {}",
             timestamp,
             nib_image.annotations.len(),
@@ -513,7 +755,7 @@ impl NibMcpServer {
         let image_path = PathBuf::from(&request.image_path);
 
         if !image_path.exists() {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: File not found: {}",
                 request.image_path
             ))]));
@@ -535,7 +777,7 @@ impl NibMcpServer {
                         watcher_guard.as_mut().unwrap()
                     }
                     Err(e) => {
-                        return Ok(CallToolResult::error(vec![Content::text(format!(
+                        return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                             "Error: Failed to create file watcher: {}",
                             e
                         ))]));
@@ -547,7 +789,7 @@ impl NibMcpServer {
         // Initialize store and start watching
         watcher.init_store(&image_path).await;
         if let Err(e) = watcher.watch(&image_path) {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: Failed to watch file: {}",
                 e
             ))]));
@@ -582,7 +824,7 @@ impl NibMcpServer {
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(format!("Failed to serialize: {}", e), None))?;
 
-        Ok(CallToolResult::success(vec![Content::text(json)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
     }
 
     /// Generate an image via the configured generator (default: imago)
@@ -602,7 +844,7 @@ impl NibMcpServer {
 
         if let Some(parent) = out_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                     "Error: Failed to create output directory: {}",
                     e
                 ))]));
@@ -631,9 +873,9 @@ impl NibMcpServer {
                 let json = serde_json::to_string(&result).map_err(|e| {
                     McpError::internal_error(format!("Failed to serialize: {}", e), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: {}",
                 e
             ))])),
@@ -662,9 +904,9 @@ impl NibMcpServer {
                 let json = serde_json::to_string(&result).map_err(|e| {
                     McpError::internal_error(format!("Failed to serialize: {}", e), None)
                 })?;
-                Ok(CallToolResult::success(vec![Content::text(json)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
+            Err(e) => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Error: {}",
                 e
             ))])),
@@ -736,52 +978,323 @@ fn inline_image_content(image_path: &Path) -> Result<(Vec<u8>, String), String> 
     Ok((bytes, mime_type))
 }
 
+fn json_tool_result(value: &impl serde::Serialize) -> Result<CallToolResult, McpError> {
+    let json = serde_json::to_string(value)
+        .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+    Ok(CallToolResult::success(vec![ContentBlock::text(json)]))
+}
+
+/// Instructions advertised to connecting clients. Code Mode leads: one JavaScript
+/// program composing several primitives beats the same work chained as single
+/// tool calls. When Code Mode fails to initialize its tools are not listed, so
+/// the text must not advertise them.
+fn server_instructions(code_mode_available: bool) -> String {
+    let mut instructions = String::from("Nib MCP Server - Visual communication for Codex.\n\n");
+
+    if code_mode_available {
+        instructions.push_str(
+            "PRIMARY INTERFACE: Code Mode. Compose Nib primitives in JavaScript through codemode_execute instead of chaining one direct tool call at a time. Exchange paths and IDs, never media bytes. Executions, snippets, and artifacts persist in Nib's local storage, so an execution survives an MCP restart and can be resumed by ID.\n\n\
+            Code Mode lifecycle:\n\
+            - codemode_search: Discover the composable Nib methods and saved snippets. Call this first; it is the authoritative list.\n\
+            - codemode_execute: Run a JavaScript program over those methods and return its durable execution state\n\
+            - codemode_execution: Read an execution, or one oversized artifact it owns, by ID\n\
+            - codemode_decide: Approve or reject one pending Code Mode action\n\
+            - codemode_cancel: Cancel one running or paused Code Mode execution\n\n\
+            Collaboration Workflow - prefer one codemode_execute program per round trip:\n\
+            1. Capture, annotate, render, and publish inside a single program: create_review_request for an image or MP4/H.264 media. Retain the returned request ID.\n\
+            2. Await the human verdict with wait_for_request, resuming the same request ID after any restart; never create a replacement request.\n\
+            3. For canvas annotation loops, add annotations and render, then wait on events; pass since_seq from each response to avoid duplicates.\n\
+            4. Drop to a direct tool call only for a genuine one-off, or for a tool marked MCP-native below.\n\n\
+            Direct tools (one-off calls; most are also reachable inside a Code Mode program):\n",
+        );
+    } else {
+        instructions.push_str(
+            "Code Mode is unavailable in this session; use the direct tools below.\n\n\
+            Tools:\n",
+        );
+    }
+
+    instructions.push_str(
+        "- present_image: MCP-native, direct only. Display an image inline in Codex and ask for thread-native feedback; the image is returned as first-class inline MCP content, so treat the user's next message in the same thread as the response. Codex CLI terminals may also receive a lossless inline rendering fallback. Do not substitute local file links.\n\
+        - wait_for_request: MCP-native. Task-backed wait for the final response; resume with the same request ID\n\
+        - create_feedback_request: Publish a durable visual request and return its request ID\n\
+        - create_review_request: Publish an image or MP4/H.264 review through the generic media contract\n\
+        - start_recording / recording_status / stop_recording / wait_for_recording: Durable macOS screen recording\n\
+        - inspect_media / extract_poster / transcribe_media: Media validation and derivation\n\
+        - add_annotation: Add arrow, rectangle, text, number, ellipse, line, highlight, or blur\n\
+        - read_annotations: List all annotations on an image\n\
+        - remove_annotation: Remove an annotation by ID (e.g., 'a1')\n\
+        - clear_annotations: Remove all annotations\n\
+        - render: Bake annotations onto image for viewing\n\
+        - wait_for_events: Block until human adds annotations (or timeout)\n\
+        - generate_image: Generate an image via the configured generator (default: imago)\n\
+        - judge_pair: Compare expected vs actual images via the configured judge tool (default: imago compare)",
+    );
+
+    if !code_mode_available {
+        instructions.push_str(
+            "\n\nCollaboration Workflow:\n\
+            1. For thread-native review, call present_image and wait for the next user message\n\
+            2. For durable cross-device review, call create_feedback_request, retain its request ID, then call wait_for_request as a task\n\
+            3. For canvas annotation workflows, use add_annotation/render and wait_for_events\n\
+            4. Use since_seq from event responses to avoid duplicates",
+        );
+    }
+
+    instructions
+}
+
+/// Build the Incurs catalog and the Code Mode server that composes it. Code Mode
+/// is the primary interface, so a failed initialization is logged rather than
+/// discarded silently; the server then degrades to direct tools only.
+fn build_catalog_and_code_mode() -> (Option<ToolCatalog>, Option<CodeModeMcpServer>) {
+    let catalog = crate::cli::build_cli().try_tool_catalog().ok();
+    let code_mode = catalog.clone().and_then(|catalog| {
+        build_code_mode_server(catalog)
+            .inspect_err(|error| {
+                tracing::warn!(
+                    "Incurs Code Mode unavailable, falling back to direct tools: {error}"
+                );
+            })
+            .ok()
+    });
+    (catalog, code_mode)
+}
+
+fn build_code_mode_server(catalog: ToolCatalog) -> Result<CodeModeMcpServer, String> {
+    let root = crate::storage::storage_dir().join("codemode");
+    let runtime = Arc::new(crate::codemode_store::FileRuntimeStore::new(root.clone())?);
+    let artifacts = Arc::new(crate::codemode_store::FileArtifactStore::new(
+        root.join("artifacts"),
+    )?);
+    let service = LocalCodeModeService::spawn(move || {
+        CodeMode::with_artifact_store(
+            runtime,
+            artifacts,
+            LocalExecutor::default(),
+            vec![Arc::new(
+                IncurConnector::new(catalog)
+                    .with_name("nib")
+                    .with_instructions("Compose Nib capture, review, and durable human-request primitives. Exchange paths and IDs instead of media bytes."),
+            )],
+        )
+    })?;
+    Ok(CodeModeMcpServer::new(Arc::new(service)))
+}
+
+fn incurs_mcp_tool(definition: &ToolDefinition) -> Tool {
+    let input_schema = definition
+        .input_schema
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    let mut tool = Tool::new(
+        Cow::Owned(definition.name.clone()),
+        Cow::Owned(definition.description.clone()),
+        Arc::new(input_schema),
+    );
+    tool.output_schema = definition
+        .output_schema
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .cloned()
+        .map(Arc::new);
+    tool.annotations = definition.annotations.as_ref().map(|annotations| {
+        ToolAnnotations::from_raw(
+            annotations.title.clone(),
+            annotations.read_only_hint,
+            annotations.destructive_hint,
+            annotations.idempotent_hint,
+            annotations.open_world_hint,
+        )
+    });
+    tool
+}
+
+async fn call_incurs_tool(
+    catalog: &ToolCatalog,
+    request: &CallToolRequestParams,
+) -> Result<CallToolResult, McpError> {
+    let arguments = request
+        .arguments
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    match catalog
+        .call(
+            request.name.as_ref(),
+            arguments,
+            ToolCallOptions::isolated(),
+        )
+        .await
+    {
+        ToolCallOutcome::Ok { data, cta } => json_tool_result(&serde_json::json!({
+            "data": data,
+            "cta": cta
+        })),
+        ToolCallOutcome::Error {
+            code,
+            message,
+            retryable,
+            field_errors,
+            exit_code,
+            cta,
+        } => Ok(CallToolResult::error(vec![ContentBlock::text(
+            serde_json::json!({
+                "code": code,
+                "message": message,
+                "retryable": retryable,
+                "fieldErrors": field_errors,
+                "exitCode": exit_code,
+                "cta": cta
+            })
+            .to_string(),
+        )])),
+    }
+}
+
 impl Default for NibMcpServer {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[task_handler]
 impl ServerHandler for NibMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-            server_info: Implementation {
-                name: "nib".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                title: None,
-                icons: None,
-                website_url: None,
-            },
-            instructions: Some(
-                "Nib MCP Server - Visual communication for Codex. For human feedback, call present_image so the image is returned as first-class inline MCP content, then treat the user's next message in the same thread as the response. Codex CLI terminals may also receive a lossless inline rendering fallback. Do not substitute local file links.\n\n\
-                Tools:\n\
-                - present_image: Display an image inline in Codex and ask for thread-native feedback\n\
-                - add_annotation: Add arrow, rectangle, text, number, ellipse, line, highlight, or blur\n\
-                - read_annotations: List all annotations on an image\n\
-                - remove_annotation: Remove an annotation by ID (e.g., 'a1')\n\
-                - clear_annotations: Remove all annotations\n\
-                - render: Bake annotations onto image for viewing\n\
-                - wait_for_events: Block until human adds annotations (or timeout)\n\
-                - generate_image: Generate an image via the configured generator (default: imago)\n\
-                - judge_pair: Compare expected vs actual images via the configured judge tool (default: imago compare)\n\n\
-                Collaboration Workflow:\n\
-                1. For thread-native review, call present_image and wait for the next user message\n\
-                2. For canvas annotation workflows, use add_annotation/render and wait_for_events\n\
-                3. Use since_seq from event responses to avoid duplicates".to_string()
-            ),
+    async fn enqueue_task(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CreateTaskResult, McpError> {
+        use rmcp::task_manager::{
+            OperationDescriptor, OperationMessage, OperationResultTransport, ToolCallTaskResult,
+        };
+
+        let task_id = context.id.to_string();
+        let operation_name = request.name.to_string();
+        let future_request = request.clone();
+        let future_context = context.clone();
+        let server = self.clone();
+        let descriptor = OperationDescriptor::new(task_id.clone(), operation_name)
+            .with_context(context)
+            .with_client_request(ClientRequest::CallToolRequest(Request::new(request)))
+            .with_ttl(REQUEST_TASK_TTL_MS);
+        let task_result_id = task_id.clone();
+        let future = Box::pin(async move {
+            let result = server.call_tool(future_request, future_context).await;
+            Ok(Box::new(ToolCallTaskResult::new(task_result_id, result))
+                as Box<dyn OperationResultTransport>)
+        });
+
+        self.processor
+            .lock()
+            .await
+            .submit_operation(OperationMessage::new(descriptor, future))
+            .map_err(|error| {
+                McpError::internal_error(format!("failed to enqueue task: {error}"), None)
+            })?;
+
+        let task = request_task(
+            task_id,
+            TaskStatus::Working,
+            Some("Waiting for a durable Nib request response"),
+        );
+        Ok(CreateTaskResult::new(task))
+    }
+
+    async fn list_tasks(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListTasksResult, McpError> {
+        let mut processor = self.processor.lock().await;
+        let mut tasks = processor
+            .list_running()
+            .into_iter()
+            .map(|task_id| request_task(task_id, TaskStatus::Working, None))
+            .collect::<Vec<_>>();
+        tasks.extend(processor.peek_completed().iter().map(|result| {
+            request_task(
+                result.descriptor.operation_id.clone(),
+                completed_task_status(result),
+                None,
+            )
+        }));
+        Ok(ListTasksResult::new(tasks))
+    }
+
+    async fn get_task_info(
+        &self,
+        request: GetTaskParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetTaskResult, McpError> {
+        let mut processor = self.processor.lock().await;
+        if let Some(result) = processor
+            .peek_completed()
+            .iter()
+            .rev()
+            .find(|result| result.descriptor.operation_id == request.task_id)
+        {
+            return Ok(GetTaskResult::new(request_task(
+                request.task_id,
+                completed_task_status(result),
+                None,
+            )));
         }
+        if processor
+            .list_running()
+            .iter()
+            .any(|task_id| task_id == &request.task_id)
+        {
+            return Ok(GetTaskResult::new(request_task(
+                request.task_id,
+                TaskStatus::Working,
+                None,
+            )));
+        }
+        Err(McpError::resource_not_found(
+            format!("task not found: {}", request.task_id),
+            None,
+        ))
+    }
+
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tasks()
+                .build(),
+        )
+        .with_server_info(Implementation::new("nib", env!("CARGO_PKG_VERSION")))
+        .with_instructions(server_instructions(self.code_mode.is_some()))
     }
 
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        let tools = self.tool_router.list_all();
+        // Code Mode is the primary interface, so it leads the list.
+        let mut tools = Vec::new();
+        let mut names = HashSet::new();
+        if let Some(code_mode) = &self.code_mode {
+            for tool in code_mode.tools() {
+                names.insert(tool.name.to_string());
+                tools.push(tool.clone());
+            }
+        }
+        for tool in self.tool_router.list_all() {
+            names.insert(tool.name.to_string());
+            tools.push(tool);
+        }
+        if let Some(catalog) = &self.catalog {
+            for definition in catalog.definitions() {
+                if names.insert(definition.name.clone()) {
+                    tools.push(incurs_mcp_tool(&definition));
+                }
+            }
+        }
         Ok(ListToolsResult {
             tools,
             next_cursor: None,
@@ -791,17 +1304,54 @@ impl ServerHandler for NibMcpServer {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        if CODE_MODE_TOOL_NAMES.contains(&request.name.as_ref()) {
+            let code_mode = self.code_mode.as_ref().ok_or_else(|| {
+                McpError::internal_error("Incurs Code Mode failed to initialize", None)
+            })?;
+            return code_mode.call_tool(request, context).await;
+        }
+        let has_direct_tool = self
+            .tool_router
+            .list_all()
+            .iter()
+            .any(|tool| tool.name == request.name);
+        if !has_direct_tool {
+            if let Some(catalog) = &self.catalog {
+                if catalog.get(request.name.as_ref()).is_some() {
+                    return call_incurs_tool(catalog, &request).await;
+                }
+            }
+        }
         let tool_context = ToolCallContext::new(self, request, context);
         self.tool_router.call(tool_context).await
+    }
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.tool_router
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .or_else(|| {
+                self.code_mode
+                    .as_ref()
+                    .and_then(|server| server.get_tool(name))
+            })
+            .or_else(|| {
+                self.catalog
+                    .as_ref()
+                    .and_then(|catalog| catalog.get(name))
+                    .map(incurs_mcp_tool)
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rmcp::ClientHandler;
 
     #[test]
     fn inline_png_is_returned_byte_identical() {
@@ -830,6 +1380,235 @@ mod tests {
             .list_all()
             .iter()
             .any(|tool| tool.name == "present_image"));
+    }
+
+    #[test]
+    fn durable_request_tools_are_registered_with_task_contracts() {
+        let server = NibMcpServer::new();
+        let tools = server.tool_router.list_all();
+        let create = tools
+            .iter()
+            .find(|tool| tool.name == "create_feedback_request")
+            .unwrap();
+        let wait = tools
+            .iter()
+            .find(|tool| tool.name == "wait_for_request")
+            .unwrap();
+        assert_eq!(create.task_support(), TaskSupport::Forbidden);
+        assert_eq!(wait.task_support(), TaskSupport::Required);
+        assert!(server.get_info().capabilities.tasks.is_some());
+    }
+
+    #[test]
+    fn combined_server_includes_incurs_code_mode_and_media_primitives() {
+        let server = NibMcpServer::new();
+        let direct = server.tool_router.list_all();
+        assert!(direct.iter().any(|tool| tool.name == "start_recording"));
+        assert!(direct
+            .iter()
+            .any(|tool| tool.name == "create_review_request"));
+        let code_mode = server.code_mode.as_ref().expect("Code Mode initializes");
+        let names = code_mode
+            .tools()
+            .iter()
+            .map(|tool| tool.name.as_ref())
+            .collect::<Vec<_>>();
+        for expected in CODE_MODE_TOOL_NAMES {
+            assert!(names.contains(&expected));
+        }
+        assert!(
+            server.get_tool("capture").is_some(),
+            "catalog-only Incurs commands must be exposed through the combined MCP server"
+        );
+    }
+
+    #[test]
+    fn instructions_lead_with_code_mode() {
+        let instructions = server_instructions(true);
+        let code_mode = instructions
+            .find("Code Mode")
+            .expect("Code Mode is named in the instructions");
+        let direct = instructions
+            .find("present_image")
+            .expect("direct tools are still documented");
+        assert!(
+            code_mode < direct,
+            "Code Mode must be presented before any direct tool"
+        );
+        assert!(instructions.contains("PRIMARY INTERFACE: Code Mode"));
+        for name in CODE_MODE_TOOL_NAMES {
+            assert!(instructions.contains(name), "instructions must name {name}");
+        }
+    }
+
+    #[test]
+    fn instructions_omit_code_mode_when_unavailable() {
+        let instructions = server_instructions(false);
+        assert!(
+            !instructions.contains("codemode_"),
+            "unavailable Code Mode tools must not be advertised"
+        );
+        assert!(instructions.contains("present_image"));
+        assert!(instructions.contains("Collaboration Workflow"));
+    }
+
+    #[test]
+    fn server_advertises_code_mode_instructions() {
+        let server = NibMcpServer::new();
+        let info = server.get_info();
+        let instructions = info.instructions.expect("instructions are advertised");
+        assert!(instructions.contains("PRIMARY INTERFACE: Code Mode"));
+    }
+
+    #[derive(Clone, Default)]
+    struct TestClient;
+
+    impl ClientHandler for TestClient {}
+
+    #[tokio::test]
+    async fn combined_transport_lists_and_searches_code_mode_tools() {
+        let (server_transport, client_transport) = tokio::io::duplex(64 * 1024);
+        let server_handle = tokio::spawn(async move {
+            NibMcpServer::new()
+                .serve(server_transport)
+                .await
+                .unwrap()
+                .waiting()
+                .await
+                .unwrap();
+        });
+        let client = TestClient.serve(client_transport).await.unwrap();
+        let listed = client
+            .send_request(ClientRequest::ListToolsRequest(ListToolsRequest::default()))
+            .await
+            .unwrap();
+        let ServerResult::ListToolsResult(listed) = listed else {
+            panic!("expected tool list");
+        };
+        assert!(listed
+            .tools
+            .iter()
+            .any(|tool| tool.name == "start_recording"));
+        let leading = listed
+            .tools
+            .iter()
+            .take(CODE_MODE_TOOL_NAMES.len())
+            .map(|tool| tool.name.to_string())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            leading,
+            CODE_MODE_TOOL_NAMES
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<HashSet<_>>(),
+            "Code Mode is the primary interface and must lead the tool list"
+        );
+        let unique = listed
+            .tools
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            unique.len(),
+            listed.tools.len(),
+            "reordering must not duplicate tools"
+        );
+
+        let mut arguments = JsonObject::new();
+        arguments.insert("query".to_string(), serde_json::json!("recording"));
+        let searched = client
+            .send_request(ClientRequest::CallToolRequest(Request::new(
+                CallToolRequestParams::new("codemode_search").with_arguments(arguments),
+            )))
+            .await
+            .unwrap();
+        let ServerResult::CallToolResult(searched) = searched else {
+            panic!("expected Code Mode search result");
+        };
+        assert_ne!(searched.is_error, Some(true));
+        assert!(format!("{searched:?}").contains("start_recording"));
+
+        client.cancel().await.unwrap();
+        server_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn durable_wait_task_can_be_listed_and_cancelled() {
+        let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+        let server_handle = tokio::spawn(async move {
+            NibMcpServer::new()
+                .serve(server_transport)
+                .await
+                .unwrap()
+                .waiting()
+                .await
+                .unwrap();
+        });
+        let client = TestClient.serve(client_transport).await.unwrap();
+        let mut arguments = JsonObject::new();
+        arguments.insert(
+            "request_id".to_string(),
+            serde_json::Value::String("req-cancel".to_string()),
+        );
+        let create = client
+            .send_request(ClientRequest::CallToolRequest(Request::new(
+                CallToolRequestParams::new("wait_for_request")
+                    .with_arguments(arguments)
+                    .with_task(TaskMetadata::new()),
+            )))
+            .await
+            .unwrap();
+        let ServerResult::CreateTaskResult(created) = create else {
+            panic!("expected a task result");
+        };
+        assert_eq!(created.task.ttl, Some(24 * 60 * 60 * 1_000));
+        assert_eq!(created.task.poll_interval, Some(1_500));
+
+        let listed = client
+            .send_request(ClientRequest::ListTasksRequest(ListTasksRequest::default()))
+            .await
+            .unwrap();
+        let ServerResult::ListTasksResult(listed) = listed else {
+            panic!("expected task list");
+        };
+        assert!(listed
+            .tasks
+            .iter()
+            .any(|task| task.task_id == created.task.task_id));
+
+        let cancelled = client
+            .send_request(ClientRequest::CancelTaskRequest(Request::new(
+                CancelTaskParams::new(created.task.task_id.clone()),
+            )))
+            .await
+            .unwrap();
+        let status = match cancelled {
+            ServerResult::CancelTaskResult(result) => result.task.status,
+            // RMCP 2.2 deserializes the shape-identical cancellation payload
+            // through GetTaskResult in its untagged ServerResult union.
+            ServerResult::GetTaskResult(result) => result.task.status,
+            other => panic!("expected cancelled task, got {other:?}"),
+        };
+        assert_eq!(status, TaskStatus::Cancelled);
+
+        let task_info = client
+            .send_request(ClientRequest::GetTaskRequest(Request::new(
+                GetTaskParams::new(created.task.task_id),
+            )))
+            .await
+            .unwrap();
+        let ServerResult::GetTaskResult(task_info) = task_info else {
+            panic!("expected task info");
+        };
+        assert_eq!(task_info.task.status, TaskStatus::Cancelled);
+        assert_eq!(task_info.task.ttl, Some(REQUEST_TASK_TTL_MS));
+        assert_eq!(
+            task_info.task.poll_interval,
+            Some(REQUEST_TASK_POLL_INTERVAL_MS)
+        );
+
+        client.cancel().await.unwrap();
+        server_handle.await.unwrap();
     }
 }
 

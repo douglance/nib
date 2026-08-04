@@ -1,0 +1,12 @@
+appId: com.douglance.nib
+---
+- swipe:
+    start: 50%, 1%
+    end: 50%, 75%
+    duration: 500
+- longPressOn: "Review the deployment"
+- assertVisible: "The production build passed validation. Should I deploy it now?"
+- assertVisible: "Add a note..."
+- assertVisible: "Approve"
+- assertVisible: "Reject"
+- assertVisible: "Open"

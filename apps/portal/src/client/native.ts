@@ -56,6 +56,12 @@ export function apiUrl(pathOrUrl: string): string {
   return isNativeShell() ? `${NIB_SERVER_BASE}${path}` : path;
 }
 
+export function webSocketUrl(path: string): string {
+  const url = new URL(apiUrl(path), window.location.href);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
 export function assetUrl(pathOrUrl: string | null): string | null {
   if (!pathOrUrl) return null;
   return apiUrl(pathOrUrl);

@@ -13,9 +13,10 @@
     "verify": "npm test && npm run build",
     "server": "tsx src/server/index.ts",
     "preview": "npm run build && NODE_ENV=production tsx src/server/index.ts",
-    "mobile:build": "npm run mobile:build:ios && npm run mobile:build:watch",
+    "mobile:build": "npm run mobile:build:ios && npm run mobile:build:watch && npm run mobile:build:macos",
     "mobile:build:ios": "xcodebuild -project mobile/Nib/Nib.xcodeproj -scheme Nib -destination 'generic/platform=iOS Simulator' build",
     "mobile:build:watch": "xcodebuild -project mobile/Nib/Nib.xcodeproj -scheme NibWatch -destination 'generic/platform=watchOS Simulator' build",
+    "mobile:build:macos": "xcodebuild -project mobile/Nib/Nib.xcodeproj -scheme NibMac -destination 'platform=macOS' build",
     "serve:tailscale": "tailscale serve --bg http://127.0.0.1:4070",
     "apns:configure": "bash scripts/configure-apns-env.sh",
     "launchd:install": "bash scripts/install-launchd.sh",
@@ -31,11 +32,13 @@
     "tsx": "^4.23.1",
     "typescript": "^5.9.3",
     "vite": "^8.0.8",
-    "web-push": "^3.6.7"
+    "web-push": "^3.6.7",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
     "@types/react": "^19.2.2",
-    "@types/react-dom": "^19.2.2"
+    "@types/react-dom": "^19.2.2",
+    "@types/ws": "^8.18.1"
   }
 }

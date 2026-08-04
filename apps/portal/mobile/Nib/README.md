@@ -1,6 +1,7 @@
 # Nib native client
 
-This directory is the iPhone and Watch client for the unified nib system.
+This directory contains the iPhone, Watch, Vision Pro, and Mac clients for the
+unified nib system.
 
 The app is not a separate product surface with separate APIs. It consumes the
 same resources as web, CLI, and MCP:
@@ -20,10 +21,13 @@ delivery. The native app is the high-trust mobile control surface.
 
 - Inbox: pending requests, quiet status, device health.
 - Request detail: prompt, choices, text reply, screenshots, attachments.
+- Expanded notifications: full request text, inline note field, and decision actions.
 - Website view: in-app `WKWebView` for nib viewer URLs, Safari fallback.
 - Capture: camera or photo-library upload to a request.
 - Watch inbox: pending requests, approve/deny, numbered choice, dictation text.
 - Watch projects: project status, recheck, route switching, and confirmation-gated kill.
+- Vision Pro: the full native inbox, request detail, attachments, text and choice
+  responses, visual-review decisions, live request updates, and APNs delivery.
 
 ## Visual direction
 
@@ -40,7 +44,11 @@ Use TestFlight distribution for v1. Bundle identifiers default to:
 
 - `com.douglance.nib`
 - `com.douglance.nib.NotificationService`
+- `com.douglance.nib.NotificationContent`
 - `com.douglance.nib.watchkitapp`
+
+The iPhone and Vision Pro builds share `com.douglance.nib` as one universal
+app identity.
 
 APNs credentials are configured on the Mac server with:
 

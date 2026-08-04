@@ -39,4 +39,4 @@ launchctl enable "gui/$UID/com.douglance.nib"
 
 tailscale serve --bg http://127.0.0.1:4070
 
-echo "Nib installed at https://dave.tail5d92b4.ts.net/"
+echo "Local Nib portal installed at http://127.0.0.1:4070/"

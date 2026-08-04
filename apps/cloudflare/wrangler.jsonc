@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "nib-global",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-31",
+  "durable_objects": {
+    "bindings": [
+      { "name": "REQUESTS", "class_name": "NibRequestHub" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["NibRequestHub"] }
+  ],
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "nib-global-media" }
+  ],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

@@ -15,6 +15,84 @@ pub struct PresentImageRequest {
     pub question: String,
 }
 
+/// Request to publish a durable visual feedback request
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateFeedbackRequest {
+    /// PNG, JPEG, WebP, or .nib image to review
+    #[schemars(description = "Absolute path to a PNG, JPEG, WebP, or .nib image")]
+    pub image_path: String,
+
+    /// Question shown with the image
+    #[schemars(description = "Question the human should answer")]
+    pub question: Option<String>,
+
+    /// Optional serialized annotation prompts
+    #[schemars(description = "Optional Nib annotation JSON array")]
+    pub annotations: Option<String>,
+}
+
+/// Request to publish a durable image or MP4 video review
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateReviewRequest {
+    /// PNG, JPEG, WebP, .nib, or MP4/H.264 file to review
+    pub media_path: String,
+    /// Question shown with the media
+    pub question: Option<String>,
+    /// Optional image-only serialized annotation prompts
+    pub annotations: Option<String>,
+}
+
+/// Request to start a macOS screen recording
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StartRecordingRequest {
+    pub output_path: Option<String>,
+    pub duration_seconds: Option<u64>,
+    pub display: Option<u32>,
+    pub window: Option<u32>,
+    /// Rectangle formatted as x,y,width,height
+    pub region: Option<String>,
+    pub interactive: Option<bool>,
+    pub system_audio: Option<bool>,
+    pub microphone: Option<bool>,
+    pub cursor: Option<bool>,
+    pub show_clicks: Option<bool>,
+}
+
+/// Request concerning a durable recording
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RecordingRequest {
+    /// Recording ID; status and stop default to the active recording when omitted
+    pub recording_id: Option<String>,
+}
+
+/// Request to wait for a durable recording
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WaitForRecordingRequest {
+    pub recording_id: String,
+    pub timeout_seconds: Option<u64>,
+}
+
+/// Request to inspect or derive media
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MediaRequest {
+    pub media_path: String,
+}
+
+/// Request to transcribe media
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TranscribeMediaRequest {
+    pub media_path: String,
+    pub locale: Option<String>,
+}
+
+/// Request to wait for a durable feedback response
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WaitForRequestRequest {
+    /// Durable request ID returned by create_feedback_request
+    #[schemars(description = "Durable Nib request ID")]
+    pub request_id: String,
+}
+
 /// Request to add an annotation to an image
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AddAnnotationRequest {

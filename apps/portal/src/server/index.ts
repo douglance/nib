@@ -1,10 +1,13 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import type net from "node:net";
+import { Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { listPacks, readBrief, readLibraryContext, readPack } from "../html/packs";
 import { validateFeedbackSurface, validateHtml } from "../html/validate";
-import { HOST, PORT, PUBLIC_BASE_URL, SCREENSHOT_DIR } from "./config";
+import { ATTACHMENT_DIR, ATTACHMENT_MAX_BYTES, HOST, PORT, PUBLIC_BASE_URL, SCREENSHOT_DIR } from "./config";
 import { getCommandPresets, listCommandRuns, runProjectCommand, streamCommandEvents } from "./commands";
 import { discoverProjects, getPortalMeta } from "./discovery";
 import {
@@ -36,6 +39,7 @@ import { killProject } from "./processes";
 import { proxyHttp, proxyToVite, proxyUpgrade, proxyViteUpgrade } from "./proxy";
 import {
   addRequestAttachment,
+  addRequestAttachmentFile,
   attachmentFile,
   createRequest,
   getRequest,
@@ -46,7 +50,7 @@ import {
   RequestContractError,
   respondRequest
 } from "./requests";
-import { streamRequestEvents } from "./requestEvents";
+import { streamRequestEvents, upgradeRequestSocket } from "./requestEvents";
 import { requestPageHtml } from "./requestPage";
 import { runRetentionSweep } from "./retention";
 import { captureScreenshots } from "./screenshots";
@@ -464,7 +468,7 @@ const server = http.createServer(async (req, res) => {
         sendJson(res, { error: "Attachment not found" }, 404);
         return;
       }
-      serveFile(res, attachment.file);
+      serveFile(res, attachment.file, { request: req, contentType: attachment.contentType });
       return;
     }
 
@@ -542,6 +546,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.on("upgrade", async (req, socket, head) => {
+  if (upgradeRequestSocket(req, socket as net.Socket, head)) return;
   if (req.url?.startsWith("/p/")) {
     await proxyUpgrade(req, socket as net.Socket, head);
     return;
@@ -591,7 +596,7 @@ async function handleRequestRoute(req: http.IncomingMessage, res: http.ServerRes
     return true;
   }
 
-  const match = url.pathname.match(/^\/api\/requests\/([^/]+)(?:\/(respond|publish|attachments|notification-click))?$/);
+  const match = url.pathname.match(/^\/api\/requests\/([^/]+)(?:\/(respond|publish|attachments|response-attachments|notification-click))?$/);
   if (!match) return false;
   const requestId = decodeURIComponent(match[1] ?? "");
   const action = match[2];
@@ -611,8 +616,17 @@ async function handleRequestRoute(req: http.IncomingMessage, res: http.ServerRes
     sendRequestResult(res, await publishRequest(requestId));
     return true;
   }
-  if (action === "attachments" && req.method === "POST") {
-    sendRequestResult(res, await addRequestAttachment(requestId, await readJsonBody(req)), 201);
+  if ((action === "attachments" || action === "response-attachments") && req.method === "POST") {
+    const contentType = String(req.headers["content-type"] ?? "").split(";")[0]?.trim();
+    if (contentType === "application/json" || !contentType) {
+      const input = await readJsonBody<Record<string, unknown>>(req);
+      if (action === "response-attachments") {
+        input.metadata = { ...(asRecord(input.metadata)), role: "response" };
+      }
+      sendRequestResult(res, await addRequestAttachment(requestId, input), 201);
+    } else {
+      sendRequestResult(res, await streamRequestAttachment(req, requestId, action === "response-attachments"), 201);
+    }
     return true;
   }
   if (action === "notification-click" && req.method === "POST") {
@@ -649,7 +663,7 @@ function corsHeaders(): Record<string, string> {
   return {
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,PATCH,DELETE,OPTIONS",
-    "access-control-allow-headers": "content-type,authorization"
+    "access-control-allow-headers": "content-type,authorization,x-nib-filename,x-nib-metadata"
   };
 }
 
@@ -711,6 +725,69 @@ function feedbackLabHtml(): string {
   </main>
 </body>
 </html>`;
+}
+
+async function streamRequestAttachment(
+  req: http.IncomingMessage,
+  requestId: string,
+  responseAttachment: boolean
+) {
+  const declaredLength = Number(req.headers["content-length"] ?? 0);
+  if (declaredLength > ATTACHMENT_MAX_BYTES) {
+    throw new RequestContractError(`attachment exceeds ${ATTACHMENT_MAX_BYTES} byte limit`, 413);
+  }
+  await fs.promises.mkdir(ATTACHMENT_DIR, { recursive: true });
+  const temporaryFile = path.join(ATTACHMENT_DIR, `.upload-${crypto.randomUUID()}.tmp`);
+  let bytes = 0;
+  const limiter = new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      bytes += chunk.length;
+      if (bytes > ATTACHMENT_MAX_BYTES) {
+        callback(new RequestContractError(`attachment exceeds ${ATTACHMENT_MAX_BYTES} byte limit`, 413));
+        return;
+      }
+      callback(null, chunk);
+    }
+  });
+  try {
+    await pipeline(req, limiter, fs.createWriteStream(temporaryFile, { flags: "wx" }));
+    const metadata = {
+      ...parseHeaderRecord(req.headers["x-nib-metadata"]),
+      ...(responseAttachment ? { role: "response" } : {})
+    };
+    return await addRequestAttachmentFile(
+      requestId,
+      {
+        name: headerValue(req.headers["x-nib-filename"]) || "attachment",
+        contentType: String(req.headers["content-type"] ?? "application/octet-stream").split(";")[0]?.trim(),
+        metadata
+      },
+      temporaryFile,
+      bytes
+    );
+  } finally {
+    await fs.promises.unlink(temporaryFile).catch(() => undefined);
+  }
+}
+
+function headerValue(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function parseHeaderRecord(value: string | string[] | undefined): Record<string, unknown> {
+  const raw = headerValue(value);
+  if (!raw) return {};
+  try {
+    return asRecord(JSON.parse(raw));
+  } catch {
+    throw new RequestContractError("x-nib-metadata must be valid JSON", 400);
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function readJsonBody<T>(req: http.IncomingMessage): Promise<T> {

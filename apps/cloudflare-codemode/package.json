@@ -1,0 +1,12 @@
+{
+  "name": "@douglance/nib-codemode-global",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "check": "cargo fmt --check && cargo check --target wasm32-unknown-unknown",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.118.0"
+  }
+}

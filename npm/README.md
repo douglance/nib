@@ -33,7 +33,7 @@ Or manually configure MCP:
   "mcpServers": {
     "nib": {
       "command": "npx",
-      "args": ["-y", "@douglance/nib", "mcp-server"]
+      "args": ["-y", "@douglance/nib", "--mcp"]
     }
   }
 }

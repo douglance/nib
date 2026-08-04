@@ -12,7 +12,10 @@ export default defineConfig({
     strictPort: true,
     allowedHosts: true,
     proxy: {
-      "/api": `http://127.0.0.1:${serverPort}`,
+      "/api": {
+        target: `http://127.0.0.1:${serverPort}`,
+        ws: true
+      },
       "/screenshots": `http://127.0.0.1:${serverPort}`,
       "/attachments": `http://127.0.0.1:${serverPort}`,
       "/lab": `http://127.0.0.1:${serverPort}`,

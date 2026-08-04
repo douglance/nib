@@ -7,7 +7,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PA
 export NODE_ENV=production
 export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-4070}"
-export PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-https://dave.tail5d92b4.ts.net}"
+export PUBLIC_BASE_URL="${PUBLIC_BASE_URL:-http://127.0.0.1:4070}"
 
 if [[ -f .nib/server.env ]]; then
   set -a

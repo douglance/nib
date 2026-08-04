@@ -6,7 +6,7 @@
 	<string>development</string>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>applinks:dave.tail5d92b4.ts.net?mode=developer</string>
+		<string>applinks:nib-global.doug-lance.workers.dev</string>
 	</array>
 </dict>
 </plist>

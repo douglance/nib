@@ -32,7 +32,30 @@ You have eyes. Use them. Any time something visual is relevant, capture the scre
 
 **Don't ask what to capture. Don't ask permission. Just capture and look.**
 
-## The Loop
+## Code Mode First (MCP clients)
+
+If you are connected to nib over MCP (`nib --mcp`), **Code Mode is the primary
+interface**. Compose the whole loop as one JavaScript program instead of chaining
+single tool calls:
+
+```
+1. codemode_search  → discover the composable Nib methods (authoritative list)
+2. codemode_execute → capture, annotate, publish, and await the verdict in one program
+3. codemode_execution / codemode_decide / codemode_cancel → inspect, approve, or stop by ID
+```
+
+Programs exchange paths and IDs, never media bytes. Executions, snippets, and
+artifacts are durable, so an execution survives an MCP restart — resume it by ID
+rather than starting over.
+
+Direct MCP tools stay available for a genuine one-off. Two are direct only:
+`present_image` (returns first-class inline MCP image content) and
+`wait_for_request` (task-backed wait).
+
+There is no `nib codemode` CLI subcommand — Code Mode is an MCP surface. In a
+shell, use the CLI loop below.
+
+## The CLI Loop
 
 ```
 1. Find the right window → nib windows --json
@@ -43,6 +66,33 @@ You have eyes. Use them. Any time something visual is relevant, capture the scre
 6. Parse the human's response
 7. Act on it
 ```
+
+`nib feedback` waits indefinitely by default. It prints the durable request ID,
+review URL, and recovery command to stderr before waiting, then prints only the
+final response JSON to stdout. If the command runner yields a running process,
+resume that process. If the process is lost or restarted, continue the same
+request with `nib request wait REQUEST_ID`; never create a replacement request.
+
+Stay attached and wait for the human response in the same workflow:
+
+```bash
+nib feedback /tmp/nib_shot.png --format json
+```
+
+Do not use `--detach` unless the user explicitly asks to publish without
+waiting. If an attached process is lost, resume the request ID already printed
+to stderr with `nib request wait REQUEST_ID`; never create a replacement.
+
+For motion or interaction review, create the evidence with Nib itself:
+
+```bash
+nib record start --duration 30 --output /tmp/nib_review.mp4 --format json
+nib record wait RECORDING_ID
+nib feedback /tmp/nib_review.mp4 --format json
+```
+
+Recording is silent unless `--system-audio` or `--microphone` is explicit.
+Use `nib record status` and `nib record stop` to manage an in-progress worker.
 
 ### Step 1: Find the Right Window
 
@@ -112,7 +162,9 @@ The GUI returns one payload and closes:
 - `"reject"` — not acceptable; act on the annotations, rework, re-ask with a fresh one-shot call.
 - `"comment"` — feedback without a verdict; act on the optional typed comment and annotations.
 
-Timeout returns `{"event": "timeout"}` (exit code 0, not an error).
+For shared requests, an explicit nonzero timeout exits nonzero and preserves the
+request for `nib request wait REQUEST_ID`. Local GUI and terminal reviewers keep
+their existing one-shot timeout payload.
 
 ### Step 5: Act
 
@@ -187,7 +239,13 @@ nib render image.png  # → image.rendered.png
 | `windows` | `--json` | Machine-readable window list |
 | `feedback` | `-a` | JSON annotations array |
 | `feedback` | `-m` | Message/question as toast |
-| `feedback` | `-t` | Timeout in seconds (default 60) |
+| `feedback` | `-t` | Timeout in seconds (default 0, waits indefinitely) |
+| `feedback` | `--detach` | Explicit opt-out from waiting; use only when the user requests it |
+| `request wait` | `-t` | Resume by request ID; default 0 waits indefinitely |
+| `record start` | `--duration`, `--display`, `--window`, `--region` | Start a durable macOS H.264 MP4 recording |
+| `record start` | `--system-audio`, `--microphone` | Opt in to audio capture |
+| `record status/stop/wait` | recording ID | Manage a recording after the initiating process exits |
+| `media inspect/poster/transcribe` | media path | Validate media and derive review artifacts |
 | `generate` | `--width/--height` | Exact output pixels (required) |
 | `generate` | `--feedback -m` | One-shot human approval after generation |
 | `judge` | `--format json` | Structured READY/BLOCKED verdict |

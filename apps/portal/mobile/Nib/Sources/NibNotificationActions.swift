@@ -85,6 +85,9 @@ enum NibNotificationActions {
     @MainActor
     static func handle(response: UNNotificationResponse) async {
         let payload = nibPayload(from: response.notification.request.content.userInfo)
+        if let deviceId = payload["deviceId"] as? String, !deviceId.isEmpty {
+            NibDefaults.rememberRegisteredDeviceID(deviceId)
+        }
         if response.actionIdentifier == UNNotificationDefaultActionIdentifier || response.actionIdentifier == open {
             guard let requestId = payload["requestId"] as? String else {
                 await openPayload(payload)
@@ -101,22 +104,43 @@ enum NibNotificationActions {
             await openPayload(payload)
             return
         }
+        let deviceId = payload["deviceId"] as? String ?? "ios-notification"
         if response.actionIdentifier == choice0 {
-            await respond(requestId: requestId, body: ["choiceIndex": 0, "deviceId": "ios-notification"])
+            if await respond(
+                requestId: requestId,
+                body: ["choiceIndex": 0, "deviceId": deviceId, "notificationResponse": true]
+            ) {
+                clearDeliveredNotification(identifier: response.notification.request.identifier)
+            }
             return
         }
         if response.actionIdentifier == choice1 {
-            await respond(requestId: requestId, body: ["choiceIndex": 1, "deviceId": "ios-notification"])
+            if await respond(
+                requestId: requestId,
+                body: ["choiceIndex": 1, "deviceId": deviceId, "notificationResponse": true]
+            ) {
+                clearDeliveredNotification(identifier: response.notification.request.identifier)
+            }
             return
         }
         if response.actionIdentifier == choice2 {
-            await respond(requestId: requestId, body: ["choiceIndex": 2, "deviceId": "ios-notification"])
+            if await respond(
+                requestId: requestId,
+                body: ["choiceIndex": 2, "deviceId": deviceId, "notificationResponse": true]
+            ) {
+                clearDeliveredNotification(identifier: response.notification.request.identifier)
+            }
             return
         }
         if response.actionIdentifier == text, let textResponse = response as? UNTextInputNotificationResponse {
             let value = textResponse.userText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else { return }
-            await respond(requestId: requestId, body: ["text": value, "deviceId": "ios-notification"])
+            if await respond(
+                requestId: requestId,
+                body: ["text": value, "deviceId": deviceId, "notificationResponse": true]
+            ) {
+                clearDeliveredNotification(identifier: response.notification.request.identifier)
+            }
         }
     }
 
@@ -165,6 +189,18 @@ enum NibNotificationActions {
         clearPendingString(pendingURLKey, matching: url.absoluteString)
     }
 
+    static func clearDeliveredNotifications(requestId: String) async {
+        let center = UNUserNotificationCenter.current()
+        let identifiers = await center.deliveredNotifications()
+            .filter { notification in
+                let payload = nibPayload(from: notification.request.content.userInfo)
+                return payload["requestId"] as? String == requestId
+            }
+            .map(\.request.identifier)
+        guard !identifiers.isEmpty else { return }
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+
     private static func nibPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
         if let payload = userInfo["nib"] as? [String: Any] {
             return payload
@@ -183,6 +219,7 @@ enum NibNotificationActions {
         guard let url = endpoint("/api/requests/\(requestId)/notification-click") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        authorize(&request)
         _ = try? await URLSession.shared.data(for: request)
     }
 
@@ -190,26 +227,44 @@ enum NibNotificationActions {
         guard let url = endpoint("/api/feedback/\(feedbackId)/notification-click") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        authorize(&request)
         _ = try? await URLSession.shared.data(for: request)
     }
 
-    private static func respond(requestId: String, body: [String: Any]) async {
+    private static func respond(requestId: String, body: [String: Any]) async -> Bool {
         guard let url = endpoint("/api/requests/\(requestId)/respond"),
               JSONSerialization.isValidJSONObject(body),
               let data = try? JSONSerialization.data(withJSONObject: body)
         else {
-            return
+            return false
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = data
-        _ = try? await URLSession.shared.data(for: request)
+        authorize(&request)
+        guard let (_, response) = try? await URLSession.shared.data(for: request),
+              let httpResponse = response as? HTTPURLResponse
+        else {
+            return false
+        }
+        return (200..<300).contains(httpResponse.statusCode)
+    }
+
+    private static func clearDeliveredNotification(identifier: String) {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
     }
 
     private static func endpoint(_ path: String) -> URL? {
         let base = UserDefaults.standard.string(forKey: "nib.baseURL") ?? NibDefaults.defaultBaseURLString
         return URL(string: path, relativeTo: URL(string: base))?.absoluteURL
+    }
+
+    private static func authorize(_ request: inout URLRequest) {
+        guard let url = request.url,
+              let portal = URL(string: "/", relativeTo: url)?.absoluteURL,
+              let token = NibCredentialStore.token(for: portal) else { return }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
     }
 
     private static func payloadURL(_ payload: [String: Any]) -> URL? {

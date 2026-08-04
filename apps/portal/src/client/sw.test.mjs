@@ -94,7 +94,7 @@ test("web notification choice responds without opening the app", async () => {
   await dispatch(worker.listeners, "notificationclick", {
     action: "choice:1",
     notification: {
-      data: { requestId: "req 123", url: "/requests/req_123" },
+      data: { requestId: "req 123", url: "/requests/req_123", deviceId: "web-device-123" },
       close: () => {
         closed = true;
       }
@@ -108,7 +108,8 @@ test("web notification choice responds without opening the app", async () => {
   assert.equal(worker.fetches[0].options.method, "POST");
   assert.deepEqual(JSON.parse(worker.fetches[0].options.body), {
     choiceIndex: 1,
-    deviceId: "web-notification"
+    deviceId: "web-device-123",
+    notificationResponse: true
   });
 });
 

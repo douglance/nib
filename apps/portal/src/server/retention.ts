@@ -85,7 +85,10 @@ function completedTime(record: RequestRecord): number {
 }
 
 function isReviewByteAttachment(attachment: RequestAttachment): boolean {
-  return attachment.contentType.startsWith("image/") || attachment.contentType === "application/x-nib";
+  return attachment.contentType.startsWith("image/")
+    || attachment.contentType.startsWith("video/")
+    || attachment.contentType.startsWith("audio/")
+    || attachment.contentType === "application/x-nib";
 }
 
 function recordTime(record: { updatedAt?: string | null; createdAt?: string | null }): number {

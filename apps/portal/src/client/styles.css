@@ -370,6 +370,16 @@ button:disabled {
   border-bottom: 0;
 }
 
+.completedIdentity {
+  display: grid;
+  gap: 2px;
+}
+
+.completedIdentity small {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .responseBadge {
   padding: 5px 13px;
   font-size: 0.86rem;
@@ -491,6 +501,74 @@ button:disabled {
   object-fit: contain;
   border-radius: 10px;
   pointer-events: none;
+}
+
+.videoSource {
+  width: 100%;
+  max-height: calc(100dvh - 270px);
+  display: block;
+  border-radius: 10px;
+  background: #111;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.videoTimeline {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: 40px auto minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(250, 249, 244, 0.94);
+}
+
+.playbackButton {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.videoTime {
+  min-width: 3.2em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.timelineTrack {
+  position: relative;
+  height: 30px;
+  display: grid;
+  align-items: center;
+}
+
+.timelineTrack input {
+  width: 100%;
+  accent-color: #2376d2;
+}
+
+.timelineMarker {
+  position: absolute;
+  top: 3px;
+  width: 8px;
+  height: 24px;
+  padding: 0;
+  transform: translateX(-50%);
+  border: 2px solid #f7f2e8;
+  border-radius: 4px;
+  background: #2376d2;
+  cursor: pointer;
 }
 
 .canvasSource {
@@ -639,6 +717,51 @@ button:disabled {
   margin: 0 0 24px;
   font-size: 1.5rem;
   font-weight: 400;
+}
+
+.replyMediaControls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.replyMediaButton {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.replyMediaButton.recording {
+  border-color: #9c2e2a;
+  color: #9c2e2a;
+}
+
+.replyMediaButton input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.replyMediaStatus {
+  margin: -2px 0 10px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .decisionPanel textarea {

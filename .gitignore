@@ -4,6 +4,16 @@ Cargo.lock
 *.swo
 .DS_Store
 
+# Build output from nested crates and workers
+target/
+node_modules/
+.wrangler/
+dist/
+
+# Local worker secrets
+.dev.vars
+.env
+
 # Demo/test artifacts
 demo.png
 demo.*.png

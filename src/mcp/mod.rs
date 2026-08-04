@@ -7,7 +7,7 @@
 //! # Usage
 //!
 //! ```bash
-//! nib mcp-server --image /path/to/image.png
+//! nib --mcp
 //! ```
 //!
 //! # Tools

@@ -53,6 +53,14 @@ final class NibAppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNU
             completionHandler()
         }
     }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound, .badge])
+    }
 }
 
 extension Notification.Name {
@@ -84,7 +92,6 @@ struct RequestInboxView: View {
     @State private var safariRoute: SafariRoute?
     @State private var webRoute: WebRoute?
     @GestureState private var sidebarDragTranslation: CGFloat = 0
-    @AppStorage("nib.autoRegisteredNotifications") private var autoRegisteredNotifications = false
     @AppStorage("nib.darkMode") private var darkMode = false
 
     private var activeRequests: [NibRequest] {
@@ -213,9 +220,19 @@ struct RequestInboxView: View {
                     baseURLString = server
                     client.configure(baseURLString: server)
                 }
+                do {
+                    try await client.migrateLegacyCredentialIfNeeded(
+                        name: UIDevice.current.name,
+                        platform: authPlatform
+                    )
+                    if let pairingCode = launchArgument("nib.pairingCode") {
+                        try await enroll(pairingCode: pairingCode)
+                    }
+                } catch {
+                    self.error = error.localizedDescription
+                }
                 await load()
-                if !autoRegisteredNotifications, NibEntitlements.hasAPSEnvironment {
-                    autoRegisteredNotifications = true
+                if NibEntitlements.hasAPSEnvironment {
                     await registerForNotifications()
                 }
                 if let requestId = launchArgument("nib.openRequest") {
@@ -225,6 +242,9 @@ struct RequestInboxView: View {
                 } else {
                     await consumePendingNotificationRoute()
                 }
+            }
+            .task(id: baseURLString) {
+                await consumeRequestEvents()
             }
             .refreshable { await load() }
             .sheet(isPresented: $showingSettings) {
@@ -255,7 +275,11 @@ struct RequestInboxView: View {
             .sheet(item: $selectedRequest, onDismiss: {
                 Task { await load() }
             }) { request in
-                RequestDetailView(request: request)
+                RequestDetailView(request: Binding(
+                    get: { selectedRequest ?? request },
+                    set: { selectedRequest = $0 }
+                ), onSubmitted: advanceAfterSubmission)
+                    .id(selectedRequest?.id ?? request.id)
                     .presentationDetents(
                         request.kind == "visual-review"
                             ? Set([.large])
@@ -371,6 +395,85 @@ struct RequestInboxView: View {
         }
     }
 
+    private func consumeRequestEvents() async {
+        var reconnectAttempt = 0
+        while !Task.isCancelled {
+            do {
+                for try await event in client.requestEvents() {
+                    try Task.checkCancellation()
+                    if event.type == "ready" {
+                        reconnectAttempt = 0
+                        await refreshRequests()
+                    } else if event.type == "request", let request = event.request {
+                        applyRequestEvent(
+                            request,
+                            presentImmediately: event.action == "created" || event.action == "published"
+                        )
+                        if !request.isActive {
+                            await NibNotificationActions.clearDeliveredNotifications(requestId: request.id)
+                        }
+                    }
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                // Reconnect below; the HTTP refresh after the ready frame fills any event gap.
+            }
+
+            guard !Task.isCancelled else { return }
+            let delay = min(pow(2.0, Double(reconnectAttempt)), 8.0)
+            reconnectAttempt += 1
+            do {
+                try await Task.sleep(for: .seconds(delay + Double.random(in: 0...0.25)))
+            } catch {
+                return
+            }
+        }
+    }
+
+    private func refreshRequests() async {
+        do {
+            let nextRequests = try await client.requests()
+            requests = nextRequests
+            if let selectedRequest,
+               let updatedSelection = nextRequests.first(where: { $0.id == selectedRequest.id }) {
+                self.selectedRequest = updatedSelection
+            }
+            for request in nextRequests where !request.isActive {
+                await NibNotificationActions.clearDeliveredNotifications(requestId: request.id)
+            }
+            error = nil
+        } catch is CancellationError {
+            return
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    private func applyRequestEvent(_ request: NibRequest, presentImmediately: Bool) {
+        requests.removeAll { $0.id == request.id }
+        requests.append(request)
+        requests.sort { $0.updatedAt > $1.updatedAt }
+        if presentImmediately && request.isActive {
+            showingSettings = false
+            showingSidebar = false
+            sidebarDestination = nil
+            selectedProject = nil
+            safariRoute = nil
+            webRoute = nil
+            selectedRequest = request
+        } else if selectedRequest?.id == request.id {
+            selectedRequest = request
+        }
+    }
+
+    private func advanceAfterSubmission(_ submittedRequest: NibRequest) {
+        requests.removeAll { $0.id == submittedRequest.id }
+        requests.append(submittedRequest)
+        requests.sort { $0.updatedAt > $1.updatedAt }
+        selectedRequest = requests.first(where: \.isActive)
+    }
+
     private func registerForNotifications() async {
         guard NibEntitlements.hasAPSEnvironment else {
             notice = "This build is missing the APS entitlement. Install a push-signed build to receive lock-screen requests."
@@ -393,14 +496,25 @@ struct RequestInboxView: View {
 
     private func registerDevice(token: String) async {
         do {
-            _ = try await client.registerDevice(
+            let device = try await client.registerDevice(
                 name: UIDevice.current.name,
                 token: token,
-                platform: "ios",
+                platform: {
+                    #if os(visionOS)
+                    "visionos"
+                    #else
+                    "ios"
+                    #endif
+                }(),
                 apnsTopic: Bundle.main.bundleIdentifier,
                 capabilities: ["alert", "actions", "text", "open", "upload"]
             )
+            NibDefaults.rememberRegisteredDevice(device)
+            #if os(visionOS)
+            notice = "This Apple Vision Pro is registered."
+            #else
             notice = "This iPhone is registered."
+            #endif
             await load()
         } catch {
             self.error = error.localizedDescription
@@ -440,6 +554,24 @@ struct RequestInboxView: View {
             baseURLString = server
             client.configure(baseURLString: server)
         }
+        if scheme == "nib", url.host == "auth" {
+            guard let pairingCode = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?
+                .first(where: { $0.name == "code" })?
+                .value else {
+                notice = "Pairing link is not valid."
+                return
+            }
+            Task {
+                do {
+                    try await enroll(pairingCode: pairingCode)
+                    await load()
+                } catch {
+                    self.error = error.localizedDescription
+                }
+            }
+            return
+        }
         if scheme == "http" || scheme == "https" {
             guard url.host == client.baseURL.host() else { return }
         }
@@ -458,6 +590,23 @@ struct RequestInboxView: View {
             return
         }
         Task { await openRequest(id: requestId) }
+    }
+
+    private var authPlatform: String {
+        #if os(visionOS)
+        "visionos"
+        #else
+        "ios"
+        #endif
+    }
+
+    private func enroll(pairingCode: String) async throws {
+        _ = try await client.redeemPairing(
+            code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines),
+            name: UIDevice.current.name,
+            platform: authPlatform
+        )
+        notice = "This device is paired."
     }
 
     private func openProject(id: String) async {
@@ -2009,9 +2158,9 @@ struct RequestRow: View {
 
 struct RequestDetailView: View {
     @EnvironmentObject private var client: NibClient
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
-    @State var request: NibRequest
+    @Binding var request: NibRequest
+    var onSubmitted: (NibRequest) -> Void
     @State private var reply = ""
     @State private var error: String?
     @State private var notice: String?
@@ -2022,20 +2171,32 @@ struct RequestDetailView: View {
     @State private var sending = false
 
     private var cameraAvailable: Bool {
+        #if os(visionOS)
+        false
+        #else
         UIImagePickerController.isSourceTypeAvailable(.camera)
+        #endif
     }
 
     private var reviewImage: NibRequest.Attachment? {
         request.attachments.first { $0.contentType.hasPrefix("image/") || $0.type == "image" }
     }
 
+    private var reviewVideo: NibRequest.Attachment? {
+        request.visualReviewVideo
+    }
+
     var body: some View {
         Group {
-            if request.kind == "visual-review", let reviewImage {
+            if request.kind == "visual-review", reviewImage != nil || reviewVideo != nil {
                 NativeVisualReviewWorkspace(
                     request: request,
-                    imageURL: client.absoluteURL(reviewImage.url),
+                    imageURL: client.absoluteURL(reviewImage?.url),
+                    videoURL: client.absoluteURL(reviewVideo?.url),
                     sending: sending,
+                    uploadReply: { data, name in
+                        _ = try await client.uploadResponseVideo(requestId: request.id, name: name, data: data)
+                    },
                     submit: submitVisualReview
                 )
             } else {
@@ -2134,6 +2295,11 @@ struct RequestDetailView: View {
                             .font(.headline)
                         Text(response.choice ?? response.text)
                             .foregroundStyle(NibTheme.muted)
+                        if let deviceName = response.device?.name {
+                            Text("Answered on \(deviceName)")
+                                .font(.subheadline)
+                                .foregroundStyle(NibTheme.muted)
+                        }
                     }
                     .padding(18)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -2160,7 +2326,8 @@ struct RequestDetailView: View {
             reply = ""
             notice = "Response sent."
             error = nil
-            dismiss()
+            await NibNotificationActions.clearDeliveredNotifications(requestId: request.id)
+            onSubmitted(request)
         } catch {
             self.error = error.localizedDescription
         }
@@ -2182,7 +2349,8 @@ struct RequestDetailView: View {
             )
             notice = decision == "approve" ? "Approved." : decision == "reject" ? "Rejected." : "Comment sent."
             error = nil
-            dismiss()
+            await NibNotificationActions.clearDeliveredNotifications(requestId: request.id)
+            onSubmitted(request)
         } catch {
             self.error = error.localizedDescription
         }
@@ -2486,6 +2654,7 @@ struct NativeImageViewer: View {
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var client: NibClient
     @Binding var baseURLString: String
     var notificationStatus: NibNotificationStatus?
     var devices: [NibDevice]
@@ -2494,6 +2663,10 @@ struct SettingsView: View {
     var registerNotifications: () -> Void
     var sendTestNotification: () -> Void
     @AppStorage("nib.darkMode") private var darkMode = false
+    @State private var pairingCode = ""
+    @State private var authState = "Checking"
+    @State private var authError: String?
+    @State private var pairing = false
     @State private var diagnosticsExpanded = false
 
     var body: some View {
@@ -2510,7 +2683,36 @@ struct SettingsView: View {
                     .keyboardType(.URL)
                     .autocorrectionDisabled()
             } footer: {
-                Text("Use the same nib server URL that web, CLI, and notifications use.")
+                Text("Use the same Nib service URL that the CLI and notifications use.")
+            }
+
+            Section {
+                LabeledContent("Status", value: authState)
+                TextField("One-time pairing code", text: $pairingCode)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Button {
+                    Task { await redeemPairing() }
+                } label: {
+                    if pairing {
+                        HStack {
+                            ProgressView()
+                            Text("Pairing")
+                        }
+                    } else {
+                        Text("Pair device")
+                    }
+                }
+                .disabled(pairing || pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if let authError {
+                    Text(authError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            } header: {
+                Text("Authentication")
+            } footer: {
+                Text("Create a code with `nib auth pair`. It expires after 10 minutes and works once.")
             }
 
             Section("Advanced") {
@@ -2550,10 +2752,46 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .task(id: baseURLString) { await refreshAuthStatus() }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { dismiss() }
             }
+        }
+    }
+
+    private func refreshAuthStatus() async {
+        client.configure(baseURLString: baseURLString)
+        do {
+            let status = try await client.authStatus()
+            authState = status.authenticated ? "Paired" : "Not paired"
+            authError = nil
+        } catch {
+            authState = "Not paired"
+        }
+    }
+
+    private func redeemPairing() async {
+        pairing = true
+        defer { pairing = false }
+        do {
+            let platform: String
+            #if os(visionOS)
+            platform = "visionos"
+            #else
+            platform = "ios"
+            #endif
+            let status = try await client.redeemPairing(
+                code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines),
+                name: UIDevice.current.name,
+                platform: platform
+            )
+            authState = status.authenticated ? "Paired" : "Not paired"
+            pairingCode = ""
+            authError = nil
+        } catch {
+            authError = error.localizedDescription
+            authState = "Not paired"
         }
     }
 
@@ -2601,6 +2839,19 @@ struct SafariRoute: Identifiable {
     var id: String { url.absoluteString }
 }
 
+#if os(visionOS)
+struct CameraCaptureView: View {
+    var onCapture: (UIImage) -> Void
+
+    var body: some View {
+        ContentUnavailableView(
+            "Camera unavailable",
+            systemImage: "camera.slash",
+            description: Text("Choose an image from Photos instead.")
+        )
+    }
+}
+#else
 struct CameraCaptureView: UIViewControllerRepresentable {
     var onCapture: (UIImage) -> Void
 
@@ -2637,6 +2888,7 @@ struct CameraCaptureView: UIViewControllerRepresentable {
         }
     }
 }
+#endif
 
 struct WebRoute: Identifiable {
     var url: URL

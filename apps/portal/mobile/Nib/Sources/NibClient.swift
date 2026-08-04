@@ -1,7 +1,117 @@
 import Foundation
+import Security
 
 enum NibDefaults {
-    static let defaultBaseURLString = "https://dave.tail5d92b4.ts.net"
+    static let defaultBaseURLString = "https://nib-global.doug-lance.workers.dev"
+    static let registeredDeviceIDKey = "nib.registeredDeviceID"
+    static let authTokenKey = "nib.authToken"
+    static let bootstrapAuthTokenKey = "nib.bootstrapAuthToken"
+
+    static var registeredDeviceID: String? {
+        UserDefaults.standard.string(forKey: registeredDeviceIDKey)
+    }
+
+    static func rememberRegisteredDeviceID(_ deviceID: String) {
+        UserDefaults.standard.set(deviceID, forKey: registeredDeviceIDKey)
+    }
+
+    static func rememberRegisteredDevice(_ device: NibDevice) {
+        rememberRegisteredDeviceID(device.id)
+    }
+
+}
+
+enum NibCredentialStore {
+    private static let service = "com.douglance.nib.auth"
+
+    static func token(for portal: URL) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account(for: portal),
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data,
+              let token = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            return nil
+        }
+        return token
+    }
+
+    static func store(_ token: String, for portal: URL) throws {
+        let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            throw NSError(
+                domain: "NibCredentialStore",
+                code: Int(errSecParam),
+                userInfo: [NSLocalizedDescriptionKey: "The Nib credential is empty."]
+            )
+        }
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account(for: portal)
+        ]
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(value.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else {
+            throw keychainError(updateStatus)
+        }
+        var item = query
+        attributes.forEach { item[$0.key] = $0.value }
+        let addStatus = SecItemAdd(item as CFDictionary, nil)
+        guard addStatus == errSecSuccess else { throw keychainError(addStatus) }
+    }
+
+    @discardableResult
+    static func remove(for portal: URL) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account(for: portal)
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+
+    private static func account(for portal: URL) -> String {
+        var value = (portal.host() ?? portal.absoluteString).lowercased()
+        if let port = portal.port { value += ":\(port)" }
+        return value
+    }
+
+    private static func keychainError(_ status: OSStatus) -> NSError {
+        NSError(
+            domain: "NibCredentialStore",
+            code: Int(status),
+            userInfo: [
+                NSLocalizedDescriptionKey: SecCopyErrorMessageString(status, nil) as String?
+                    ?? "Keychain returned \(status)."
+            ]
+        )
+    }
+}
+
+struct NibAuthStatus: Codable, Hashable {
+    var authenticated: Bool
+    var kind: String
+    var subject: String
+    var name: String
+    var platform: String
+    var scopes: [String]
+}
+
+struct NibAuthLogout: Codable, Hashable {
+    var revoked: Bool
 }
 
 @MainActor
@@ -21,12 +131,93 @@ final class NibClient: ObservableObject {
         baseURL = next
     }
 
+    func authStatus() async throws -> NibAuthStatus {
+        try await get("/api/auth/status")
+    }
+
+    func redeemPairing(code: String, name: String, platform: String) async throws -> NibAuthStatus {
+        let issued: NibIssuedCredential = try await postUnauthenticated(
+            "/api/auth/pairings/redeem",
+            body: PairingBody(code: code, name: name, platform: platform)
+        )
+        try NibCredentialStore.store(issued.token, for: baseURL)
+        return try await authStatus()
+    }
+
+    func logout() async throws -> NibAuthLogout {
+        defer { NibCredentialStore.remove(for: baseURL) }
+        return try await post("/api/auth/logout", body: EmptyBody())
+    }
+
+    func migrateLegacyCredentialIfNeeded(name: String, platform: String) async throws {
+        guard NibCredentialStore.token(for: baseURL) == nil else { return }
+        let defaults = UserDefaults.standard
+        let legacy = [NibDefaults.authTokenKey, NibDefaults.bootstrapAuthTokenKey]
+            .compactMap { defaults.string(forKey: $0) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        guard let legacy else { return }
+        let issued: NibIssuedCredential = try await postUnauthenticated(
+            "/api/auth/exchange",
+            body: AuthExchangeBody(name: name, platform: platform),
+            bearer: legacy
+        )
+        try NibCredentialStore.store(issued.token, for: baseURL)
+        defaults.removeObject(forKey: NibDefaults.authTokenKey)
+        defaults.removeObject(forKey: NibDefaults.bootstrapAuthTokenKey)
+    }
+
     func requests() async throws -> [NibRequest] {
         try await get("/api/requests")
     }
 
     func request(id: String) async throws -> NibRequest {
         try await get("/api/requests/\(id)")
+    }
+
+    func requestEvents() -> AsyncThrowingStream<NibRequestSocketEvent, Error> {
+        AsyncThrowingStream { continuation in
+            guard let socketURL = webSocketURL("/api/requests/socket") else {
+                continuation.finish(throwing: NSError(
+                    domain: "NibClient",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Request WebSocket URL is invalid"]
+                ))
+                return
+            }
+
+            var request = URLRequest(url: socketURL)
+            authorize(&request)
+            let socket = session.webSocketTask(with: request)
+            socket.resume()
+            let receiveTask = Task {
+                do {
+                    while !Task.isCancelled {
+                        let message = try await socket.receive()
+                        let data: Data
+                        switch message {
+                        case .data(let value):
+                            data = value
+                        case .string(let value):
+                            data = Data(value.utf8)
+                        @unknown default:
+                            continue
+                        }
+                        continuation.yield(try JSONDecoder().decode(NibRequestSocketEvent.self, from: data))
+                    }
+                    continuation.finish()
+                } catch is CancellationError {
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+
+            continuation.onTermination = { _ in
+                receiveTask.cancel()
+                socket.cancel(with: .goingAway, reason: nil)
+            }
+        }
     }
 
     func projects() async throws -> [NibProject] {
@@ -88,6 +279,7 @@ final class NibClient: ObservableObject {
             let task = Task {
                 do {
                     var request = URLRequest(url: url("/api/projects/\(projectId)/commands/\(commandId)/events"))
+                    authorize(&request)
                     request.setValue("text/event-stream", forHTTPHeaderField: "accept")
                     let (bytes, response) = try await session.bytes(for: request)
                     guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -161,7 +353,8 @@ final class NibClient: ObservableObject {
                 choiceIndex: choiceIndex,
                 decision: decision,
                 comment: comment,
-                annotations: annotations
+                annotations: annotations,
+                deviceId: NibDefaults.registeredDeviceID
             )
         )
     }
@@ -193,13 +386,26 @@ final class NibClient: ObservableObject {
         )
     }
 
+    func uploadResponseVideo(requestId: String, name: String, data: Data) async throws -> NibRequest.Attachment {
+        var request = URLRequest(url: url("/api/requests/\(requestId)/response-attachments"))
+        request.httpMethod = "POST"
+        request.setValue("video/mp4", forHTTPHeaderField: "content-type")
+        request.setValue(name, forHTTPHeaderField: "x-nib-filename")
+        authorize(&request)
+        let (responseData, response) = try await session.upload(for: request, from: data)
+        try validate(response: response, data: responseData)
+        return try JSONDecoder().decode(NibRequest.Attachment.self, from: responseData)
+    }
+
     func absoluteURL(_ value: String?) -> URL? {
         guard let value, !value.isEmpty else { return nil }
         return URL(string: value, relativeTo: baseURL)?.absoluteURL
     }
 
     private func get<T: Decodable>(_ path: String) async throws -> T {
-        let (data, response) = try await session.data(from: url(path))
+        var request = URLRequest(url: url(path))
+        authorize(&request)
+        let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
         return try JSONDecoder().decode(T.self, from: data)
     }
@@ -209,6 +415,24 @@ final class NibClient: ObservableObject {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONEncoder().encode(body)
+        authorize(&request)
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    private func postUnauthenticated<T: Decodable, Body: Encodable>(
+        _ path: String,
+        body: Body,
+        bearer: String? = nil
+    ) async throws -> T {
+        var request = URLRequest(url: url(path))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(body)
+        if let bearer, !bearer.isEmpty {
+            request.setValue("Bearer \(bearer)", forHTTPHeaderField: "authorization")
+        }
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
         return try JSONDecoder().decode(T.self, from: data)
@@ -219,6 +443,7 @@ final class NibClient: ObservableObject {
         request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONEncoder().encode(body)
+        authorize(&request)
         let (data, response) = try await session.data(for: request)
         try validate(response: response, data: data)
         return try JSONDecoder().decode(T.self, from: data)
@@ -226,6 +451,26 @@ final class NibClient: ObservableObject {
 
     private func url(_ path: String) -> URL {
         URL(string: path, relativeTo: baseURL)!.absoluteURL
+    }
+
+    private func webSocketURL(_ path: String) -> URL? {
+        guard var components = URLComponents(url: url(path), resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        switch components.scheme?.lowercased() {
+        case "https":
+            components.scheme = "wss"
+        case "http":
+            components.scheme = "ws"
+        default:
+            return nil
+        }
+        return components.url
+    }
+
+    private func authorize(_ request: inout URLRequest) {
+        guard let token = NibCredentialStore.token(for: baseURL) else { return }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
     }
 
     private func validate(response: URLResponse, data: Data) throws {
@@ -263,6 +508,7 @@ private struct ResponseBody: Encodable {
     var decision: String?
     var comment: String?
     var annotations: [NibReviewAnnotation]?
+    var deviceId: String?
 }
 
 private struct DeviceBody: Encodable {
@@ -295,3 +541,18 @@ private struct RouteBody: Encodable {
 }
 
 private struct EmptyBody: Encodable {}
+
+private struct PairingBody: Encodable {
+    var code: String
+    var name: String
+    var platform: String
+}
+
+private struct AuthExchangeBody: Encodable {
+    var name: String
+    var platform: String
+}
+
+private struct NibIssuedCredential: Decodable {
+    var token: String
+}

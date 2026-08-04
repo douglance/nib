@@ -160,7 +160,26 @@ struct WatchRequestListView: View {
                     baseURLString = server
                     client.configure(baseURLString: server)
                 }
+                do {
+                    try await client.migrateLegacyCredentialIfNeeded(
+                        name: WKInterfaceDevice.current().name,
+                        platform: "watchos"
+                    )
+                    if let pairingCode = launchArgument("nib.pairingCode") {
+                        _ = try await client.redeemPairing(
+                            code: pairingCode,
+                            name: WKInterfaceDevice.current().name,
+                            platform: "watchos"
+                        )
+                        notice = "Watch paired."
+                    }
+                } catch {
+                    self.error = error.localizedDescription
+                }
                 await load()
+                if NibEntitlements.hasAPSEnvironment {
+                    await registerForNotifications()
+                }
                 if let requestId = launchArgument("nib.openRequest") {
                     await openRequest(id: requestId)
                 } else if let projectId = launchArgument("nib.openProject") {
@@ -236,13 +255,14 @@ struct WatchRequestListView: View {
 
     private func registerDevice(token: String) async {
         do {
-            _ = try await client.registerDevice(
+            let device = try await client.registerDevice(
                 name: WKInterfaceDevice.current().name,
                 token: token,
                 platform: "watchos",
                 apnsTopic: Bundle.main.bundleIdentifier,
                 capabilities: ["alert", "actions", "text", "open", "projects", "routes", "recheck", "kill"]
             )
+            NibDefaults.rememberRegisteredDevice(device)
             notice = "Watch registered."
         } catch {
             self.error = error.localizedDescription
@@ -286,6 +306,31 @@ struct WatchRequestListView: View {
 
     private func open(url: URL) {
         guard url.scheme == "nib" else { return }
+        if url.host == "auth" {
+            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            if let server = components?.queryItems?.first(where: { $0.name == "server" })?.value {
+                baseURLString = server
+                client.configure(baseURLString: server)
+            }
+            guard let code = components?.queryItems?.first(where: { $0.name == "code" })?.value else {
+                notice = "Pairing link is not valid."
+                return
+            }
+            Task {
+                do {
+                    _ = try await client.redeemPairing(
+                        code: code,
+                        name: WKInterfaceDevice.current().name,
+                        platform: "watchos"
+                    )
+                    notice = "Watch paired."
+                    await load()
+                } catch {
+                    self.error = error.localizedDescription
+                }
+            }
+            return
+        }
         if let requestId = requestId(from: url) {
             Task { await openRequest(id: requestId) }
             return
@@ -721,64 +766,178 @@ struct WatchProjectDetailView: View {
 }
 
 struct WatchRequestDetailView: View {
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var client: NibClient
     @State var request: NibRequest
     @State private var reply = ""
     @State private var message: String?
     @State private var sending = false
+    @State private var inspectingImage = ProcessInfo.processInfo.arguments.contains("-nib.inspectImage")
 
     var body: some View {
         ZStack {
             WatchTheme.background.ignoresSafeArea()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(request.title)
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(WatchTheme.text)
-                        Text(request.prompt)
-                            .font(.footnote)
-                            .foregroundStyle(WatchTheme.muted)
-                        if let context = request.context, !context.isEmpty {
-                            Text(context)
-                                .font(.caption2)
-                                .foregroundStyle(WatchTheme.muted)
-                        }
+            if request.kind == "visual-review" {
+                if inspectingImage, let imageURL = visualReviewImageURL {
+                    WatchImageInspectionView(url: imageURL) {
+                        inspectingImage = false
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(WatchTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(WatchTheme.border))
-
-                    ForEach(Array(request.choices.enumerated()), id: \.offset) { index, choice in
-                        Button(choice) {
-                            Task { await respond(choice: choice, index: index) }
-                        }
-                        .buttonStyle(WatchChoiceButtonStyle())
-                        .disabled(sending || !request.isActive)
-                    }
-
-                    if request.allowText && request.isActive {
-                        TextField("Reply", text: $reply)
-                        Button("Send") {
-                            Task { await respond(text: reply) }
-                        }
-                        .buttonStyle(WatchChoiceButtonStyle())
-                        .disabled(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
-                    }
-
-                    if let message {
-                        WatchNoticeSurface(message: message)
-                    } else if !request.isActive, let response = request.latestResponse {
-                        WatchNoticeSurface(message: response.choice ?? response.text)
-                    }
+                } else {
+                    visualReview
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 2)
-                .padding(.bottom, 8)
+            } else {
+                standardRequest
             }
         }
         .navigationTitle("Request")
+    }
+
+    private var visualReview: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    dismiss()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "chevron.left")
+                        Text("Request")
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(WatchTheme.blue)
+                .padding(.horizontal, 10)
+
+                Text(request.prompt)
+                    .font(.caption)
+                    .foregroundStyle(WatchTheme.text)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+
+                if let imageURL = visualReviewImageURL {
+                    Button {
+                        inspectingImage = true
+                    } label: {
+                        WatchReviewImagePreview(url: imageURL)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Inspect review image")
+                    .accessibilityHint("Opens zoom and pan controls")
+                    .padding(.horizontal, 4)
+                } else {
+                    ContentUnavailableView(
+                        "No preview",
+                        systemImage: "photo",
+                        description: Text("Open this review on iPhone or Mac.")
+                    )
+                    .frame(height: 180)
+                }
+
+                if request.isActive {
+                    HStack(spacing: 6) {
+                        Button("Reject") {
+                            Task { await respond(decision: "reject") }
+                        }
+                        .buttonStyle(WatchDecisionButtonStyle(color: .red))
+
+                        Button("Approve") {
+                            Task { await respond(decision: "approve") }
+                        }
+                        .buttonStyle(WatchDecisionButtonStyle(color: .green))
+                    }
+                    .disabled(sending)
+                } else if let response = request.latestResponse {
+                    WatchNoticeSurface(message: response.choice ?? response.text)
+                }
+
+                if let message {
+                    Text(message)
+                        .font(.caption2)
+                        .foregroundStyle(WatchTheme.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.horizontal, 2)
+            .padding(.top, 14)
+            .padding(.bottom, 8)
+        }
+        .scrollIndicators(.visible)
+        .overlay(alignment: .topTrailing) {
+            Capsule()
+                .fill(WatchTheme.muted.opacity(0.55))
+                .frame(width: 3, height: 40)
+                .padding(.top, 28)
+                .padding(.trailing, 2)
+        }
+        .ignoresSafeArea(edges: .top)
+        .toolbar(.hidden, for: .navigationBar)
+    }
+
+    private var visualReviewImageURL: URL? {
+        client.absoluteURL(request.visualReviewImage?.url)
+    }
+
+    private var standardRequest: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(request.title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(WatchTheme.text)
+                    Text(request.prompt)
+                        .font(.footnote)
+                        .foregroundStyle(WatchTheme.muted)
+                    if let context = request.context, !context.isEmpty {
+                        Text(context)
+                            .font(.caption2)
+                            .foregroundStyle(WatchTheme.muted)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(WatchTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(WatchTheme.border))
+
+                ForEach(Array(request.choices.enumerated()), id: \.offset) { index, choice in
+                    Button(choice) {
+                        Task { await respond(choice: choice, index: index) }
+                    }
+                    .buttonStyle(WatchChoiceButtonStyle())
+                    .disabled(sending || !request.isActive)
+                }
+
+                if request.allowText && request.isActive {
+                    TextField("Reply", text: $reply)
+                    Button("Send") {
+                        Task { await respond(text: reply) }
+                    }
+                    .buttonStyle(WatchChoiceButtonStyle())
+                    .disabled(reply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || sending)
+                }
+
+                if let message {
+                    WatchNoticeSurface(message: message)
+                } else if !request.isActive, let response = request.latestResponse {
+                    WatchNoticeSurface(message: response.choice ?? response.text)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 2)
+            .padding(.bottom, 8)
+        }
+    }
+
+    private func respond(decision: String) async {
+        sending = true
+        defer { sending = false }
+        do {
+            request = try await client.respond(requestId: request.id, decision: decision, annotations: [])
+            message = "Sent."
+        } catch {
+            message = error.localizedDescription
+        }
     }
 
     private func respond(choice: String, index: Int) async {
@@ -802,6 +961,201 @@ struct WatchRequestDetailView: View {
         } catch {
             message = error.localizedDescription
         }
+    }
+}
+
+struct WatchReviewImagePreview: View {
+    let url: URL
+
+    var body: some View {
+        AsyncImage(url: url) { phase in
+            switch phase {
+            case .empty:
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .success(let image):
+                image
+                    .resizable()
+                    .scaledToFill()
+            case .failure:
+                ContentUnavailableView("Preview unavailable", systemImage: "photo.badge.exclamationmark")
+            @unknown default:
+                EmptyView()
+            }
+        }
+        .frame(height: 110)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(WatchTheme.border))
+        .overlay {
+            Text("Tap to inspect")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(WatchTheme.text)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(.black.opacity(0.68), in: Capsule())
+        }
+    }
+}
+
+struct WatchImageInspectionView: View {
+    let url: URL
+    let onDone: () -> Void
+
+    private var startsZoomedForVisualTest: Bool {
+        ProcessInfo.processInfo.arguments.contains("-nib.zoomed")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Button("Done", action: onDone)
+                .buttonStyle(.plain)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(WatchTheme.blue)
+
+            WatchZoomableImage(
+                url: url,
+                initialZoom: startsZoomedForVisualTest ? 2 : 1,
+                initialOffset: startsZoomedForVisualTest ? CGSize(width: -50, height: -70) : .zero
+            )
+            .frame(height: 138)
+        }
+        .padding(.horizontal, 2)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+        .ignoresSafeArea(edges: .top)
+        .toolbar(.hidden, for: .navigationBar)
+    }
+}
+
+struct WatchZoomableImage: View {
+    let url: URL
+
+    @State private var loadedImage: UIImage?
+    @State private var loadFailed = false
+    @State private var zoom: Double
+    @State private var offset: CGSize
+    @State private var settledOffset: CGSize
+    @FocusState private var crownFocused: Bool
+
+    init(url: URL, initialZoom: Double = 1, initialOffset: CGSize = .zero) {
+        self.url = url
+        _zoom = State(initialValue: initialZoom)
+        _offset = State(initialValue: initialOffset)
+        _settledOffset = State(initialValue: initialOffset)
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            if let loadedImage {
+                let imageSize = renderedSize(for: loadedImage.size, in: proxy.size)
+                Image(uiImage: loadedImage)
+                    .resizable()
+                    .frame(
+                        width: imageSize.width * zoom,
+                        height: imageSize.height * zoom
+                    )
+                    .offset(offset)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(panGesture(imageSize: imageSize, viewportSize: proxy.size))
+            } else if loadFailed {
+                ContentUnavailableView("Preview unavailable", systemImage: "photo.badge.exclamationmark")
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color.black, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(WatchTheme.border))
+        .overlay(alignment: .topTrailing) {
+            HStack(spacing: 4) {
+                Text(String(format: "%.1fx", zoom))
+                    .monospacedDigit()
+                Image(systemName: "digitalcrown.horizontal.arrow.clockwise")
+            }
+                .font(.caption2)
+                .foregroundStyle(WatchTheme.text)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(.black.opacity(0.65), in: Capsule())
+                .padding(5)
+        }
+        .focusable()
+        .focused($crownFocused)
+        .digitalCrownRotation(
+            $zoom,
+            from: 1,
+            through: 4,
+            by: 0.1,
+            sensitivity: .medium,
+            isContinuous: false,
+            isHapticFeedbackEnabled: true
+        )
+        .onAppear { crownFocused = true }
+        .task(id: url) {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                loadedImage = UIImage(data: data)
+                loadFailed = loadedImage == nil
+            } catch {
+                loadFailed = true
+            }
+        }
+        .onChange(of: zoom) { _, value in
+            if value <= 1 {
+                settledOffset = offset
+            }
+        }
+    }
+
+    private func panGesture(imageSize: CGSize, viewportSize: CGSize) -> some Gesture {
+        DragGesture()
+            .onChanged { value in
+                offset = clamped(
+                    CGSize(
+                        width: settledOffset.width + value.translation.width,
+                        height: settledOffset.height + value.translation.height
+                    ),
+                    imageSize: imageSize,
+                    viewportSize: viewportSize
+                )
+            }
+            .onEnded { _ in
+                settledOffset = offset
+            }
+    }
+
+    private func renderedSize(for imageSize: CGSize, in viewportSize: CGSize) -> CGSize {
+        guard imageSize.width > 0, imageSize.height > 0 else { return viewportSize }
+        let scale = max(viewportSize.width / imageSize.width, viewportSize.height / imageSize.height)
+        return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+    }
+
+    private func clamped(_ proposed: CGSize, imageSize: CGSize, viewportSize: CGSize) -> CGSize {
+        let horizontalLimit = max(0, (imageSize.width * zoom - viewportSize.width) / 2)
+        let verticalLimit = max(0, (imageSize.height * zoom - viewportSize.height) / 2)
+        return CGSize(
+            width: min(max(proposed.width, -horizontalLimit), horizontalLimit),
+            height: min(max(proposed.height, -verticalLimit), verticalLimit)
+        )
+    }
+}
+
+struct WatchDecisionButtonStyle: ButtonStyle {
+    let color: Color
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 7)
+            .background(color.opacity(configuration.isPressed ? 0.35 : 0.22), in: Capsule())
+            .scaleEffect(configuration.isPressed ? 0.97 : 1)
     }
 }
 
@@ -859,20 +1213,68 @@ struct WatchDangerButtonStyle: ButtonStyle {
 
 struct WatchSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var client: NibClient
     @Binding var baseURLString: String
+    @State private var pairingCode = ""
+    @State private var authState = "Checking"
+    @State private var authError: String?
+    @State private var pairing = false
 
     var body: some View {
         NavigationStack {
             Form {
                 TextField("Server URL", text: $baseURLString)
                     .textInputAutocapitalization(.never)
+                Text(authState)
+                    .foregroundStyle(.secondary)
+                TextField("Pairing code", text: $pairingCode)
+                    .textInputAutocapitalization(.never)
+                Button(pairing ? "Pairing..." : "Pair") {
+                    Task { await redeemPairing() }
+                }
+                .disabled(pairing || pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                if let authError {
+                    Text(authError)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                }
             }
             .navigationTitle("Server")
+            .task { await refreshAuthStatus() }
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
             }
+        }
+    }
+
+    private func refreshAuthStatus() async {
+        client.configure(baseURLString: baseURLString)
+        do {
+            let status = try await client.authStatus()
+            authState = status.authenticated ? "Paired" : "Not paired"
+        } catch {
+            authState = "Not paired"
+        }
+    }
+
+    private func redeemPairing() async {
+        pairing = true
+        defer { pairing = false }
+        client.configure(baseURLString: baseURLString)
+        do {
+            let status = try await client.redeemPairing(
+                code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines),
+                name: WKInterfaceDevice.current().name,
+                platform: "watchos"
+            )
+            authState = status.authenticated ? "Paired" : "Not paired"
+            pairingCode = ""
+            authError = nil
+        } catch {
+            authState = "Not paired"
+            authError = error.localizedDescription
         }
     }
 }
@@ -959,6 +1361,9 @@ enum NibWatchNotificationActions {
 
     static func handle(response: UNNotificationResponse) async {
         let payload = nibPayload(from: response.notification.request.content.userInfo)
+        if let deviceId = payload["deviceId"] as? String, !deviceId.isEmpty {
+            NibDefaults.rememberRegisteredDeviceID(deviceId)
+        }
         if response.actionIdentifier == UNNotificationDefaultActionIdentifier || response.actionIdentifier == open {
             guard let requestId = payload["requestId"] as? String else {
                 await openPayload(payload)
@@ -975,22 +1380,42 @@ enum NibWatchNotificationActions {
             await openPayload(payload)
             return
         }
+        let deviceId = payload["deviceId"] as? String ?? "watch-notification"
+        let isVisualReview = payload["type"] as? String == "visual-review"
         if response.actionIdentifier == choice0 {
-            await respond(requestId: requestId, body: ["choiceIndex": 0, "deviceId": "watch-notification"])
+            let body: [String: Any] = isVisualReview
+                ? ["decision": "approve", "annotations": [], "deviceId": deviceId, "notificationResponse": true]
+                : ["choiceIndex": 0, "deviceId": deviceId, "notificationResponse": true]
+            await respond(requestId: requestId, body: body)
             return
         }
         if response.actionIdentifier == choice1 {
-            await respond(requestId: requestId, body: ["choiceIndex": 1, "deviceId": "watch-notification"])
+            let body: [String: Any] = isVisualReview
+                ? ["decision": "reject", "annotations": [], "deviceId": deviceId, "notificationResponse": true]
+                : ["choiceIndex": 1, "deviceId": deviceId, "notificationResponse": true]
+            await respond(requestId: requestId, body: body)
             return
         }
         if response.actionIdentifier == choice2 {
-            await respond(requestId: requestId, body: ["choiceIndex": 2, "deviceId": "watch-notification"])
+            await respond(
+                requestId: requestId,
+                body: ["choiceIndex": 2, "deviceId": deviceId, "notificationResponse": true]
+            )
             return
         }
         if response.actionIdentifier == text, let textResponse = response as? UNTextInputNotificationResponse {
             let value = textResponse.userText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else { return }
-            await respond(requestId: requestId, body: ["text": value, "deviceId": "watch-notification"])
+            let body: [String: Any] = isVisualReview
+                ? [
+                    "decision": "comment",
+                    "comment": value,
+                    "annotations": [],
+                    "deviceId": deviceId,
+                    "notificationResponse": true
+                ]
+                : ["text": value, "deviceId": deviceId, "notificationResponse": true]
+            await respond(requestId: requestId, body: body)
         }
     }
 
@@ -1039,6 +1464,7 @@ enum NibWatchNotificationActions {
         guard let url = endpoint("/api/requests/\(requestId)/notification-click") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        authorize(&request)
         _ = try? await URLSession.shared.data(for: request)
     }
 
@@ -1046,6 +1472,7 @@ enum NibWatchNotificationActions {
         guard let url = endpoint("/api/feedback/\(feedbackId)/notification-click") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        authorize(&request)
         _ = try? await URLSession.shared.data(for: request)
     }
 
@@ -1060,12 +1487,20 @@ enum NibWatchNotificationActions {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = data
+        authorize(&request)
         _ = try? await URLSession.shared.data(for: request)
     }
 
     private static func endpoint(_ path: String) -> URL? {
         let base = UserDefaults.standard.string(forKey: "nib.baseURL") ?? NibDefaults.defaultBaseURLString
         return URL(string: path, relativeTo: URL(string: base))?.absoluteURL
+    }
+
+    private static func authorize(_ request: inout URLRequest) {
+        guard let url = request.url,
+              let portal = URL(string: "/", relativeTo: url)?.absoluteURL,
+              let token = NibCredentialStore.token(for: portal) else { return }
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "authorization")
     }
 
     private static func storePendingRequestId(_ requestId: String) {
