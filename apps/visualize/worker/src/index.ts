@@ -1,0 +1,170 @@
+import { verifiedTenant } from "./access";
+import {
+  artifactResponse,
+  GenerationWorkflow,
+  handleGeneration,
+  runMaintenance,
+} from "./generation";
+import {
+  changePlan,
+  consumeMetering,
+  createCheckout,
+  createPortal,
+  handleStripeWebhook,
+} from "./billing";
+import { TenantGate } from "./tenant-gate";
+import { GenerationScheduler } from "./scheduler";
+import { TrialGate } from "./trial";
+import { trialNetworkHash } from "./trial-policy";
+import {
+  isPrivatePage,
+  isPublicDiscovery,
+  isPublicMcpDiscoveryRequest,
+  isPublicPage,
+  isSiteAsset,
+} from "./routes";
+import { searchDiscoveryResponse } from "./search-discovery";
+import { agentApiResponse } from "./agent-api";
+import { mcpResponse } from "./mcp";
+import { syncCloudflareUsage } from "./cloudflare-usage";
+import type { Env as Bindings, MeterEvent } from "./types";
+
+export {
+  GenerationScheduler,
+  GenerationWorkflow,
+  TenantGate,
+  TrialGate,
+};
+
+export default {
+  async fetch(
+    request: Request,
+    env: Bindings,
+    ctx: ExecutionContext,
+  ): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/health")
+      return Response.json({ ok: true, service: "visualize" });
+    if (url.pathname === "/billing/webhook" && request.method === "POST")
+      return handleStripeWebhook(request, env);
+    if (request.method === "GET") {
+      const discovery = searchDiscoveryResponse(
+        url.pathname,
+        env.PUBLIC_ORIGIN,
+      );
+      if (discovery) return discovery;
+      const api = agentApiResponse(url.pathname, env.PUBLIC_ORIGIN);
+      if (api) return api;
+    }
+    if (request.method === "GET" && isPublicPage(url.pathname))
+      return siteResponse(request, env, true);
+    if (request.method === "GET" && isPublicDiscovery(url.pathname))
+      return new Response("Not found", { status: 404 });
+
+    if (url.pathname === "/mcp") {
+      const tenantId = await verifiedTenant(request, env);
+      if (!tenantId) {
+        if (!(await isPublicMcpDiscoveryRequest(request)))
+          return new Response("Unauthorized", { status: 401 });
+        return mcpResponse(withoutTrustedContext(request), env, ctx);
+      }
+      const routed = await withTrustedTenant(request, tenantId, env);
+      return mcpResponse(routed, env, ctx);
+    }
+
+    const tenantId = await verifiedTenant(request, env);
+    if (!tenantId) return new Response("Unauthorized", { status: 401 });
+    if (request.method === "GET" && isPrivatePage(url.pathname))
+      return siteResponse(request, env, false);
+    if (url.pathname === "/billing/checkout" && request.method === "POST")
+      return createCheckout(request, tenantId, env);
+    if (url.pathname === "/billing/portal" && request.method === "POST")
+      return createPortal(tenantId, env);
+    if (url.pathname === "/billing/plan" && request.method === "POST")
+      return changePlan(request, tenantId, env);
+    if (url.pathname.startsWith("/artifacts/") && request.method === "GET") {
+      return artifactResponse(
+        request,
+        tenantId,
+        url.pathname.slice("/artifacts/".length),
+        env,
+      );
+    }
+
+    const routed = await withTrustedTenant(request, tenantId, env);
+    if (url.pathname === "/internal/v1/generate" && request.method === "POST") {
+      return handleGeneration(routed, env);
+    }
+    return new Response("Not found", { status: 404 });
+  },
+
+  async queue(batch: MessageBatch<MeterEvent>, env: Bindings): Promise<void> {
+    await consumeMetering(batch, env);
+  },
+
+  async scheduled(_event: ScheduledController, env: Bindings): Promise<void> {
+    await runMaintenance(env);
+    try {
+      await syncCloudflareUsage(env);
+    } catch (error) {
+      console.error("Cloudflare Billable Usage sync failed", error);
+    }
+  },
+} satisfies ExportedHandler<Bindings, MeterEvent>;
+
+function withoutTrustedContext(request: Request): Request {
+  const headers = new Headers(request.headers);
+  headers.delete("cf-access-jwt-assertion");
+  headers.delete("x-visualize-tenant");
+  headers.delete("x-visualize-trial-network");
+  return new Request(request, { headers });
+}
+
+async function withTrustedTenant(
+  request: Request,
+  tenantId: string,
+  env: Bindings,
+): Promise<Request> {
+  const headers = new Headers(request.headers);
+  headers.delete("cf-access-jwt-assertion");
+  headers.delete("x-visualize-tenant");
+  headers.delete("x-visualize-trial-network");
+  headers.set("x-visualize-tenant", tenantId);
+  const networkHash = await trialNetworkHash(request, env.TRIAL_NETWORK_SECRET);
+  if (networkHash) headers.set("x-visualize-trial-network", networkHash);
+  return new Request(request, { headers });
+}
+
+async function siteResponse(
+  request: Request,
+  env: Bindings,
+  publicCache: boolean,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const response = await (isSiteAsset(url.pathname)
+    ? env.ASSETS.fetch(assetRequest(request, url))
+    : env.SITE.fetch(request));
+  const headers = new Headers(response.headers);
+  headers.set(
+    "cache-control",
+    publicCache
+      ? "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400"
+      : "private, no-store",
+  );
+  headers.set(
+    "content-security-policy",
+    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+  );
+  return new Response(response.body, {
+    status: response.status,
+    headers,
+  });
+}
+
+function assetRequest(request: Request, url: URL): Request {
+  url.pathname = url.pathname.slice("/assets".length);
+  return new Request(url.toString(), {
+    method: request.method,
+    headers: request.headers,
+  });
+}
