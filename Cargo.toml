@@ -9,7 +9,7 @@ license = "Proprietary"
 [dependencies]
 async-trait = "0.1"
 base64 = "0.22"
-incurs = { path = "../incurs-visualize-mcp/crates/incurs", features = ["http", "mcp", "openapi"] }
+incurs = { git = "https://github.com/douglance/incurs.git", rev = "3f96829c7fa442572c4c3fc4040798459e5d4b9f", features = ["http", "mcp", "openapi"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
