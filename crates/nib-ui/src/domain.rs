@@ -29,10 +29,10 @@ impl Quality {
         }
     }
 
-    pub fn price_cents(self, resolution: Resolution) -> Result<u32, VisualizeError> {
+    pub fn price_cents(self, resolution: Resolution) -> Result<u32, UiError> {
         match (self, resolution) {
             (Self::Fast, Resolution::OneK) => Ok(12),
-            (Self::Fast, _) => Err(VisualizeError::UnsupportedQualityResolution),
+            (Self::Fast, _) => Err(UiError::UnsupportedQualityResolution),
             (Self::Standard, Resolution::OneK) => Ok(22),
             (Self::Standard, Resolution::TwoK) => Ok(32),
             (Self::Standard, Resolution::FourK) => Ok(48),
@@ -53,14 +53,14 @@ impl fmt::Display for Quality {
 }
 
 impl FromStr for Quality {
-    type Err = VisualizeError;
+    type Err = UiError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "fast" => Ok(Self::Fast),
             "standard" => Ok(Self::Standard),
             "pro" => Ok(Self::Pro),
-            _ => Err(VisualizeError::InvalidOption("quality", value.to_string())),
+            _ => Err(UiError::InvalidOption("quality", value.to_string())),
         }
     }
 }
@@ -86,17 +86,14 @@ impl fmt::Display for Resolution {
 }
 
 impl FromStr for Resolution {
-    type Err = VisualizeError;
+    type Err = UiError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "1K" | "1k" => Ok(Self::OneK),
             "2K" | "2k" => Ok(Self::TwoK),
             "4K" | "4k" => Ok(Self::FourK),
-            _ => Err(VisualizeError::InvalidOption(
-                "resolution",
-                value.to_string(),
-            )),
+            _ => Err(UiError::InvalidOption("resolution", value.to_string())),
         }
     }
 }
@@ -118,13 +115,13 @@ impl ImageFormat {
 }
 
 impl FromStr for ImageFormat {
-    type Err = VisualizeError;
+    type Err = UiError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "png" => Ok(Self::Png),
             "jpg" | "jpeg" => Ok(Self::Jpg),
-            _ => Err(VisualizeError::InvalidOption("format", value.to_string())),
+            _ => Err(UiError::InvalidOption("format", value.to_string())),
         }
     }
 }
@@ -149,7 +146,7 @@ pub struct GenerationRequest {
 }
 
 impl GenerationRequest {
-    pub fn validate(&self) -> Result<(), VisualizeError> {
+    pub fn validate(&self) -> Result<(), UiError> {
         let has_prompt = self
             .prompt
             .as_ref()
@@ -159,20 +156,20 @@ impl GenerationRequest {
             .as_ref()
             .is_some_and(|value| !value.trim().is_empty());
         if has_prompt == has_resume {
-            return Err(VisualizeError::PromptOrResumeRequired);
+            return Err(UiError::PromptOrResumeRequired);
         }
         if self
             .prompt
             .as_ref()
             .is_some_and(|prompt| prompt.chars().count() > MAX_PROMPT_CHARS)
         {
-            return Err(VisualizeError::PromptTooLong);
+            return Err(UiError::PromptTooLong);
         }
         if self.references.len() > 3 {
-            return Err(VisualizeError::TooManyReferences);
+            return Err(UiError::TooManyReferences);
         }
         if !ALLOWED_ASPECTS.contains(&self.aspect.as_str()) {
-            return Err(VisualizeError::InvalidOption("aspect", self.aspect.clone()));
+            return Err(UiError::InvalidOption("aspect", self.aspect.clone()));
         }
         self.quality.price_cents(self.resolution)?;
         let mut total_reference_bytes = 0;
@@ -181,7 +178,7 @@ impl GenerationRequest {
                 reference.mime_type.as_str(),
                 "image/png" | "image/jpeg" | "image/webp"
             ) {
-                return Err(VisualizeError::UnsupportedReferenceType(
+                return Err(UiError::UnsupportedReferenceType(
                     reference.mime_type.clone(),
                 ));
             }
@@ -189,12 +186,12 @@ impl GenerationRequest {
                 + usize::from(reference.data.ends_with("=="));
             let bytes = (reference.data.len().saturating_mul(3) / 4).saturating_sub(padding);
             if bytes > MAX_REFERENCE_BYTES {
-                return Err(VisualizeError::ReferenceTooLarge);
+                return Err(UiError::ReferenceTooLarge);
             }
             total_reference_bytes += bytes;
         }
         if total_reference_bytes > MAX_REFERENCE_TOTAL_BYTES {
-            return Err(VisualizeError::ReferencesTooLarge);
+            return Err(UiError::ReferencesTooLarge);
         }
         Ok(())
     }
@@ -236,7 +233,7 @@ pub struct GenerationResponse {
 }
 
 #[derive(Debug, Error)]
-pub enum VisualizeError {
+pub enum UiError {
     #[error("provide exactly one of a prompt or --resume")]
     PromptOrResumeRequired,
     #[error("at most three reference images are allowed")]
@@ -262,7 +259,7 @@ pub enum VisualizeError {
     ReferenceExtension(String),
     #[error("invalid reference data URI")]
     InvalidReferenceData,
-    #[error("visualize service request failed: {0}")]
+    #[error("nib service request failed: {0}")]
     Service(String),
     #[error("could not write generated image {path}: {source}")]
     OutputWrite {
@@ -271,7 +268,7 @@ pub enum VisualizeError {
     },
 }
 
-impl VisualizeError {
+impl UiError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::PromptOrResumeRequired => "PROMPT_OR_RESUME_REQUIRED",

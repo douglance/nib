@@ -4,19 +4,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use base64::Engine;
-use incurs::cli::Cli;
 use incurs::command::{
     CommandContext, CommandDef, CommandHandler, Example, McpAnnotations, McpCommandOptions,
     McpResultContent,
 };
-use incurs::mcp::{McpDiscovery, McpServeOptions, McpToolFilter};
 use incurs::output::CommandResult;
 use incurs::schema::{FieldMeta, FieldType};
 
 use crate::client::Generator;
 use crate::domain::{
     GenerationRequest, GenerationResponse, ImageFormat, Quality, ReferenceImage, Resolution,
-    VisualizeError,
+    UiError,
 };
 
 struct GenerateHandler {
@@ -35,7 +33,7 @@ impl CommandHandler for GenerateHandler {
             Err(error) => CommandResult::Error {
                 code: error.code().to_string(),
                 message: error.to_string(),
-                retryable: matches!(error, VisualizeError::Service(_)),
+                retryable: matches!(error, UiError::Service(_)),
                 exit_code: Some(1),
                 cta: None,
             },
@@ -43,7 +41,9 @@ impl CommandHandler for GenerateHandler {
     }
 }
 
-pub fn build_cli(generator: Arc<dyn Generator>) -> Cli {
+/// Builds the hosted UI-generation command for registration into nib's command
+/// tree. This crate no longer owns a CLI of its own; nib is the only binary.
+pub fn build_generate_command(generator: Arc<dyn Generator>) -> CommandDef {
     let mut generate = CommandDef::build("generate", GenerateHandler { generator })
         .description("Generate one user-interface image from a text brief and optional references. Use when an AI agent can describe a UI but cannot create the image itself")
         .examples(vec![Example {
@@ -57,7 +57,7 @@ pub fn build_cli(generator: Arc<dyn Generator>) -> Cli {
                     .to_string(),
             ),
             instructions: Some(
-                "Authenticate the user through Cloudflare Access and pass the user-scoped token as VISUALIZE_ACCESS_TOKEN. Provide a precise UI brief and up to three PNG, JPEG, or WebP references as data URIs. Fast 1K is the default and is eligible for the one-image free trial. Return the image directly to the user."
+                "Authenticate the user through Cloudflare Access and pass the user-scoped token as NIB_ACCESS_TOKEN. Provide a precise UI brief and up to three PNG, JPEG, or WebP references as data URIs. Fast 1K is the default and is eligible for the one-image free trial. Return the image directly to the user."
                     .to_string(),
             ),
             annotations: Some(McpAnnotations {
@@ -160,21 +160,7 @@ pub fn build_cli(generator: Arc<dyn Generator>) -> Cli {
             .expect("output schema serializes"),
     );
 
-    Cli::create("visualize")
-        .description("UI image generation for AI agents and developer tools")
-        .version(env!("CARGO_PKG_VERSION"))
-        .mcp(McpServeOptions {
-            instructions: Some(
-                "Generate exactly one raw user-interface viewport image with the generate_ui tool."
-                    .to_string(),
-            ),
-            tools: McpToolFilter {
-                discovery: McpDiscovery::Direct,
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .command("generate", generate)
+    generate
 }
 
 fn field(
@@ -201,7 +187,7 @@ fn field(
 async fn run_generate(
     generator: &Arc<dyn Generator>,
     context: &CommandContext,
-) -> Result<GenerationResponse, VisualizeError> {
+) -> Result<GenerationResponse, UiError> {
     let prompt = context
         .args
         .get("prompt")
@@ -216,7 +202,7 @@ async fn run_generate(
         .unwrap_or_default();
     let mut references = Vec::with_capacity(reference_values.len());
     for value in reference_values {
-        let value = value.as_str().ok_or(VisualizeError::InvalidReferenceData)?;
+        let value = value.as_str().ok_or(UiError::InvalidReferenceData)?;
         references.push(load_reference(value, remote_request).await?);
     }
     let quality = option(&context.options, "quality", "fast").parse::<Quality>()?;
@@ -240,12 +226,12 @@ async fn run_generate(
     let tenant_id = context
         .request
         .as_ref()
-        .and_then(|request| request.headers.get("x-visualize-tenant"))
+        .and_then(|request| request.headers.get("x-nib-tenant"))
         .map(String::as_str);
     let trial_network = context
         .request
         .as_ref()
-        .and_then(|request| request.headers.get("x-visualize-trial-network"))
+        .and_then(|request| request.headers.get("x-nib-trial-network"))
         .map(String::as_str);
     let mut response = generator
         .generate(request, tenant_id, trial_network)
@@ -253,12 +239,12 @@ async fn run_generate(
     if !remote_request && let Some(image) = response.image.take() {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(image.data)
-            .map_err(|_| VisualizeError::InvalidReferenceData)?;
+            .map_err(|_| UiError::InvalidReferenceData)?;
         let path = string_option(&context.options, "output")
             .unwrap_or_else(|| default_output_path(response.format));
         tokio::fs::write(&path, bytes)
             .await
-            .map_err(|source| VisualizeError::OutputWrite {
+            .map_err(|source| UiError::OutputWrite {
                 path: path.clone(),
                 source,
             })?;
@@ -282,15 +268,13 @@ fn string_option(options: &serde_json::Value, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-async fn load_reference(value: &str, agent: bool) -> Result<ReferenceImage, VisualizeError> {
+async fn load_reference(value: &str, agent: bool) -> Result<ReferenceImage, UiError> {
     if agent {
-        let (metadata, data) = value
-            .split_once(',')
-            .ok_or(VisualizeError::InvalidReferenceData)?;
+        let (metadata, data) = value.split_once(',').ok_or(UiError::InvalidReferenceData)?;
         let mime_type = metadata
             .strip_prefix("data:")
             .and_then(|value| value.strip_suffix(";base64"))
-            .ok_or(VisualizeError::InvalidReferenceData)?;
+            .ok_or(UiError::InvalidReferenceData)?;
         return Ok(ReferenceImage {
             name: "reference".to_string(),
             mime_type: mime_type.to_string(),
@@ -308,11 +292,11 @@ async fn load_reference(value: &str, agent: bool) -> Result<ReferenceImage, Visu
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("webp") => "image/webp",
-        _ => return Err(VisualizeError::ReferenceExtension(value.to_string())),
+        _ => return Err(UiError::ReferenceExtension(value.to_string())),
     };
     let bytes = tokio::fs::read(path)
         .await
-        .map_err(|source| VisualizeError::ReferenceRead {
+        .map_err(|source| UiError::ReferenceRead {
             path: value.to_string(),
             source,
         })?;
@@ -336,7 +320,7 @@ fn default_output_path(format: ImageFormat) -> String {
         ImageFormat::Png => "png",
         ImageFormat::Jpg => "jpg",
     };
-    format!("visualize-{timestamp}.{extension}")
+    format!("nib-ui-{timestamp}.{extension}")
 }
 
 #[cfg(test)]
@@ -353,7 +337,7 @@ mod tests {
             request: GenerationRequest,
             _tenant_id: Option<&str>,
             _trial_network: Option<&str>,
-        ) -> Result<GenerationResponse, VisualizeError> {
+        ) -> Result<GenerationResponse, UiError> {
             Ok(GenerationResponse {
                 job_id: "job_test".to_string(),
                 status: "succeeded".to_string(),
@@ -374,21 +358,25 @@ mod tests {
     }
 
     #[test]
-    fn catalog_exposes_only_generate_ui_to_mcp() {
-        let definitions = build_cli(Arc::new(FakeGenerator))
+    fn generate_is_exposed_to_mcp_as_generate_ui() {
+        // Registered into a throwaway CLI so the assertions run against the
+        // real tool catalog. Deliberately does not assert the catalog size:
+        // nib registers many commands alongside this one.
+        let definitions = incurs::cli::Cli::create("nib")
+            .command("generate", build_generate_command(Arc::new(FakeGenerator)))
             .tool_catalog()
             .definitions();
-        assert_eq!(definitions.len(), 1);
-        assert_eq!(definitions[0].name, "generate_ui");
-        assert_eq!(definitions[0].result_content.len(), 1);
+        let generate = definitions
+            .iter()
+            .find(|definition| definition.name == "generate_ui")
+            .expect("generate is exposed as generate_ui");
+        assert_eq!(generate.result_content.len(), 1);
         assert_eq!(
-            definitions[0]
-                .input_schema
-                .pointer("/properties/quality/default"),
+            generate.input_schema.pointer("/properties/quality/default"),
             Some(&serde_json::json!("fast")),
         );
         assert_eq!(
-            definitions[0]
+            generate
                 .input_schema
                 .pointer("/properties/resolution/default"),
             Some(&serde_json::json!("1K")),

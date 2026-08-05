@@ -1334,6 +1334,103 @@ fn typed_media_group() -> Cli {
         .command("transcribe", transcribe)
 }
 
+/// Defers `HttpGenerator::from_env` to call time. Building the command tree
+/// must not fail, so a misconfigured environment surfaces when `generate`
+/// actually runs rather than preventing the CLI from starting at all.
+struct EnvUiGenerator;
+
+#[async_trait::async_trait]
+impl nib_ui::client::Generator for EnvUiGenerator {
+    async fn generate(
+        &self,
+        request: nib_ui::domain::GenerationRequest,
+        tenant_id: Option<&str>,
+        trial_network: Option<&str>,
+    ) -> Result<nib_ui::domain::GenerationResponse, nib_ui::domain::UiError> {
+        nib_ui::client::HttpGenerator::from_env()?
+            .generate(request, tenant_id, trial_network)
+            .await
+    }
+}
+
+fn image_group() -> Cli {
+    Cli::create("image")
+        .description("Generate images through the locally configured provider")
+        .command(
+            "generate",
+            compat_command(
+                "generate",
+                "Generate an image through the configured provider",
+                &["generate"],
+                vec![fields::field(
+                    "prompt",
+                    "Image generation prompt",
+                    FieldType::String,
+                    true,
+                )],
+                vec![
+                    fields::field("width", "Image width", FieldType::Number, true),
+                    fields::field("height", "Image height", FieldType::Number, true),
+                    fields::field_with_alias(
+                        "out",
+                        "Output PNG path",
+                        FieldType::String,
+                        false,
+                        'o',
+                    ),
+                    fields::field(
+                        "ref",
+                        "Reference image paths",
+                        FieldType::Array(Box::new(FieldType::String)),
+                        false,
+                    ),
+                    fields::field_with_default(
+                        "crop",
+                        "Crop to exact dimensions",
+                        FieldType::Boolean,
+                        json!(false),
+                    ),
+                    fields::field("timeout", "Provider timeout", FieldType::String, false),
+                    fields::field_with_default(
+                        "nib",
+                        "Import the result into .nib",
+                        FieldType::Boolean,
+                        json!(false),
+                    ),
+                    fields::field_with_default(
+                        "feedback",
+                        "Review the generated result",
+                        FieldType::Boolean,
+                        json!(false),
+                    ),
+                    fields::field_with_alias(
+                        "message",
+                        "Review question",
+                        FieldType::String,
+                        false,
+                        'm',
+                    ),
+                    fields::field_with_default(
+                        "feedbackUi",
+                        "Review surface",
+                        FieldType::Enum(vec![
+                            "native".into(),
+                            "terminal".into(),
+                            "web".into(),
+                            "auto".into(),
+                        ]),
+                        json!("native"),
+                    ),
+                ],
+                Policy {
+                    open_world: true,
+                    mcp_name: Some("generate_image"),
+                    ..LOCAL_EFFECT
+                },
+            ),
+        )
+}
+
 pub fn register(cli: Cli) -> Cli {
     let feedback = documented(
         command_with_policy(
@@ -1679,6 +1776,7 @@ pub fn register(cli: Cli) -> Cli {
     let record = typed_record_group();
     let media = typed_media_group();
     let auth = typed_auth_group();
+    let image = image_group();
 
     let cli = cli
         .command("feedback", feedback)
@@ -1740,10 +1838,15 @@ pub fn register(cli: Cli) -> Cli {
                 LOCAL_READ,
             ),
         )
+        .command(
+            "generate",
+            nib_ui::catalog::build_generate_command(std::sync::Arc::new(EnvUiGenerator)),
+        )
         .group(request)
         .group(record)
         .group(media)
-        .group(auth);
+        .group(auth)
+        .group(image);
     register_compat(cli)
 }
 
@@ -2638,79 +2741,6 @@ fn register_compat(cli: Cli) -> Cli {
                     ),
                 ],
                 LOCAL_READ,
-            ),
-        )
-        .command(
-            "generate",
-            compat_command(
-                "generate",
-                "Generate an image through the configured provider",
-                &["generate"],
-                vec![fields::field(
-                    "prompt",
-                    "Image generation prompt",
-                    FieldType::String,
-                    true,
-                )],
-                vec![
-                    fields::field("width", "Image width", FieldType::Number, true),
-                    fields::field("height", "Image height", FieldType::Number, true),
-                    fields::field_with_alias(
-                        "out",
-                        "Output PNG path",
-                        FieldType::String,
-                        false,
-                        'o',
-                    ),
-                    fields::field(
-                        "ref",
-                        "Reference image paths",
-                        FieldType::Array(Box::new(FieldType::String)),
-                        false,
-                    ),
-                    fields::field_with_default(
-                        "crop",
-                        "Crop to exact dimensions",
-                        FieldType::Boolean,
-                        json!(false),
-                    ),
-                    fields::field("timeout", "Provider timeout", FieldType::String, false),
-                    fields::field_with_default(
-                        "nib",
-                        "Import the result into .nib",
-                        FieldType::Boolean,
-                        json!(false),
-                    ),
-                    fields::field_with_default(
-                        "feedback",
-                        "Review the generated result",
-                        FieldType::Boolean,
-                        json!(false),
-                    ),
-                    fields::field_with_alias(
-                        "message",
-                        "Review question",
-                        FieldType::String,
-                        false,
-                        'm',
-                    ),
-                    fields::field_with_default(
-                        "feedbackUi",
-                        "Review surface",
-                        FieldType::Enum(vec![
-                            "native".into(),
-                            "terminal".into(),
-                            "web".into(),
-                            "auto".into(),
-                        ]),
-                        json!("native"),
-                    ),
-                ],
-                Policy {
-                    open_world: true,
-                    mcp_name: Some("generate_image"),
-                    ..LOCAL_EFFECT
-                },
             ),
         )
         .command(

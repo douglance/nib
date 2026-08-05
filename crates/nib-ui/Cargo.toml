@@ -1,10 +1,13 @@
 [package]
-name = "visualize"
-version = "0.1.0"
+name = "nib-ui"
+version = "0.3.0"
+description = "Hosted user-interface image generation for nib"
 edition = "2024"
-rust-version = "1.88"
-description = "Generate one UI visualization from a brief and optional reference images"
-license = "Proprietary"
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license-file.workspace = true
 
 [dependencies]
 async-trait = "0.1"
@@ -19,8 +22,3 @@ tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread"] }
 
 [dev-dependencies]
 tempfile = "3"
-
-[[bin]]
-name = "visualize"
-path = "src/main.rs"
-

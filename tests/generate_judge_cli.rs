@@ -30,7 +30,7 @@ fn generate_success_writes_png_and_prints_json_envelope() {
     let output = Command::new(nib_bin())
         .env("NIB_GENERATE_COMMAND", fixture("fake-generate.sh"))
         .args([
-            "--format", "json", "generate", "--width", "64", "--height", "64", "--out",
+            "--format", "json", "image", "generate", "--width", "64", "--height", "64", "--out",
         ])
         .arg(&out)
         .arg("a lighthouse at dusk")
@@ -59,7 +59,9 @@ fn generate_nonzero_exit_passes_error_envelope_through_and_never_fabricates_succ
     let output = Command::new(nib_bin())
         .env("NIB_GENERATE_COMMAND", fixture("fake-generate.sh"))
         .env("FAKE_GENERATE_MODE", "error")
-        .args(["generate", "--width", "64", "--height", "64", "--out"])
+        .args([
+            "image", "generate", "--width", "64", "--height", "64", "--out",
+        ])
         .arg(&out)
         .arg("a lighthouse at dusk")
         .output()
@@ -86,7 +88,9 @@ fn generate_garbage_stdout_is_a_tool_error_not_a_fabricated_success() {
     let output = Command::new(nib_bin())
         .env("NIB_GENERATE_COMMAND", fixture("fake-generate.sh"))
         .env("FAKE_GENERATE_MODE", "garbage")
-        .args(["generate", "--width", "64", "--height", "64", "--out"])
+        .args([
+            "image", "generate", "--width", "64", "--height", "64", "--out",
+        ])
         .arg(&out)
         .arg("a lighthouse at dusk")
         .output()
@@ -177,7 +181,7 @@ fn generate_with_nib_flag_also_imports_a_nib_file() {
     let output = Command::new(nib_bin())
         .env("NIB_GENERATE_COMMAND", fixture("fake-generate.sh"))
         .args([
-            "generate", "--width", "64", "--height", "64", "--nib", "--out",
+            "image", "generate", "--width", "64", "--height", "64", "--nib", "--out",
         ])
         .arg(&out)
         .arg("a lighthouse at dusk")

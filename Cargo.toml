@@ -9,7 +9,7 @@ members = [
     "crates/nib-grid",
     "crates/nib-gui",
     "crates/nib-tui",
-    "crates/visualize",
+    "crates/nib-ui",
 ]
 # The marketing site is a standalone package with its own lockfile, built via
 # --manifest-path. It requires Rust 1.95; keeping it out of the workspace stops
@@ -34,6 +34,7 @@ nib-collab = { path = "crates/nib-collab" }
 nib-grid = { path = "crates/nib-grid" }
 nib-gui = { path = "crates/nib-gui" }
 nib-tui = { path = "crates/nib-tui" }
+nib-ui = { path = "crates/nib-ui" }
 
 # Shared external dependencies
 thiserror = "2.0"
@@ -122,6 +123,7 @@ nib-collab.workspace = true
 nib-grid.workspace = true
 nib-gui = { workspace = true, optional = true }
 nib-tui.workspace = true
+nib-ui.workspace = true
 
 # GUI Framework
 gpui.workspace = true
