@@ -412,12 +412,45 @@ export interface RequestAttachment {
   id: string;
   requestId: string;
   name: string;
-  type: "image" | "file" | "screenshot";
+  type: "image" | "video" | "audio" | "document" | "file" | "screenshot";
   contentType: string;
   bytes: number;
   url: string;
   createdAt: string;
   metadata: Record<string, unknown>;
+}
+
+export interface ReviewMediaDescriptor {
+  attachmentId: string;
+  kind: "image" | "video";
+  contentType: string;
+  width: number;
+  height: number;
+  durationMs?: number;
+  frameRate?: number;
+  hasAudio?: boolean;
+  posterAttachmentId?: string;
+  sha256: string;
+}
+
+export interface ReviewSubject {
+  contract: "nib.review/v2";
+  primary: ReviewMediaDescriptor;
+}
+
+export interface ReviewTranscriptSegment {
+  startMs: number;
+  endMs: number;
+  text: string;
+}
+
+export interface ReviewTranscript {
+  status: "complete" | "unavailable" | "failed";
+  source: "device" | "origin-mac" | "none";
+  locale?: string;
+  text: string;
+  segments: ReviewTranscriptSegment[];
+  error?: string;
 }
 
 export interface RequestResponse {
@@ -428,6 +461,14 @@ export interface RequestResponse {
   choiceIndex?: number;
   data?: Record<string, unknown> | null;
   deviceId?: string;
+  device?: {
+    id: string;
+    name: string;
+    platform: DevicePlatform;
+    pushKind: DevicePushKind;
+  };
+  attachments?: RequestAttachment[];
+  transcript?: ReviewTranscript;
   createdAt: string;
 }
 
@@ -460,7 +501,7 @@ export interface RequestRecord {
   metadata: Record<string, unknown>;
 }
 
-export type DevicePlatform = "web" | "ios" | "watchos" | "macos" | "unknown";
+export type DevicePlatform = "web" | "ios" | "visionos" | "watchos" | "macos" | "unknown";
 
 export type DevicePushKind = "webpush" | "apns";
 

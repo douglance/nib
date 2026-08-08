@@ -9,7 +9,7 @@
       "name": "nib",
       "source": "./",
       "description": "Screenshot annotation tool that bridges human visual thinking with AI comprehension",
-      "version": "0.1.2",
+      "version": "0.3.1",
       "author": {
         "name": "Doug Lance"
       },

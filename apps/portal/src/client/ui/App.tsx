@@ -6,22 +6,29 @@ import {
   Hand,
   Expand,
   Move,
+  Paperclip,
+  Pause,
+  Play,
   Redo2,
   RefreshCw,
   Square,
   Type,
   Undo2,
+  Video,
+  VideoOff,
   WifiOff,
   ZoomIn
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { ComponentType, PointerEvent as ReactPointerEvent, SVGProps } from "react";
+import type { ComponentType, CSSProperties, PointerEvent as ReactPointerEvent, SVGProps } from "react";
 import type { RequestRecord } from "../../shared/types";
-import { apiUrl, assetUrl, nibFetch } from "../native";
+import { assetUrl, nibFetch, webSocketUrl } from "../native";
+import motionContract from "../../../../../design/motion.json";
 
 type ConnectionState = "connecting" | "connected" | "reconnecting";
 type ReviewTool = "select" | "pan" | "cursor" | "arrow" | "rectangle" | "text" | "path";
 type Decision = "approve" | "reject" | "comment";
+type MotionMode = "full" | "reduced" | "off";
 
 interface ReviewAnnotation {
   id: string;
@@ -41,11 +48,18 @@ interface ReviewAnnotation {
   head?: string;
   font_size?: number;
   align?: string;
+  timeMs?: number;
 }
 
 interface DrawState {
   start: [number, number];
   points: Array<[number, number]>;
+}
+
+interface RequestSocketMessage {
+  type: "ready" | "request";
+  action?: "created" | "published" | "updated" | "responded";
+  request?: RequestRecord;
 }
 
 export function App() {
@@ -78,19 +92,48 @@ export function App() {
   useEffect(() => {
     void loadRequests();
     void notificationStatus().then(setNotificationsReady);
-    const events = new EventSource(apiUrl("/api/requests/events"));
-    events.onopen = () => setConnection("connected");
-    events.onerror = () => setConnection("reconnecting");
-    events.addEventListener("request", (event) => {
-      const payload = JSON.parse((event as MessageEvent<string>).data) as { request: RequestRecord };
-      setRequests((current) => upsertRequest(current, payload.request));
-    });
+    let socket: WebSocket | null = null;
+    let reconnectTimer: number | null = null;
+    let reconnectAttempt = 0;
+    let stopped = false;
+
+    const connect = () => {
+      if (stopped) return;
+      socket = new WebSocket(webSocketUrl("/api/requests/socket"));
+      socket.onopen = () => {
+        reconnectAttempt = 0;
+        setConnection("connected");
+        void loadRequests();
+      };
+      socket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(String(event.data)) as RequestSocketMessage;
+          if (message.type === "request" && message.request) {
+            setRequests((current) => upsertRequest(current, message.request!));
+          }
+        } catch {
+          // Ignore malformed frames and keep the live connection usable.
+        }
+      };
+      socket.onerror = () => socket?.close();
+      socket.onclose = () => {
+        if (stopped) return;
+        setConnection("reconnecting");
+        const delay = Math.min(1_000 * (2 ** reconnectAttempt), 8_000);
+        reconnectAttempt += 1;
+        reconnectTimer = window.setTimeout(connect, delay + Math.random() * 250);
+      };
+    };
+
+    connect();
     const onFocus = () => void loadRequests();
     const onPopState = () => setSelectedId(requestIdFromPath());
     window.addEventListener("focus", onFocus);
     window.addEventListener("popstate", onPopState);
     return () => {
-      events.close();
+      stopped = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+      socket?.close(1000, "view closed");
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("popstate", onPopState);
     };
@@ -203,7 +246,7 @@ function InboxScreen({
       </header>
 
       {connection === "reconnecting" ? (
-        <div className="reconnectBanner"><WifiOff size={17} /> Reconnecting to Dave. Reviews will refresh automatically.</div>
+        <div className="reconnectBanner"><WifiOff size={17} /> Reconnecting to Nib. Reviews will refresh automatically.</div>
       ) : null}
       {error ? <div className="errorBanner">{error}</div> : null}
 
@@ -227,7 +270,7 @@ function InboxScreen({
           <div className="emptyInbox">
             <span className="emptyCheck"><Check size={28} /></span>
             <h1>{loading ? "Loading reviews" : "Inbox clear"}</h1>
-            <p>{loading ? "Connecting to Dave..." : "New visual reviews from any connected machine will appear here."}</p>
+            <p>{loading ? "Connecting to Nib..." : "New visual reviews from any connected machine will appear here."}</p>
           </div>
         )}
       </section>
@@ -239,7 +282,12 @@ function InboxScreen({
             {completed.map((request) => (
               <div className="completedRow" key={request.id}>
                 <Check size={18} />
-                <span>{request.title}</span>
+                <span className="completedIdentity">
+                  <span>{request.title}</span>
+                  {request.responses[0]?.device?.name
+                    ? <small>Answered on {request.responses[0].device.name}</small>
+                    : null}
+                </span>
                 <ResponseBadge request={request} />
               </div>
             ))}
@@ -291,12 +339,13 @@ function ReviewScreen({
   }
 
   if (request.responses.length) {
+    const deviceName = request.responses[0]?.device?.name;
     return (
       <main className="reviewShell">
         <ReviewHeader request={request} connection={connection} onBack={onBack} />
         <div className="reviewLoading">
           <h1>Review already submitted</h1>
-          <p>The first response has already been sent.</p>
+          <p>{deviceName ? `Answered on ${deviceName}.` : "The first response has already been sent."}</p>
           <button className="textButton" onClick={onBack}><ChevronLeft size={17} /> Back to inbox</button>
         </div>
       </main>
@@ -317,6 +366,11 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
     ?? request.attachments.find((attachment) => attachment.contentType.startsWith("image/"));
   const mobilePreview = request.attachments.find((attachment) => attachment.metadata.role === "preview-mobile");
   const preview = mobileLayout && mobilePreview ? mobilePreview : desktopPreview;
+  const subject = reviewSubject(request);
+  const video = subject?.primary.kind === "video"
+    ? request.attachments.find((attachment) => attachment.id === subject.primary.attachmentId)
+      ?? request.attachments.find((attachment) => attachment.contentType === "video/mp4")
+    : undefined;
   const canvasCrop = thumbnailCrop(preview?.metadata.canvasCrop);
   const [tool, setTool] = useState<ReviewTool>("select");
   const [annotations, setAnnotations] = useState<ReviewAnnotation[]>([]);
@@ -327,9 +381,24 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [submitting, setSubmitting] = useState<Decision | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [motionMode] = useState<MotionMode>(configuredMotionMode);
+  const [exiting, setExiting] = useState(false);
   const [draw, setDraw] = useState<DrawState | null>(null);
-  const [imageSize, setImageSize] = useState({ width: canvasCrop?.width ?? 1, height: canvasCrop?.height ?? 1 });
+  const [imageSize, setImageSize] = useState({
+    width: subject?.primary.width ?? canvasCrop?.width ?? 1,
+    height: subject?.primary.height ?? canvasCrop?.height ?? 1
+  });
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const [durationMs, setDurationMs] = useState(subject?.primary.durationMs ?? 0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [replyMedia, setReplyMedia] = useState<File | null>(null);
+  const [replyUploaded, setReplyUploaded] = useState(false);
+  const [recordingReply, setRecordingReply] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const replyRecorder = useRef<MediaRecorder | null>(null);
+  const replyStream = useRef<MediaStream | null>(null);
+  const replyChunks = useRef<Blob[]>([]);
   const panStart = useRef<{ pointer: [number, number]; offset: { x: number; y: number } } | null>(null);
 
   useEffect(() => {
@@ -340,8 +409,35 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
   }, []);
 
   useEffect(() => {
-    setImageSize({ width: canvasCrop?.width ?? 1, height: canvasCrop?.height ?? 1 });
-  }, [canvasCrop?.height, canvasCrop?.width]);
+    setImageSize({
+      width: subject?.primary.width ?? canvasCrop?.width ?? 1,
+      height: subject?.primary.height ?? canvasCrop?.height ?? 1
+    });
+  }, [canvasCrop?.height, canvasCrop?.width, subject?.primary.height, subject?.primary.width]);
+
+  useEffect(() => {
+    if (!video) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      if (event.key === " ") {
+        event.preventDefault();
+        void togglePlayback();
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        seekVideo(Math.max(0, currentTimeMs - 1_000));
+      } else if (event.key === "ArrowRight") {
+        event.preventDefault();
+        seekVideo(Math.min(durationMs, currentTimeMs + 1_000));
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [currentTimeMs, durationMs, isPlaying, video]);
+
+  useEffect(() => () => {
+    replyRecorder.current?.stop();
+    replyStream.current?.getTracks().forEach((track) => track.stop());
+  }, []);
 
   function imagePoint(event: ReactPointerEvent): [number, number] {
     const rect = canvasRef.current?.getBoundingClientRect();
@@ -359,6 +455,7 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
       return;
     }
     if (tool === "select" || tool === "cursor") return;
+    if (video && isPlaying) pauseVideo();
     const point = imagePoint(event);
     if (tool === "text") {
       const content = window.prompt("Text annotation");
@@ -399,8 +496,32 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
   }
 
   function addAnnotation(annotation: ReviewAnnotation) {
-    setAnnotations((current) => [...current, annotation]);
+    setAnnotations((current) => [...current, video ? { ...annotation, timeMs: Math.round(currentTimeMs) } : annotation]);
     setRedo([]);
+  }
+
+  function pauseVideo() {
+    videoRef.current?.pause();
+    setIsPlaying(false);
+  }
+
+  async function togglePlayback() {
+    const player = videoRef.current;
+    if (!player) return;
+    if (player.paused) {
+      await player.play();
+      setIsPlaying(true);
+    } else {
+      pauseVideo();
+    }
+  }
+
+  function seekVideo(timeMs: number) {
+    const player = videoRef.current;
+    if (!player) return;
+    pauseVideo();
+    player.currentTime = Math.max(0, Math.min(durationMs, timeMs)) / 1_000;
+    setCurrentTimeMs(player.currentTime * 1_000);
   }
 
   function undo() {
@@ -423,10 +544,25 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
     setSubmitting(decision);
     setSubmitError(null);
     try {
+      if (replyMedia && !replyUploaded) await uploadReplyMedia(replyMedia);
+      await playExit();
       const response = await nibFetch(`/api/requests/${encodeURIComponent(request.id)}/respond`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ decision, comment: comment.trim() || undefined, annotations })
+        body: JSON.stringify({
+          decision,
+          comment: comment.trim() || undefined,
+          annotations,
+          ...(replyMedia ? {
+            transcript: {
+              status: "unavailable",
+              source: "none",
+              text: "",
+              segments: [],
+              error: "Device transcription was unavailable; origin-Mac fallback may retry"
+            }
+          } : {})
+        })
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({ error: `Response failed: ${response.status}` })) as { error?: string };
@@ -435,15 +571,92 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
       onSubmitted(await response.json() as RequestRecord);
     } catch (responseError) {
       setSubmitError(responseError instanceof Error ? responseError.message : "Response failed");
+      setExiting(false);
     } finally {
       setSubmitting(null);
     }
   }
 
+  async function uploadReplyMedia(file: File) {
+    if (file.type !== "video/mp4") throw new Error("Reply video must be MP4/H.264");
+    const response = await nibFetch(`/api/requests/${encodeURIComponent(request.id)}/response-attachments`, {
+      method: "POST",
+      headers: {
+        "content-type": "video/mp4",
+        "x-nib-filename": file.name
+      },
+      body: file
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({ error: `Upload failed: ${response.status}` })) as { error?: string };
+      throw new Error(payload.error || `Upload failed: ${response.status}`);
+    }
+    setReplyUploaded(true);
+  }
+
+  async function startReplyRecording() {
+    if (!window.MediaRecorder || !MediaRecorder.isTypeSupported("video/mp4")) {
+      setSubmitError("This browser cannot record H.264 MP4. Attach an MP4 reply instead.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      const recorder = new MediaRecorder(stream, { mimeType: "video/mp4" });
+      replyChunks.current = [];
+      replyStream.current = stream;
+      replyRecorder.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size) replyChunks.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(replyChunks.current, { type: "video/mp4" });
+        setReplyMedia(new File([blob], `reply-${Date.now()}.mp4`, { type: "video/mp4" }));
+        setReplyUploaded(false);
+        replyStream.current?.getTracks().forEach((track) => track.stop());
+        replyStream.current = null;
+        replyRecorder.current = null;
+        setRecordingReply(false);
+      };
+      recorder.start(500);
+      setRecordingReply(true);
+      setSubmitError(null);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "Reply recording failed");
+    }
+  }
+
+  function stopReplyRecording() {
+    if (replyRecorder.current?.state !== "inactive") replyRecorder.current?.stop();
+  }
+
+  async function playExit() {
+    setExiting(true);
+    const duration = motionMode === "full"
+      ? motionContract.full.exit.duration_ms
+      : motionMode === "reduced" ? motionContract.reduced.fade_ms : 0;
+    if (duration > 0) await new Promise((resolve) => window.setTimeout(resolve, duration));
+  }
+
   const draft = draw ? draftAnnotation(tool, draw, color) : null;
+  const visibleAnnotations = video
+    ? annotations.filter((annotation) => !isPlaying && Math.abs((annotation.timeMs ?? -1) - currentTimeMs) <= 50)
+    : annotations;
+  const overlayAnnotations = draft ? [...visibleAnnotations, draft] : visibleAnnotations;
+  const timelineMarkers = video
+    ? annotations.filter((annotation) => typeof annotation.timeMs === "number")
+    : [];
 
   return (
-    <main className="reviewShell activeReview" data-testid="active-review">
+    <main
+      className={`reviewShell activeReview motion-${motionMode}${exiting ? " is-exiting" : ""}`}
+      data-testid="active-review"
+      style={{
+        "--motion-materialize": `${motionContract.full.enter.materialize_ms}ms`,
+        "--motion-settle": `${motionContract.full.enter.settle_ms}ms`,
+        "--motion-exit": `${motionContract.full.exit.duration_ms}ms`,
+        "--motion-reduced": `${motionContract.reduced.fade_ms}ms`
+      } as CSSProperties}
+    >
       <ReviewHeader request={request} connection={connection} onBack={onBack} />
       <div className="reviewLayout">
         <section className="canvasPanel">
@@ -468,7 +681,25 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
               onPointerMove={pointerMove}
               onPointerUp={pointerUp}
             >
-              {preview && canvasCrop ? (
+              {video ? (
+                <video
+                  ref={videoRef}
+                  className="videoSource"
+                  src={assetUrl(video.url) ?? undefined}
+                  poster={preview ? assetUrl(preview.url) ?? undefined : undefined}
+                  playsInline
+                  preload="metadata"
+                  aria-label={request.title}
+                  onLoadedMetadata={(event) => {
+                    setImageSize({ width: event.currentTarget.videoWidth, height: event.currentTarget.videoHeight });
+                    setDurationMs(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration * 1_000 : durationMs);
+                  }}
+                  onTimeUpdate={(event) => setCurrentTimeMs(event.currentTarget.currentTime * 1_000)}
+                  onPlay={() => setIsPlaying(true)}
+                  onPause={() => setIsPlaying(false)}
+                  onEnded={() => setIsPlaying(false)}
+                />
+              ) : preview && canvasCrop ? (
                 <svg className="canvasSource" viewBox={`${canvasCrop.x} ${canvasCrop.y} ${canvasCrop.width} ${canvasCrop.height}`} preserveAspectRatio="none" aria-label={request.title}>
                   <image href={assetUrl(preview.url) ?? undefined} width={canvasCrop.sourceWidth} height={canvasCrop.sourceHeight} />
                 </svg>
@@ -480,17 +711,68 @@ function ActiveReview({ request, connection, onBack, onSubmitted }: {
                   onLoad={(event) => setImageSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
                 />
               ) : <div className="missingPreview">Preview unavailable</div>}
-              <AnnotationOverlay annotations={draft ? [...annotations, draft] : annotations} size={imageSize} />
+              <AnnotationOverlay annotations={overlayAnnotations} size={imageSize} />
             </div>
           </div>
+          {video ? (
+            <div className="videoTimeline" aria-label="Video timeline">
+              <button className="playbackButton" onClick={() => void togglePlayback()} aria-label={isPlaying ? "Pause video" : "Play video"}>
+                {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+              </button>
+              <span className="videoTime">{formatVideoTime(currentTimeMs)}</span>
+              <div className="timelineTrack">
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(1, durationMs)}
+                  step={10}
+                  value={Math.min(currentTimeMs, Math.max(1, durationMs))}
+                  onChange={(event) => seekVideo(Number(event.currentTarget.value))}
+                  aria-label="Video position"
+                />
+                {timelineMarkers.map((annotation, index) => (
+                  <button
+                    key={annotation.id}
+                    className="timelineMarker"
+                    style={{ left: `${durationMs ? ((annotation.timeMs ?? 0) / durationMs) * 100 : 0}%` }}
+                    onClick={() => seekVideo(annotation.timeMs ?? 0)}
+                    aria-label={`Annotation ${index + 1} at ${formatVideoTime(annotation.timeMs ?? 0)}`}
+                  />
+                ))}
+              </div>
+              <span className="videoTime">{formatVideoTime(durationMs)}</span>
+            </div>
+          ) : null}
         </section>
         <aside className="decisionPanel">
           <h2>{request.prompt}</h2>
+          <div className="replyMediaControls">
+            <label className="replyMediaButton">
+              <Paperclip size={17} />
+              <span>Attach MP4</span>
+              <input
+                type="file"
+                accept="video/mp4,.mp4"
+                onChange={(event) => {
+                  setReplyMedia(event.currentTarget.files?.[0] ?? null);
+                  setReplyUploaded(false);
+                }}
+              />
+            </label>
+            <button
+              className={`replyMediaButton${recordingReply ? " recording" : ""}`}
+              onClick={recordingReply ? stopReplyRecording : () => void startReplyRecording()}
+            >
+              {recordingReply ? <VideoOff size={17} /> : <Video size={17} />}
+              {recordingReply ? "Stop" : "Record reply"}
+            </button>
+          </div>
+          {replyMedia ? <p className="replyMediaStatus">{replyUploaded ? "Reply video uploaded" : replyMedia.name}</p> : null}
           <textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Add a comment..." />
           {submitError ? <p className="submitError">{submitError}</p> : null}
           <button className="decisionButton approve" disabled={Boolean(submitting)} onClick={() => void submit("approve")}>{submitting === "approve" ? "Sending..." : "Approve"}</button>
           <button className="decisionButton reject" disabled={Boolean(submitting)} onClick={() => void submit("reject")}>{submitting === "reject" ? "Sending..." : "Reject"}</button>
-          <button className="decisionButton comment" disabled={Boolean(submitting) || !comment.trim()} onClick={() => void submit("comment")}>{submitting === "comment" ? "Sending..." : "Comment"}</button>
+          <button className="decisionButton comment" disabled={Boolean(submitting) || (!comment.trim() && !replyMedia)} onClick={() => void submit("comment")}>{submitting === "comment" ? "Sending..." : "Comment"}</button>
         </aside>
       </div>
     </main>
@@ -606,7 +888,7 @@ function AnnotationOverlay({ annotations, size }: { annotations: ReviewAnnotatio
 }
 
 function ConnectionPill({ state }: { state: ConnectionState }) {
-  return <span className={`connectionPill ${state}`}><span />{state === "connected" ? "Connected to Dave" : state === "reconnecting" ? "Reconnecting" : "Connecting"}</span>;
+  return <span className={`connectionPill ${state}`}><span />{state === "connected" ? "Connected to Nib" : state === "reconnecting" ? "Reconnecting" : "Connecting"}</span>;
 }
 
 function NibMark() {
@@ -660,12 +942,56 @@ function annotationId(): string {
   return `web-${crypto.randomUUID()}`;
 }
 
+function configuredMotionMode(): MotionMode {
+  const override = window.localStorage.getItem("nib.motion");
+  if (override === "full" || override === "reduced" || override === "off") return override;
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduced" : "full";
+}
+
 function thumbnailCrop(value: unknown): { x: number; y: number; width: number; height: number; sourceWidth: number; sourceHeight: number } | null {
   if (!value || typeof value !== "object") return null;
   const crop = value as Record<string, unknown>;
   const values = [crop.x, crop.y, crop.width, crop.height, crop.sourceWidth, crop.sourceHeight];
   if (!values.every((item) => typeof item === "number" && Number.isFinite(item))) return null;
   return crop as { x: number; y: number; width: number; height: number; sourceWidth: number; sourceHeight: number };
+}
+
+function reviewSubject(request: RequestRecord): {
+  primary: {
+    attachmentId: string;
+    kind: "image" | "video";
+    width: number;
+    height: number;
+    durationMs?: number;
+  };
+} | null {
+  const subject = request.metadata.subject;
+  if (!subject || typeof subject !== "object" || Array.isArray(subject)) return null;
+  const primary = (subject as Record<string, unknown>).primary;
+  if (!primary || typeof primary !== "object" || Array.isArray(primary)) return null;
+  const value = primary as Record<string, unknown>;
+  if (
+    typeof value.attachmentId !== "string"
+    || (value.kind !== "image" && value.kind !== "video")
+    || typeof value.width !== "number"
+    || typeof value.height !== "number"
+  ) return null;
+  return {
+    primary: {
+      attachmentId: value.attachmentId,
+      kind: value.kind,
+      width: value.width,
+      height: value.height,
+      ...(typeof value.durationMs === "number" ? { durationMs: value.durationMs } : {})
+    }
+  };
+}
+
+function formatVideoTime(timeMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(timeMs / 1_000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 function requestIdFromPath(): string | null {

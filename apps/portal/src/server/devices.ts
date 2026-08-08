@@ -57,6 +57,7 @@ function deviceId(kind: string, token: string): string {
 
 function platformName(platform: DevicePlatform | undefined): string {
   if (platform === "ios") return "iPhone";
+  if (platform === "visionos") return "Apple Vision Pro";
   if (platform === "watchos") return "Apple Watch";
   if (platform === "macos") return "Mac";
   if (platform === "web") return "Web";

@@ -224,12 +224,16 @@ impl EditorView {
             .unwrap_or(0);
         let mut clones = Vec::new();
         for annotation in self.annotations.iter().filter(|a| ids.contains(&a.id)) {
+            let source_id = annotation.id;
             let mut clone = annotation.clone();
             clone.id = AnnotationId::new();
             Self::move_annotation_type(&mut clone.annotation_type, 8.0, 8.0);
             next_z += 1;
             clone.z_index = next_z;
             clone.touch();
+            if let Some(time_ms) = self.video_annotation_times.get(&source_id).copied() {
+                self.video_annotation_times.insert(clone.id, time_ms);
+            }
             clones.push(clone);
         }
 

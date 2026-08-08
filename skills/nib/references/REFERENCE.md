@@ -6,8 +6,33 @@ Complete reference for all nib CLI commands and options.
 
 | Flag | Purpose |
 |------|---------|
-| `-v, --verbose` | Enable verbose output |
-| `--format [text\|json]` | Output format (default: text) |
+| `-v, --verbose` | Increase diagnostic logging; repeat for trace logging |
+| `--format [toon\|json\|yaml\|md\|jsonl]` | Select the structured output format |
+| `--schema` | Print the command's exact JSON Schema |
+| `--llms`, `--llms-full` | Print the compact or complete LLM-readable command manifest |
+| `--filter-output <keys>` | Select output fields by key path |
+| `--token-limit <n>` | Limit structured output to a token budget |
+| `--mcp` | Start the MCP server: Code Mode first, direct tools alongside it |
+
+## MCP Code Mode
+
+`nib --mcp` presents Code Mode as the primary interface. MCP clients compose Nib
+primitives in JavaScript through one `codemode_execute` program instead of
+chaining single tool calls. Executions, snippets, and artifacts persist under
+Nib's storage directory, so an execution survives an MCP restart and resumes by
+ID.
+
+| Tool | Purpose |
+|------|---------|
+| `codemode_search` | Discover composable Nib methods and saved snippets; call first |
+| `codemode_execute` | Run a JavaScript program and return its durable execution state |
+| `codemode_execution` | Read an execution, or one oversized artifact it owns, by ID |
+| `codemode_decide` | Approve or reject one pending Code Mode action |
+| `codemode_cancel` | Cancel one running or paused execution |
+
+Direct MCP tools remain listed for one-off calls. `present_image` is direct only —
+it returns first-class inline MCP image content. Programs exchange paths and IDs,
+never media bytes.
 
 ## Commands
 
@@ -28,7 +53,8 @@ nib capture --mode window -o window.png
 
 ### `nib feedback`
 
-Primary tool for visual collaboration. Opens GUI, shows annotations, waits for human response.
+Primary tool for durable visual collaboration. Publishes to connected Nib
+surfaces, opens the installed native macOS app, and waits for a human response.
 
 ```bash
 nib feedback image.png \
@@ -41,7 +67,9 @@ nib feedback image.png \
 |------|---------|---------|
 | `-a, --annotations` | JSON array of annotations to display | none |
 | `-m, --message` | Question shown as toast notification | none |
-| `-t, --timeout` | Seconds to wait for response | 60 |
+| `-t, --timeout` | Seconds to wait for response; 0 waits indefinitely | 0 |
+| `--ui` | Review surface: `native`, `terminal`, `web`, or `auto` | native |
+| `--detach` | Explicitly publish without waiting; use only when the caller requests it | false |
 
 **Owner-based filtering:** Annotations passed via `-a` are tagged `owner: "claude"` and excluded from the response. Only the human's new annotations are returned.
 
@@ -53,12 +81,53 @@ then press ⌘↵ to send. Every response sends once and closes the GUI.
 {"decision": "comment", "comment": "Tighten this spacing", "annotations": [{"id": "a1", "type": "rectangle", "at": [150, 200, 300, 100], "owner": "human"}]}
 ```
 
-**Timeout response:**
-```json
-{"event": "timeout"}
+When attached, stdout contains only the final response. The request ID, URL, and
+`nib request wait REQUEST_ID` recovery command are written to stderr before the
+wait starts. An explicit nonzero timeout exits nonzero and leaves the request
+open so it can be resumed.
+
+Attached waiting is the standard workflow. Do not pass `--detach` unless the
+caller explicitly requests a nonblocking publish.
+
+### `nib request create`
+
+Publish without opening a review surface or waiting. This is the explicit
+nonblocking counterpart to `nib feedback`.
+
+```bash
+nib request create review.mp4 -m "Check the transition" --format json
+nib request wait REQUEST_ID
 ```
 
-Exit code 0 on timeout (not an error). GUI stays open.
+The create response includes the durable request ID and a continuation command.
+
+### `nib request wait`
+
+Resume a durable request from any process:
+
+```bash
+nib request wait REQUEST_ID
+nib request wait REQUEST_ID --timeout 120
+```
+
+The default timeout is 0 (wait indefinitely). Transient portal failures are
+retried. A response is printed to stdout; status and heartbeat messages stay on
+stderr.
+
+### `nib record` and `nib media`
+
+Create and validate video evidence without leaving the Nib workflow:
+
+```bash
+nib record start --duration 30 --region 0,0,1280,720 \
+  --output /tmp/review.mp4 --format json
+nib record wait RECORDING_ID
+nib media inspect /tmp/review.mp4 --format json
+nib media poster /tmp/review.mp4 --output /tmp/review-poster.png
+```
+
+The worker is durable and only one recording may be active. Silent capture is
+the default. `--system-audio` and `--microphone` are explicit opt-ins.
 
 ### `nib gui`
 

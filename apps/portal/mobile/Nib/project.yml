@@ -3,11 +3,13 @@ options:
   bundleIdPrefix: com.douglance
   deploymentTarget:
     iOS: "18.0"
+    macOS: "14.0"
+    visionOS: "2.0"
     watchOS: "11.0"
 settings:
   base:
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: 0.3.0
+    MARKETING_VERSION: 0.3.1
     SWIFT_VERSION: 6.0
     DEVELOPMENT_TEAM: ""
 targets:
@@ -18,9 +20,13 @@ targets:
       - path: Sources/NibModels.swift
       - path: Sources/NibClient.swift
       - path: Sources/NibApp.swift
+      - path: Sources/NibNotificationActions.swift
       - path: Sources/NativeVisualReviewWorkspace.swift
+      - path: Resources
     dependencies:
       - target: NibNotificationService
+        embed: true
+      - target: NibNotificationContent
         embed: true
       - target: NibWatch
         embed: true
@@ -35,6 +41,8 @@ targets:
             CFBundleURLSchemes:
               - nib
         UILaunchScreen: {}
+        UIStatusBarStyle: UIStatusBarStyleLightContent
+        UIViewControllerBasedStatusBarAppearance: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -56,7 +64,7 @@ targets:
       properties:
         aps-environment: development
         com.apple.developer.associated-domains:
-          - "applinks:dave.tail5d92b4.ts.net?mode=developer"
+          - "applinks:nib-global.doug-lance.workers.dev"
   NibNotificationService:
     type: app-extension
     platform: iOS
@@ -78,6 +86,47 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.NotificationService
         SKIP_INSTALL: YES
+  NibNotificationContent:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Sources/NibNotificationContentViewController.swift
+      - path: ContentResources
+    dependencies:
+      - sdk: UserNotifications.framework
+      - sdk: UserNotificationsUI.framework
+    info:
+      path: NibNotificationContent-Info.plist
+      properties:
+        CFBundleDisplayName: Nib request actions
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionAttributes:
+            UNNotificationExtensionCategory:
+              - NIB_APPROVAL
+              - NIB_CHOICE
+              - NIB_TEXT
+              - NIB_SHIP_HOLD_REVISE
+              - NIB_APPROVE_HOLD
+              - NIB_APPROVE_REJECT
+              - NIB_ALLOW_DENY
+              - NIB_YES_NO
+              - NIB_SHIP_HOLD
+              - NIB_USE_REVISE
+            UNNotificationExtensionDefaultContentHidden: false
+            UNNotificationExtensionInitialContentSizeRatio: 0.21
+            UNNotificationExtensionUserInteractionEnabled: true
+          NSExtensionMainStoryboard: MainInterface
+          NSExtensionPointIdentifier: com.apple.usernotifications.content-extension
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: false
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        APPLICATION_EXTENSION_API_ONLY: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.NotificationContent
+        SKIP_INSTALL: YES
   NibWatch:
     type: application
     platform: watchOS
@@ -85,6 +134,7 @@ targets:
       - path: Sources/NibModels.swift
       - path: Sources/NibClient.swift
       - path: Sources/NibWatchApp.swift
+      - path: WatchResources
     info:
       path: NibWatch-Info.plist
       properties:
@@ -102,3 +152,102 @@ targets:
       path: NibWatch.entitlements
       properties:
         aps-environment: development
+  NibVision:
+    type: application
+    platform: visionOS
+    sources:
+      - path: Sources/NibModels.swift
+      - path: Sources/NibClient.swift
+      - path: Sources/NibApp.swift
+      - path: Sources/NibNotificationActions.swift
+      - path: Sources/NativeVisualReviewWorkspace.swift
+      - path: Resources
+    info:
+      path: NibVision-Info.plist
+      properties:
+        CFBundleDisplayName: Nib
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleURLTypes:
+          - CFBundleURLName: com.douglance.nib
+            CFBundleURLSchemes:
+              - nib
+        NSCameraUsageDescription: Nib attaches photos to requests so agents can see what you see.
+        NSPhotoLibraryUsageDescription: Nib attaches selected images to requests.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib
+    entitlements:
+      path: Nib.entitlements
+      properties:
+        aps-environment: development
+        com.apple.developer.associated-domains:
+          - "applinks:nib-global.doug-lance.workers.dev"
+  NibMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/NibModels.swift
+      - path: Sources/NibClient.swift
+      - path: MacSources
+    info:
+      path: NibMac-Info.plist
+      properties:
+        CFBundleDisplayName: Nib
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleURLTypes:
+          - CFBundleURLName: com.douglance.nib.macos
+            CFBundleURLSchemes:
+              - nib
+        LSUIElement: true
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.macos
+        PRODUCT_NAME: Nib
+    postCompileScripts:
+      - name: Bundle native Rust reviewer
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          reviewer="${NIB_REVIEWER_BINARY:-$SRCROOT/../../../../target/release/nib}"
+          if [[ ! -x "$reviewer" ]]; then
+            echo "error: native reviewer is missing or not executable: $reviewer" >&2
+            echo "error: run cargo build --release --all-features --bin nib first" >&2
+            exit 1
+          fi
+          helpers="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers"
+          destination="$helpers/nib-reviewer"
+          /bin/mkdir -p "$helpers"
+          /bin/cp "$reviewer" "$destination"
+          /bin/chmod 0755 "$destination"
+          if [[ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" && "${EXPANDED_CODE_SIGN_IDENTITY}" != "-" ]]; then
+            /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$destination"
+          fi
+  NibMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: MacTests
+    dependencies:
+      - target: NibMac
+    settings:
+      base:
+        BUNDLE_LOADER: $(TEST_HOST)
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.macos.tests
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Nib.app/Contents/MacOS/Nib
+schemes:
+  NibMac:
+    build:
+      targets:
+        NibMac: all
+        NibMacTests:
+          - test
+    test:
+      targets:
+        - NibMacTests

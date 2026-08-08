@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "recipe": "materialize-settle-dissolve",
+  "full": {
+    "enter": {
+      "start_width_scale": 1.06,
+      "settle_width_scale": 0.987,
+      "start_opacity": 0.05,
+      "start_blur_px": 8,
+      "materialize_ms": 140,
+      "settle_ms": 140
+    },
+    "exit": {
+      "end_width_scale": 1.06,
+      "end_opacity": 0,
+      "end_blur_px": 8,
+      "duration_ms": 120
+    }
+  },
+  "reduced": {
+    "fade_ms": 100
+  },
+  "off": {
+    "duration_ms": 0
+  }
+}

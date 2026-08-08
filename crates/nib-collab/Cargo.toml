@@ -1,12 +1,13 @@
 [package]
 name = "nib-collab"
-version = "0.3.0"
+version = "0.3.1"
+publish = false
 edition.workspace = true
 rust-version.workspace = true
 description = "Real-time IPC and collaboration for Nib"
 authors.workspace = true
 repository.workspace = true
-license-file.workspace = true
+license.workspace = true
 
 [dependencies]
 nib-core.workspace = true

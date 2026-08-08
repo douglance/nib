@@ -119,7 +119,7 @@ export async function getCommandPresets(projectId: string): Promise<CommandPrese
     { id: "pwd", label: "Print cwd", command: "pwd", cwd },
     { id: "ls", label: "List files", command: "ls -la", cwd },
     { id: "package-scripts", label: "Show package scripts", command: "node -e \"const p=require('./package.json'); console.log(p.scripts||{})\"", cwd },
-    { id: "portal-health", label: "Portal health", command: "curl -k -sS https://dave.tail5d92b4.ts.net/api/health", cwd: process.cwd() },
+    { id: "portal-health", label: "Portal health", command: "curl -sS http://127.0.0.1:4070/api/health", cwd: process.cwd() },
     { id: "portal-logs", label: "Portal logs", command: "tail -80 .nib/logs/stderr.log .nib/logs/stdout.log", cwd: process.cwd() }
   ];
   return presets;

@@ -10,9 +10,10 @@ import type {
   RequestRecord,
   RequestResponse,
   RequestResponseKind,
-  RequestStatus
+  RequestStatus,
+  ReviewTranscript
 } from "../shared/types";
-import { ATTACHMENT_DIR } from "./config";
+import { ATTACHMENT_DIR, ATTACHMENT_MAX_BYTES } from "./config";
 import { discoverProjects } from "./discovery";
 import { sendRequestNotification } from "./notifications";
 import { emitRequestEvent } from "./requestEvents";
@@ -52,14 +53,17 @@ interface RequestRespondInput {
   decision?: "approve" | "reject" | "comment";
   comment?: string;
   annotations?: unknown[];
+  transcript?: ReviewTranscript;
+  notificationResponse?: boolean;
 }
 
 interface RequestPatchInput {
   status?: RequestStatus;
   staleReason?: string | null;
+  metadata?: Record<string, unknown>;
 }
 
-interface AttachmentInput {
+export interface AttachmentInput {
   name?: string;
   contentType?: string;
   contentBase64?: string;
@@ -88,8 +92,9 @@ export async function createRequest(input: RequestCreateInput): Promise<RequestR
   if (!prompt) throw new Error("prompt is required");
   const now = new Date().toISOString();
   const visualReview = input.kind === "visual-review";
-  if (visualReview && input.metadata?.contract !== "nib.visual-review/v1") {
-    throw new RequestContractError("visual reviews require contract nib.visual-review/v1", 400);
+  const reviewContract = input.metadata?.contract;
+  if (visualReview && reviewContract !== "nib.visual-review/v1" && reviewContract !== "nib.review/v2") {
+    throw new RequestContractError("visual reviews require contract nib.visual-review/v1 or nib.review/v2", 400);
   }
   const choices = (input.choices ?? []).map((choice) => choice.trim()).filter(Boolean);
   const project = input.projectId ? (await discoverProjects()).find((item) => item.id === input.projectId) : null;
@@ -149,9 +154,12 @@ export async function respondRequest(id: string, input: RequestRespondInput): Pr
       throw new RequestContractError("visual review is not published", 409);
     }
     const now = new Date().toISOString();
-    const visualResponse = request.kind === "visual-review" ? normalizeVisualResponse(input) : null;
+    const visualResponse = request.kind === "visual-review" ? normalizeVisualResponse(request, input) : null;
     const choice = visualResponse?.decision ?? normalizeChoice(request.choices, input.choice, input.choiceIndex);
-    const notificationResponse = isNotificationResponse(input.deviceId);
+    const notificationResponse = input.notificationResponse === true || isNotificationResponse(input.deviceId);
+    const deviceId = input.deviceId?.trim() || undefined;
+    const registeredDevice = deviceId ? store.devices?.[deviceId] : undefined;
+    const responseAttachments = request.attachments.filter((attachment) => attachment.metadata.role === "response");
     const response: RequestResponse = {
       id: crypto.randomUUID(),
       kind: visualResponse ? "visual-review" : input.kind ?? (choice ? "choice" : "text"),
@@ -159,7 +167,18 @@ export async function respondRequest(id: string, input: RequestRespondInput): Pr
       choice,
       choiceIndex: typeof input.choiceIndex === "number" ? input.choiceIndex : choice ? request.choices.indexOf(choice) : undefined,
       data: visualResponse ?? normalizeData(input.data),
-      deviceId: input.deviceId?.trim() || undefined,
+      deviceId,
+      device: registeredDevice
+        ? {
+            id: registeredDevice.id,
+            name: registeredDevice.name,
+            platform: registeredDevice.platform,
+            pushKind: registeredDevice.pushKind
+          }
+        : undefined,
+      attachments: responseAttachments.length ? responseAttachments : undefined,
+      transcript: normalizeTranscript(input.transcript)
+        ?? (responseAttachments.length ? unavailableTranscript() : undefined),
       createdAt: now
     };
     const next: RequestRecord = {
@@ -193,6 +212,9 @@ export async function patchRequest(id: string, input: RequestPatchInput): Promis
     ...request,
     status,
     staleReason: input.staleReason ?? request.staleReason,
+    metadata: input.metadata && !request.publishedAt
+      ? { ...request.metadata, ...input.metadata }
+      : request.metadata,
     resolvedAt: status === "resolved" ? now : request.resolvedAt,
     updatedAt: now
   };
@@ -221,30 +243,66 @@ export async function markRequestNotificationClicked(id: string, when = new Date
 }
 
 export async function addRequestAttachment(id: string, input: AttachmentInput): Promise<RequestAttachment | null> {
+  if (!input.contentBase64) throw new Error("contentBase64 is required");
+  const buffer = Buffer.from(input.contentBase64, "base64");
+  return addRequestAttachmentBytes(id, input, buffer);
+}
+
+export async function addRequestAttachmentBytes(
+  id: string,
+  input: Omit<AttachmentInput, "contentBase64">,
+  buffer: Buffer
+): Promise<RequestAttachment | null> {
+  return persistRequestAttachment(id, input, { buffer, bytes: buffer.length });
+}
+
+export async function addRequestAttachmentFile(
+  id: string,
+  input: Omit<AttachmentInput, "contentBase64">,
+  temporaryFile: string,
+  bytes: number
+): Promise<RequestAttachment | null> {
+  return persistRequestAttachment(id, input, { temporaryFile, bytes });
+}
+
+async function persistRequestAttachment(
+  id: string,
+  input: Omit<AttachmentInput, "contentBase64">,
+  source: { buffer: Buffer; bytes: number } | { temporaryFile: string; bytes: number }
+): Promise<RequestAttachment | null> {
+  if (!source.bytes) throw new RequestContractError("attachment is empty", 400);
+  if (source.bytes > ATTACHMENT_MAX_BYTES) {
+    throw new RequestContractError(`attachment exceeds ${ATTACHMENT_MAX_BYTES} byte limit`, 413);
+  }
   const store = await readStore();
   const request = store.requests?.[id];
   if (!request) return null;
-  if (request.kind === "visual-review" && request.publishedAt) {
+  const responseAttachment = input.metadata?.role === "response";
+  if (request.kind === "visual-review" && request.publishedAt && !responseAttachment) {
     throw new RequestContractError("visual review is already published", 409);
   }
-  if (!input.contentBase64) throw new Error("contentBase64 is required");
-  const buffer = Buffer.from(input.contentBase64, "base64");
-  if (!buffer.length) throw new Error("attachment is empty");
+  if (responseAttachment && (!request.publishedAt || request.responses.length)) {
+    throw new RequestContractError("response attachments require a published unanswered review", 409);
+  }
   const contentType = input.contentType?.trim() || "application/octet-stream";
+  if ("buffer" in source) validateAttachment(contentType, source.buffer);
+  else await validateAttachmentFile(contentType, source.temporaryFile);
   const attachmentId = crypto.randomUUID();
   const safeName = sanitizeFileName(input.name || `attachment-${attachmentId}`);
   const ext = extensionFor(contentType, safeName);
   const fileName = `${attachmentId}${ext}`;
   await fs.mkdir(ATTACHMENT_DIR, { recursive: true });
-  await fs.writeFile(path.join(ATTACHMENT_DIR, fileName), buffer);
+  const destination = path.join(ATTACHMENT_DIR, fileName);
+  if ("buffer" in source) await fs.writeFile(destination, source.buffer);
+  else await fs.rename(source.temporaryFile, destination);
   const now = new Date().toISOString();
   const attachment: RequestAttachment = {
     id: attachmentId,
     requestId: id,
     name: safeName,
-    type: contentType.startsWith("image/") ? "image" : "file",
+    type: attachmentType(contentType),
     contentType,
-    bytes: buffer.length,
+    bytes: source.bytes,
     url: `/attachments/${attachmentId}`,
     createdAt: now,
     metadata: input.metadata && typeof input.metadata === "object" ? { ...input.metadata, fileName } : { fileName }
@@ -269,17 +327,21 @@ export async function publishRequest(id: string): Promise<RequestRecord | null> 
     if (request.kind !== "visual-review") {
       throw new RequestContractError("only visual reviews require explicit publish", 400);
     }
-    if (request.metadata.contract !== "nib.visual-review/v1") {
+    if (request.metadata.contract !== "nib.visual-review/v1" && request.metadata.contract !== "nib.review/v2") {
       throw new RequestContractError("visual review contract is invalid", 400);
     }
-    const hasPreview = request.attachments.some((attachment) =>
-      attachment.contentType.startsWith("image/") && attachment.metadata.role === "preview"
-    );
-    if (!hasPreview) throw new RequestContractError("visual review requires a preview image attachment", 400);
-    const hasCanonical = request.attachments.some((attachment) =>
-      attachment.contentType === "application/x-nib" && attachment.metadata.role === "canonical"
-    );
-    if (!hasCanonical) throw new RequestContractError("visual review requires a canonical .nib attachment", 400);
+    if (request.metadata.contract === "nib.visual-review/v1") {
+      const hasPreview = request.attachments.some((attachment) =>
+        attachment.contentType.startsWith("image/") && attachment.metadata.role === "preview"
+      );
+      if (!hasPreview) throw new RequestContractError("visual review requires a preview image attachment", 400);
+      const hasCanonical = request.attachments.some((attachment) =>
+        attachment.contentType === "application/x-nib" && attachment.metadata.role === "canonical"
+      );
+      if (!hasCanonical) throw new RequestContractError("visual review requires a canonical .nib attachment", 400);
+    } else {
+      validateReviewV2(request);
+    }
     const now = new Date().toISOString();
     const published: RequestRecord = { ...request, publishedAt: now, updatedAt: now };
     store.requests[id] = published;
@@ -415,7 +477,7 @@ function defaultVisualReviewExpiry(createdAt: string): string {
   return new Date(new Date(createdAt).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
 }
 
-function normalizeVisualResponse(input: RequestRespondInput): Record<string, unknown> & {
+function normalizeVisualResponse(request: RequestRecord, input: RequestRespondInput): Record<string, unknown> & {
   decision: "approve" | "reject" | "comment";
   comment?: string;
   annotations: unknown[];
@@ -424,15 +486,163 @@ function normalizeVisualResponse(input: RequestRespondInput): Record<string, unk
     throw new RequestContractError("visual review decision must be approve, reject, or comment", 400);
   }
   const comment = input.comment?.trim();
-  if (input.decision === "comment" && !comment) {
+  const hasResponseAttachment = request.attachments.some((attachment) => attachment.metadata.role === "response");
+  if (input.decision === "comment" && !comment && !hasResponseAttachment) {
     throw new RequestContractError("comment decision requires a comment", 400);
   }
+  const annotations = Array.isArray(input.annotations) ? input.annotations : [];
+  const contract = request.metadata.contract === "nib.review/v2"
+    ? "nib.review/v2"
+    : "nib.visual-review/v1";
+  if (contract === "nib.review/v2" && reviewSubject(request)?.primary.kind === "video") {
+    const untimed = annotations.find((annotation) => {
+      if (!annotation || typeof annotation !== "object" || Array.isArray(annotation)) return true;
+      const timeMs = (annotation as Record<string, unknown>).timeMs;
+      return typeof timeMs !== "number" || !Number.isFinite(timeMs) || timeMs < 0;
+    });
+    if (untimed) {
+      throw new RequestContractError("video review annotations require a non-negative timeMs anchor", 400);
+    }
+  }
   return {
-    contract: "nib.visual-review/v1",
+    contract,
     decision: input.decision,
     ...(comment ? { comment } : {}),
-    annotations: Array.isArray(input.annotations) ? input.annotations : []
+    annotations
   };
+}
+
+function normalizeTranscript(transcript: ReviewTranscript | undefined): ReviewTranscript | undefined {
+  if (!transcript) return undefined;
+  if (!["complete", "unavailable", "failed"].includes(transcript.status)) {
+    throw new RequestContractError("transcript status is invalid", 400);
+  }
+  if (!["device", "origin-mac", "none"].includes(transcript.source)) {
+    throw new RequestContractError("transcript source is invalid", 400);
+  }
+  if (!Array.isArray(transcript.segments)) {
+    throw new RequestContractError("transcript segments must be an array", 400);
+  }
+  return {
+    ...transcript,
+    text: transcript.text?.trim() ?? "",
+    segments: transcript.segments.map((segment) => ({
+      startMs: Math.max(0, Number(segment.startMs)),
+      endMs: Math.max(Number(segment.startMs), Number(segment.endMs)),
+      text: segment.text?.trim() ?? ""
+    }))
+  };
+}
+
+function unavailableTranscript(): ReviewTranscript {
+  return {
+    status: "unavailable",
+    source: "none",
+    text: "",
+    segments: [],
+    error: "Device transcription was unavailable; origin-Mac fallback may retry"
+  };
+}
+
+function validateReviewV2(request: RequestRecord): void {
+  const subject = reviewSubject(request);
+  if (!subject || subject.contract !== "nib.review/v2") {
+    throw new RequestContractError("nib.review/v2 requires metadata.subject", 400);
+  }
+  const primary = request.attachments.find((attachment) => attachment.id === subject.primary.attachmentId);
+  if (!primary) throw new RequestContractError("review subject primary attachment is missing", 400);
+  const expectedPrefix = subject.primary.kind === "video" ? "video/" : "image/";
+  if (!primary.contentType.startsWith(expectedPrefix)) {
+    throw new RequestContractError(`review subject ${subject.primary.kind} content type does not match attachment`, 400);
+  }
+  if (subject.primary.kind === "video") {
+    if (primary.contentType !== "video/mp4") {
+      throw new RequestContractError("first-release video reviews require video/mp4", 400);
+    }
+    if (typeof subject.primary.durationMs !== "number" || subject.primary.durationMs <= 0) {
+      throw new RequestContractError("video review subject requires durationMs", 400);
+    }
+    if (subject.primary.posterAttachmentId) {
+      const poster = request.attachments.find((attachment) => attachment.id === subject.primary.posterAttachmentId);
+      if (!poster?.contentType.startsWith("image/")) {
+        throw new RequestContractError("video review poster attachment is missing", 400);
+      }
+    }
+  }
+}
+
+function reviewSubject(request: RequestRecord): {
+  contract?: unknown;
+  primary: {
+    attachmentId?: unknown;
+    kind?: unknown;
+    durationMs?: unknown;
+    posterAttachmentId?: unknown;
+  };
+} | null {
+  const subject = request.metadata.subject;
+  if (!subject || typeof subject !== "object" || Array.isArray(subject)) return null;
+  const primary = (subject as Record<string, unknown>).primary;
+  if (!primary || typeof primary !== "object" || Array.isArray(primary)) return null;
+  return {
+    contract: (subject as Record<string, unknown>).contract,
+    primary: primary as {
+      attachmentId?: unknown;
+      kind?: unknown;
+      durationMs?: unknown;
+      posterAttachmentId?: unknown;
+    }
+  };
+}
+
+function validateAttachment(contentType: string, buffer: Buffer): void {
+  if (contentType !== "video/mp4") return;
+  if (buffer.length < 12 || buffer.subarray(4, 8).toString("ascii") !== "ftyp") {
+    throw new RequestContractError("video attachment is not an MP4 file", 400);
+  }
+  if (!buffer.includes(Buffer.from("avc1")) && !buffer.includes(Buffer.from("avc3"))) {
+    throw new RequestContractError("first-release MP4 video must contain H.264 video", 400);
+  }
+}
+
+async function validateAttachmentFile(contentType: string, file: string): Promise<void> {
+  if (contentType !== "video/mp4") return;
+  const handle = await fs.open(file, "r");
+  try {
+    const header = Buffer.alloc(12);
+    const headerRead = await handle.read(header, 0, header.length, 0);
+    if (headerRead.bytesRead < 12 || header.subarray(4, 8).toString("ascii") !== "ftyp") {
+      throw new RequestContractError("video attachment is not an MP4 file", 400);
+    }
+    const chunk = Buffer.alloc(1024 * 1024 + 3);
+    let offset = 0;
+    let overlap = 0;
+    let h264 = false;
+    while (!h264) {
+      const read = await handle.read(chunk, overlap, chunk.length - overlap, offset);
+      if (!read.bytesRead) break;
+      const used = overlap + read.bytesRead;
+      const view = chunk.subarray(0, used);
+      h264 = view.includes(Buffer.from("avc1")) || view.includes(Buffer.from("avc3"));
+      if (h264) break;
+      overlap = Math.min(3, used);
+      view.copy(chunk, 0, used - overlap, used);
+      offset += read.bytesRead;
+    }
+    if (!h264) {
+      throw new RequestContractError("first-release MP4 video must contain H.264 video", 400);
+    }
+  } finally {
+    await handle.close();
+  }
+}
+
+function attachmentType(contentType: string): RequestAttachment["type"] {
+  if (contentType.startsWith("image/")) return "image";
+  if (contentType.startsWith("video/")) return "video";
+  if (contentType.startsWith("audio/")) return "audio";
+  if (contentType === "application/pdf" || contentType.startsWith("text/")) return "document";
+  return "file";
 }
 
 export class RequestContractError extends Error {
@@ -519,6 +729,9 @@ function extensionFor(contentType: string, name: string): string {
   if (contentType === "image/jpeg") return ".jpg";
   if (contentType === "image/png") return ".png";
   if (contentType === "image/heic") return ".heic";
+  if (contentType === "video/mp4") return ".mp4";
+  if (contentType === "audio/mp4") return ".m4a";
+  if (contentType === "application/pdf") return ".pdf";
   if (contentType === "application/json") return ".json";
   return ".bin";
 }

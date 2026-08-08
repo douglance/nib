@@ -1,106 +1,140 @@
 #!/usr/bin/env node
 
-const { execSync, spawn } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
-const path = require('path');
 const https = require('https');
+const os = require('os');
+const path = require('path');
+
+const {
+  cargoInstallArgs,
+  extractionCommand,
+  parseChecksumManifest,
+  releaseFor,
+  verifyFileChecksum,
+} = require('./installer-lib');
 
 const PACKAGE_VERSION = require('../package.json').version;
 const BIN_DIR = path.join(__dirname, '..', 'bin');
 const BIN_NAME = process.platform === 'win32' ? 'nib.exe' : 'nib-binary';
 const BIN_PATH = path.join(BIN_DIR, BIN_NAME);
 
-// Platform detection
-const PLATFORM = process.platform;
-const ARCH = process.arch;
-
-function getPlatformTarget() {
-  const targets = {
-    'darwin-x64': 'x86_64-apple-darwin',
-    'darwin-arm64': 'aarch64-apple-darwin',
-    'linux-x64': 'x86_64-unknown-linux-gnu',
-    'linux-arm64': 'aarch64-unknown-linux-gnu',
-  };
-  return targets[`${PLATFORM}-${ARCH}`];
-}
-
-function downloadBinary(url, dest) {
+function getResponse(url, redirectsRemaining = 5) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
     https.get(url, (response) => {
-      if (response.statusCode === 302 || response.statusCode === 301) {
-        // Follow redirect
-        https.get(response.headers.location, (res) => {
-          res.pipe(file);
-          file.on('finish', () => {
-            file.close();
-            fs.chmodSync(dest, 0o755);
-            resolve();
-          });
-        }).on('error', reject);
-      } else if (response.statusCode === 200) {
-        response.pipe(file);
-        file.on('finish', () => {
-          file.close();
-          fs.chmodSync(dest, 0o755);
-          resolve();
-        });
-      } else {
-        reject(new Error(`Failed to download: ${response.statusCode}`));
+      if ([301, 302, 303, 307, 308].includes(response.statusCode)) {
+        response.resume();
+        if (!response.headers.location || redirectsRemaining === 0) {
+          reject(new Error('Too many redirects while downloading release asset'));
+          return;
+        }
+        resolve(getResponse(new URL(response.headers.location, url).toString(), redirectsRemaining - 1));
+        return;
       }
+
+      if (response.statusCode !== 200) {
+        response.resume();
+        reject(new Error(`Download failed with HTTP ${response.statusCode}`));
+        return;
+      }
+
+      resolve(response);
     }).on('error', reject);
   });
 }
 
+async function downloadText(url) {
+  const response = await getResponse(url);
+  return new Promise((resolve, reject) => {
+    let contents = '';
+    response.setEncoding('utf8');
+    response.on('data', (chunk) => {
+      contents += chunk;
+    });
+    response.on('end', () => resolve(contents));
+    response.on('error', reject);
+  });
+}
+
+async function downloadFile(url, destination) {
+  const response = await getResponse(url);
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(destination);
+    const fail = (error) => {
+      file.destroy();
+      reject(error);
+    };
+    response.on('error', fail);
+    file.on('error', fail);
+    file.on('finish', () => file.close(resolve));
+    response.pipe(file);
+  });
+}
+
 async function tryDownloadFromGitHub() {
-  const target = getPlatformTarget();
-  if (!target) {
-    throw new Error(`Unsupported platform: ${PLATFORM}-${ARCH}`);
+  const release = releaseFor(process.platform, process.arch, PACKAGE_VERSION);
+  if (!release) {
+    throw new Error(`No pre-built release for ${process.platform}-${process.arch}`);
   }
 
-  const releaseUrl = `https://github.com/douglance/nib/releases/download/v${PACKAGE_VERSION}/nib-${target}`;
-  console.log(`Downloading nib from GitHub releases...`);
-  console.log(`  URL: ${releaseUrl}`);
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nib-release-'));
+  const archivePath = path.join(tempRoot, release.asset);
+  try {
+    console.log(`Downloading ${release.asset} from GitHub releases...`);
+    const [checksumManifest] = await Promise.all([
+      downloadText(release.checksumsUrl),
+      downloadFile(release.url, archivePath),
+    ]);
+    const expected = parseChecksumManifest(checksumManifest).get(release.asset);
+    if (!expected) {
+      throw new Error(`SHA256SUMS does not contain ${release.asset}`);
+    }
+    verifyFileChecksum(archivePath, expected);
 
-  await downloadBinary(releaseUrl, BIN_PATH);
-  console.log(`Successfully installed nib to ${BIN_PATH}`);
+    const extract = extractionCommand(archivePath, tempRoot);
+    execFileSync(extract.executable, extract.args, { stdio: 'ignore' });
+    const extractedBinary = path.join(tempRoot, release.binary);
+    if (!fs.existsSync(extractedBinary)) {
+      throw new Error(`${release.asset} does not contain ${release.binary}`);
+    }
+    fs.copyFileSync(extractedBinary, BIN_PATH);
+    if (process.platform !== 'win32') {
+      fs.chmodSync(BIN_PATH, 0o755);
+    }
+    console.log(`Successfully installed nib to ${BIN_PATH}`);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 function tryCargoInstall() {
-  console.log('GitHub release not available, trying cargo install...');
-
+  console.log('Pre-built release unavailable; trying a version-pinned cargo install...');
   try {
-    execSync('cargo --version', { stdio: 'ignore' });
+    execFileSync('cargo', ['--version'], { stdio: 'ignore' });
   } catch {
     throw new Error(
-      'Could not download pre-built binary and cargo is not installed.\n' +
-      'Please install Rust from https://rustup.rs and try again.'
+      'Could not install a pre-built binary and cargo is not installed.\n' +
+      'Install Rust from https://rustup.rs and try again.',
     );
   }
 
-  console.log('Building nib from source (this may take a few minutes)...');
-
-  // Build to a temp location - install from GitHub since crates.io name is taken
-  const tempRoot = path.join(__dirname, '..', '.cargo-tmp');
-  execSync(`cargo install --git https://github.com/douglance/nib --root "${tempRoot}"`, {
-    stdio: 'inherit',
-  });
-
-  // Move to expected location
-  const cargoOutput = path.join(tempRoot, 'bin', 'nib');
-  fs.renameSync(cargoOutput, BIN_PATH);
-  fs.rmSync(tempRoot, { recursive: true, force: true });
-
-  console.log('Successfully built and installed nib');
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nib-cargo-'));
+  try {
+    console.log(`Building nib v${PACKAGE_VERSION} from source (this may take a few minutes)...`);
+    execFileSync('cargo', cargoInstallArgs(PACKAGE_VERSION, tempRoot), { stdio: 'inherit' });
+    const cargoBinary = path.join(tempRoot, 'bin', process.platform === 'win32' ? 'nib.exe' : 'nib');
+    fs.copyFileSync(cargoBinary, BIN_PATH);
+    if (process.platform !== 'win32') {
+      fs.chmodSync(BIN_PATH, 0o755);
+    }
+    console.log('Successfully built and installed nib');
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 async function main() {
-  // Ensure bin directory exists
-  if (!fs.existsSync(BIN_DIR)) {
-    fs.mkdirSync(BIN_DIR, { recursive: true });
-  }
-
-  // Skip if binary already exists (e.g., during npm pack)
+  fs.mkdirSync(BIN_DIR, { recursive: true });
   if (fs.existsSync(BIN_PATH)) {
     console.log('nib binary already exists, skipping install');
     return;
@@ -108,13 +142,13 @@ async function main() {
 
   try {
     await tryDownloadFromGitHub();
-  } catch (err) {
-    console.log(`GitHub download failed: ${err.message}`);
+  } catch (error) {
+    console.log(`GitHub download failed: ${error.message}`);
     tryCargoInstall();
   }
 }
 
-main().catch((err) => {
-  console.error('Failed to install nib:', err.message);
+main().catch((error) => {
+  console.error('Failed to install nib:', error.message);
   process.exit(1);
 });

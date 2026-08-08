@@ -1,5 +1,5 @@
-const CACHE_NAME = "nib-shell-v4";
-const SHELL_ASSETS = ["/", "/manifest.webmanifest", "/icons/nib.svg", "/icons/nib-192.png", "/icons/nib-512.png"];
+const CACHE_NAME = "nib-shell-v5";
+const SHELL_ASSETS = ["/", "/manifest.webmanifest", "/icons/nib-192.png", "/icons/nib-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_ASSETS)));
@@ -75,7 +75,11 @@ self.addEventListener("notificationclick", (event) => {
             await fetch(`/api/requests/${encodeURIComponent(requestId)}/respond`, {
               method: "POST",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ choiceIndex, deviceId: "web-notification" })
+              body: JSON.stringify({
+                choiceIndex,
+                deviceId: data.deviceId || "web-notification",
+                notificationResponse: true
+              })
             });
             return;
           } catch {

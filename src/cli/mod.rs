@@ -14,30 +14,29 @@
 //! - validate: Check QML syntax
 //! - list: Recent captures
 //! - sessions: Active collaboration sessions
-//! - mcp-server: Claude Code integration
+//! - --mcp: Nib and Incurs Code Mode integration
 
 pub mod annotation_json;
 pub mod args;
+pub mod auth;
 pub mod commands;
 pub mod fields;
 mod incurs_commands;
 pub mod sessions;
-mod web_feedback;
+#[doc(hidden)]
+pub mod web_feedback;
 
 pub use args::*;
 pub use commands::*;
 pub use sessions::*;
 
-/// Builds the incurs-based CLI command tree.
-///
-/// Under active migration from clap (see `~/.claude/plans/what-would-it-look-typed-kettle.md`):
-/// commands are ported one at a time and registered here; nothing is
-/// registered yet. This runs behind the temporary `nib2` binary
-/// (`src/main_incurs.rs`) so the existing clap-based `nib` binary and its
-/// full test suite are unaffected while the migration is in progress.
+/// Builds the canonical Incurs command tree used by the CLI, MCP discovery,
+/// generated skills, and Code Mode.
 pub fn build_cli() -> incurs::cli::Cli {
     let cli = incurs::cli::Cli::create("nib")
         .description("Fast, native screenshot annotation tool with semantic visual communication")
-        .version(env!("CARGO_PKG_VERSION"));
+        .version(env!("CARGO_PKG_VERSION"))
+        .globals::<incurs_commands::GlobalOptions>()
+        .env_fields(<incurs_commands::NibEnv as incurs::schema::IncurSchema>::fields());
     incurs_commands::register(cli)
 }

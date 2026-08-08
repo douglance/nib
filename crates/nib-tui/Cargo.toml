@@ -1,12 +1,13 @@
 [package]
 name = "nib-tui"
-version = "0.3.0"
+version = "0.3.1"
+publish = false
 edition.workspace = true
 rust-version.workspace = true
 description = "Terminal review surface for Nib"
 authors.workspace = true
 repository.workspace = true
-license-file.workspace = true
+license.workspace = true
 
 [dependencies]
 nib-core.workspace = true
@@ -19,6 +20,7 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 image.workspace = true
+libc = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true

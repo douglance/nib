@@ -223,7 +223,10 @@ export async function sendPushPayload(payload: Record<string, unknown>): Promise
   let sent = 0;
   for (const record of records) {
     try {
-      await webpush.sendNotification(record.subscription as webpush.PushSubscription, JSON.stringify(payload));
+      await webpush.sendNotification(
+        record.subscription as webpush.PushSubscription,
+        JSON.stringify({ ...payload, deviceId: record.id })
+      );
       record.lastSuccessAt = new Date().toISOString();
       record.lastError = null;
       record.updatedAt = record.lastSuccessAt;
@@ -348,18 +351,18 @@ export function requestPayload(request: RequestRecord): Record<string, unknown> 
     ? `/view/${encodeURIComponent(request.target.projectId)}?${new URLSearchParams({ path: request.target.appPath ?? "/" }).toString()}`
     : "/");
   const url = PUBLIC_BASE_URL ? `${PUBLIC_BASE_URL}/r/${encodeURIComponent(request.id)}` : fallbackUrl;
-  const opensWebReviewer = request.kind === "visual-review";
   return {
     type: request.kind,
     requestId: request.id,
     title: request.title,
     body: request.body || request.prompt,
     request: request.prompt,
-    choices: opensWebReviewer ? [] : request.choices,
-    allowText: opensWebReviewer ? false : request.allowText,
+    choices: request.choices,
+    allowText: request.allowText,
     projectId: request.target.projectId,
     projectName: request.target.projectName,
     url,
+    responseUrl: absolutePublicUrl(`/api/requests/${encodeURIComponent(request.id)}/respond`),
     tag: `request:${request.id}`,
     requireInteraction: request.priority !== "low",
     renotify: true,
@@ -472,7 +475,7 @@ async function sendApnsToDevice(config: ApnsConfig, device: DeviceRecord, payloa
   }
   const body = JSON.stringify({
     aps,
-    nib: payload
+    nib: apnsDevicePayload(payload, device)
   });
   await new Promise<void>((resolve, reject) => {
     const client = http2.connect(`https://${config.host}`);
@@ -498,6 +501,7 @@ async function sendApnsToDevice(config: ApnsConfig, device: DeviceRecord, payloa
       authorization: `bearer ${token}`,
       "apns-topic": apnsTopicForDevice(config, device),
       "apns-push-type": "alert",
+      "apns-collapse-id": apnsCollapseId(payload),
       "content-type": "application/json",
       "content-length": String(Buffer.byteLength(body))
     });
@@ -515,6 +519,16 @@ async function sendApnsToDevice(config: ApnsConfig, device: DeviceRecord, payloa
   });
 }
 
+export function apnsDevicePayload(
+  payload: Record<string, unknown>,
+  device: Pick<DeviceRecord, "id" | "name" | "platform" | "pushKind">
+): Record<string, unknown> {
+  return {
+    ...payload,
+    deviceId: device.id
+  };
+}
+
 export function apnsJwt(config: Pick<ApnsConfig, "teamId" | "keyId" | "key">): string {
   const header = base64Url(JSON.stringify({ alg: "ES256", kid: config.keyId }));
   const claims = base64Url(JSON.stringify({ iss: config.teamId, iat: Math.floor(Date.now() / 1000) }));
@@ -529,6 +543,13 @@ export function apnsCategory(payload: Record<string, unknown>): string {
   }
   if (payload.allowText) return "NIB_TEXT";
   return "NIB_OPEN";
+}
+
+export function apnsCollapseId(payload: Record<string, unknown>): string {
+  const value = String(payload.tag ?? payload.requestId ?? "nib");
+  return Buffer.byteLength(value) <= 64
+    ? value
+    : crypto.createHash("sha256").update(value).digest("hex");
 }
 
 export function apnsTopicForDevice(config: { topic: string }, device: Pick<DeviceRecord, "apnsTopic">): string {

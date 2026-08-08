@@ -9,15 +9,20 @@ members = [
     "crates/nib-grid",
     "crates/nib-gui",
     "crates/nib-tui",
+    "crates/nib-ui",
 ]
+# The marketing site is a standalone package with its own lockfile, built via
+# --manifest-path. It requires Rust 1.95; keeping it out of the workspace stops
+# that floor from propagating to everything else.
+exclude = ["apps/site"]
 
 [workspace.package]
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.88"
 authors = ["Doug Lance"]
 repository = "https://github.com/douglance/nib"
-homepage = "https://github.com/douglance/nib"
-license-file = "LICENSE"
+homepage = "https://nib.doug-lance.workers.dev"
+license = "Apache-2.0"
 
 [workspace.dependencies]
 # Workspace crates
@@ -29,6 +34,7 @@ nib-collab = { path = "crates/nib-collab" }
 nib-grid = { path = "crates/nib-grid" }
 nib-gui = { path = "crates/nib-gui" }
 nib-tui = { path = "crates/nib-tui" }
+nib-ui = { path = "crates/nib-ui" }
 
 # Shared external dependencies
 thiserror = "2.0"
@@ -42,7 +48,7 @@ uuid = { version = "1.11", features = ["v4", "serde"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 imageproc = "0.25"
 ab_glyph = "0.2"
-tokio = { version = "1.42", features = ["rt-multi-thread", "fs", "sync", "macros"] }
+tokio = { version = "1.42", features = ["rt-multi-thread", "fs", "sync", "macros", "time"] }
 tracing = "0.1"
 ratatui = "0.29"
 crossterm = "0.28"
@@ -50,7 +56,10 @@ crossterm = "0.28"
 # Root crate dependencies
 gpui = "0.2"
 clap = { version = "4.5", features = ["derive", "env", "string"] }
-incurs = { git = "https://github.com/douglance/incurs.git", rev = "93d02770396167c275e142884a1964bca7bfcb72" }
+incurs = { git = "https://github.com/douglance/incurs.git", rev = "3f96829c7fa442572c4c3fc4040798459e5d4b9f", features = ["mcp"] }
+incurs-codemode = { git = "https://github.com/douglance/incurs.git", rev = "3f96829c7fa442572c4c3fc4040798459e5d4b9f" }
+incurs-codemode-local = { git = "https://github.com/douglance/incurs.git", rev = "3f96829c7fa442572c4c3fc4040798459e5d4b9f" }
+incurs-codemode-mcp = { git = "https://github.com/douglance/incurs.git", rev = "3f96829c7fa442572c4c3fc4040798459e5d4b9f" }
 async-trait = "0.1"
 async-stream = "0.3"
 screenshots = "0.8"
@@ -71,7 +80,6 @@ rstar = "0.12"
 lru = "0.12"
 bincode = "1.3"
 rayon = "1.10"
-rmcp = { version = "0.12", features = ["server", "transport-io", "macros"] }
 schemars = "1.0"
 libc = "0.2"
 xcap = "0.8"
@@ -85,14 +93,15 @@ insta = { version = "1.41", features = ["yaml"] }
 
 [package]
 name = "nib"
-version = "0.3.0"
+version = "0.3.1"
+publish = false
 edition.workspace = true
 rust-version.workspace = true
 description = "Fast, native screenshot annotation tool with semantic visual communication"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
-license-file.workspace = true
+license.workspace = true
 keywords = ["screenshot", "annotation", "image", "tool"]
 categories = ["graphics", "gui", "command-line-utilities"]
 readme = "README.md"
@@ -100,12 +109,6 @@ readme = "README.md"
 [[bin]]
 name = "nib"
 path = "src/main.rs"
-
-# Temporary parallel binary for the incurs migration (see
-# ~/.claude/plans/what-would-it-look-typed-kettle.md). Removed at cutover.
-[[bin]]
-name = "nib2"
-path = "src/main_incurs.rs"
 
 [lib]
 name = "nib"
@@ -121,6 +124,7 @@ nib-collab.workspace = true
 nib-grid.workspace = true
 nib-gui = { workspace = true, optional = true }
 nib-tui.workspace = true
+nib-ui.workspace = true
 
 # GUI Framework
 gpui.workspace = true
@@ -128,6 +132,9 @@ gpui.workspace = true
 # CLI parsing
 clap.workspace = true
 incurs.workspace = true
+incurs-codemode.workspace = true
+incurs-codemode-local.workspace = true
+incurs-codemode-mcp.workspace = true
 async-trait.workspace = true
 async-stream.workspace = true
 
@@ -196,9 +203,7 @@ lru.workspace = true
 bincode.workspace = true
 rayon.workspace = true
 
-# MCP (Model Context Protocol) server - feature-gated
-rmcp = { workspace = true, optional = true }
-schemars = { workspace = true, optional = true }
+schemars.workspace = true
 
 # Window capture
 xcap.workspace = true
@@ -218,7 +223,6 @@ insta.workspace = true
 default = ["gui", "ocr"]
 gui = ["dep:nib-gui"]
 ocr = ["dep:ocrs", "dep:rten"]
-mcp = ["dep:rmcp", "dep:schemars"]
 
 [profile.release]
 lto = "thin"

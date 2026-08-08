@@ -4,6 +4,8 @@ Fast, native screenshot annotation tool with semantic visual communication.
 
 Nib bridges human visual thinking with AI comprehension using QML (Quick Markup Language) - a semantic annotation protocol where every annotation type has defined meaning.
 
+The CLI, local applications, client library, public site, and service contracts are open source under Apache 2.0. The hosted image-generation runtime is a separate proprietary service; see [the open-core boundary](docs/open-core.md).
+
 ## Installation
 
 ### macOS (Homebrew)
@@ -18,7 +20,7 @@ Download the latest release for your platform from the [Releases](https://github
 
 ### Build from Source
 
-Requires Rust 1.75+
+Requires Rust 1.88+
 
 ```bash
 git clone https://github.com/douglance/nib.git
@@ -90,11 +92,11 @@ nib clear-annotations shot.png
 Nib is designed for image-based communication. After each annotation event, the agent must inspect the image (zoom first, then full if unclear).
 
 ```bash
-# Publish to the private Nib portal, then wait for the first response.
+# Publish to a configured Nib portal, then wait for the first response.
 # If the portal is unavailable, auto falls back to terminal review in tmux or the GUI.
 nib feedback shot.png -t 120
 
-# Require the shared web reviewer (no local fallback)
+# Require a configured web reviewer (no local fallback)
 nib feedback shot.png --ui web -m "Ship this image?" -t 0
 
 # Keep the agent pane noninteractive while review happens in a temporary tmux window
@@ -113,11 +115,10 @@ character-art fallback. It supports true SSH, but rejects vmux/mosh because
 mosh synchronizes terminal cell state rather than forwarding graphics control
 sequences.
 
-Web review uses `https://dave.tail5d92b4.ts.net` by default. Override it with
-`NIB_PORTAL_URL` for another private deployment or local development server.
-The CLI publishes the preview and canonical `.nib` together, prints the
-versioned response JSON, and merges returned annotations into the originating
-`.nib` file.
+Web review requires `NIB_PORTAL_URL` to point at a deployment you control. The
+CLI publishes the preview and canonical `.nib` together, prints the versioned
+response JSON, and merges returned annotations into the originating `.nib`
+file. The portal source is included under `apps/portal`.
 
 ## Annotation Types
 
@@ -160,9 +161,22 @@ human's next message as feedback. It does not depend on terminal graphics or a
 machine-local file link.
 
 ```bash
-cargo build --release --features mcp
-codex mcp add nib -- /absolute/path/to/nib mcp-server
+cargo build --release
+codex mcp add nib -- /absolute/path/to/nib --mcp
 ```
+
+## Hosted UI generation
+
+The public `nib-ui` crate and generated command catalog expose `generate_ui`
+through the hosted Nib service. The public interface is documented at
+<https://nib.doug-lance.workers.dev> and versioned under
+[`contracts/cloud/v1`](contracts/cloud/v1). Hosted generation, authentication,
+billing, abuse controls, storage, and operations are not part of this Apache
+repository.
+
+The public site source lives in `apps/site`. From the repository root, build it
+with `cargo run --manifest-path apps/site/Cargo.toml -- --export apps/site/dist`
+or deploy its Worker with `wrangler deploy --config apps/site/wrangler.jsonc`.
 
 ## File Format
 
@@ -181,4 +195,4 @@ Annotations can also be stored as sidecar `.annotations.json` files for PNG/JPEG
 
 ## License
 
-MIT
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).

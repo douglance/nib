@@ -6,8 +6,9 @@ confirm prompts), plus a generic trigger so any agent/script can push me too.
 
 ## What already exists in nib (DO NOT rebuild)
 
-nib is already a PWA with a **complete web-push pipeline**, served over HTTPS via Tailscale
-(`PUBLIC_BASE_URL = https://dave.tail5d92b4.ts.net`, `serve:tailscale` = `tailscale serve --bg http://127.0.0.1:4070`),
+nib already has a PWA with a **complete web-push pipeline**. The local reference
+deployment uses `PUBLIC_BASE_URL = http://127.0.0.1:4070`; the production request
+relay is the Cloudflare service in `apps/cloudflare`,
 so push to the phone works today. Reuse all of it:
 
 - `src/server/notifications.ts` — VAPID keygen/persist (`.nib/push.json`), `subscribeNotifications`,
@@ -109,7 +110,7 @@ npm run typecheck
 ```
 node --check public/sw.js                     # syntax ok
 # agent-browser (per AGENTS.md dev workflow):
-agent-browser open https://dave.tail5d92b4.ts.net
+agent-browser open http://127.0.0.1:4070
 agent-browser eval "navigator.serviceWorker.getRegistration().then(r=>r&&r.active&&r.active.state)"  # "activated"
 agent-browser eval "caches.keys()"            # includes "nib-shell-v4"
 ```
@@ -158,7 +159,7 @@ background scanning); tmux via `child_process` only; idle empty-`❯` panes neve
 ```
 curl -s localhost:4070/api/waiting              # JSON array (or [])
 npm run build                                   # typecheck + vite build succeeds
-agent-browser open https://dave.tail5d92b4.ts.net
+agent-browser open http://127.0.0.1:4070
 agent-browser snapshot                          # the "Waiting" panel renders
 ```
 

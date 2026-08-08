@@ -1,0 +1,30 @@
+{
+  "server": {
+    "name": "nib",
+    "version": "0.3.1",
+    "instructions": "Generate exactly one raw user-interface viewport image with the generate_ui tool."
+  },
+  "tools": [
+    {
+      "name": "generate_ui",
+      "title": "Generate a UI image",
+      "description": "Generate one user-interface image from a text brief and optional references. Use when an AI agent can describe a UI but cannot create the image itself. Returns one PNG or JPEG image.",
+      "inputs": {
+        "prompt": { "type": "string", "required": false, "maxLength": 4000 },
+        "ref": { "type": "array", "required": false, "maxItems": 3 },
+        "quality": { "type": "string", "enum": ["fast", "standard", "pro"], "default": "fast" },
+        "aspect": { "type": "string", "enum": ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"], "default": "16:9" },
+        "resolution": { "type": "string", "enum": ["1K", "2K", "4K"], "default": "1K" },
+        "format": { "type": "string", "enum": ["png", "jpg"], "default": "png" },
+        "background": { "type": "boolean", "default": false },
+        "resume": { "type": "string", "required": false }
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true
+      }
+    }
+  ]
+}
