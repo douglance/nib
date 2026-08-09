@@ -31,11 +31,7 @@ impl HttpGenerator {
             headers.insert("x-nib-dev-tenant", value);
         }
         if let Ok(token) = std::env::var("NIB_ACCESS_TOKEN") {
-            headers.insert(
-                "cf-access-token",
-                HeaderValue::from_str(&token)
-                    .map_err(|error| UiError::Service(error.to_string()))?,
-            );
+            headers.insert(reqwest::header::AUTHORIZATION, access_token_header(&token)?);
         }
         let service_client_id = std::env::var("NIB_ACCESS_CLIENT_ID").ok();
         let service_client_secret = std::env::var("NIB_ACCESS_CLIENT_SECRET").ok();
@@ -65,6 +61,11 @@ impl HttpGenerator {
             .map_err(|error| UiError::Service(error.to_string()))?;
         Ok(Self { client, endpoint })
     }
+}
+
+fn access_token_header(token: &str) -> Result<HeaderValue, UiError> {
+    HeaderValue::from_str(&format!("Bearer {}", token.trim()))
+        .map_err(|error| UiError::Service(error.to_string()))
 }
 
 fn development_tenant_header(
@@ -136,6 +137,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(header, "dogfood@nib.local");
+    }
+
+    #[test]
+    fn customer_access_token_uses_bearer_authentication() {
+        assert_eq!(
+            access_token_header(" nib_live_example ").unwrap(),
+            "Bearer nib_live_example"
+        );
     }
 
     #[test]

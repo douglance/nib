@@ -57,7 +57,7 @@ pub fn build_generate_command(generator: Arc<dyn Generator>) -> CommandDef {
                     .to_string(),
             ),
             instructions: Some(
-                "Authenticate the user through Cloudflare Access and pass the user-scoped token as NIB_ACCESS_TOKEN. Provide a precise UI brief and up to three PNG, JPEG, or WebP references as data URIs. Fast 1K is the default and is eligible for the one-image free trial. Return the image directly to the user."
+                "Create a Nib account and pass its revocable access token as NIB_ACCESS_TOKEN. Provide a precise UI brief and up to three PNG, JPEG, or WebP references as data URIs. Fast 1K is the default and is eligible for the one-image free trial. Return the image directly to the user."
                     .to_string(),
             ),
             annotations: Some(McpAnnotations {

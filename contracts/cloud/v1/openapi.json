@@ -43,9 +43,9 @@
   "components": {
     "securitySchemes": {
       "accessToken": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "cf-access-token"
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Nib access token"
       }
     },
     "schemas": {

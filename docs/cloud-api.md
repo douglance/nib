@@ -25,7 +25,7 @@ CLI references are file paths. MCP references are base64 data URIs. Supported MI
 - Transport: Streamable HTTP at `/mcp`, or stdio with `nib --mcp`.
 - Tool name: `generate_ui`.
 - Discovery: `initialize`, `notifications/initialized`, `ping`, and `tools/list` are public so an agent can install and inspect the tool before sign-in.
-- Execution: `tools/call` requires a trusted tenant. The current implementation accepts a verified Cloudflare Access identity; scalable customer authentication remains a launch blocker.
+- Execution: `tools/call` requires a trusted tenant. Customers use a revocable Nib access token; Cloudflare Access remains available for private operators.
 - Result: text metadata, `structuredContent`, and an `image` content block on success.
 - Semantics: one eligible Fast 1K trial image before payment; otherwise paid, non-read-only, non-destructive, non-idempotent, and open-world because it invokes an external model.
 
@@ -33,14 +33,13 @@ The rich image mapping is declared with JSON Pointers `/image/data` and `/image/
 
 ## End-user authentication
 
-Authenticate once under the end user's identity, then export the application token for the Nib CLI and local stdio MCP server:
+Create an account at `/signup`, copy the access token shown once, and export it for the Nib CLI and local stdio MCP server:
 
 ```sh
-cloudflared access login https://nib.doug-lance.workers.dev/internal/v1/generate
-export NIB_ACCESS_TOKEN="$(cloudflared access token -app=https://nib.doug-lance.workers.dev/internal/v1/generate)"
+export NIB_ACCESS_TOKEN="nib_live_..."
 ```
 
-The standalone CLI sends the token as `cf-access-token` to the Access-protected generation route. The public Streamable HTTP MCP route accepts unauthenticated discovery, then verifies the same token directly from `cf-access-jwt-assertion` on `tools/call`. Service tokens are only for private headless operators; they are not issued to trial users. See [Cloudflare's CLI Access flow](https://developers.cloudflare.com/cloudflare-one/tutorials/cli/) and [coding-agent authentication guidance](https://developers.cloudflare.com/cloudflare-one/access-controls/authenticate-agents/).
+The standalone CLI sends the token as an `Authorization: Bearer` credential. The public Streamable HTTP MCP route accepts unauthenticated discovery, then verifies the same bearer token on `tools/call`. Nib stores only a SHA-256 token hash. Rotating the credential from the account page revokes the prior token. Cloudflare Access service tokens remain available only for private headless operators.
 
 ## Request
 
@@ -94,7 +93,7 @@ The Durable Object scheduler chooses four High jobs, then one Default job, with 
 | Status/code | Meaning |
 | --- | --- |
 | `400` | Invalid prompt, reference count, aspect, preset, or resolution |
-| `401` | No trusted Cloudflare Access tenant |
+| `401` | No valid Nib token or trusted Cloudflare Access tenant |
 | `402 FREE_TRIAL_FAST_1K_ONLY` | An unsubscribed identity requested Standard, Pro, or output above 1K |
 | `402 FREE_TRIAL_BLOCKING_ONLY` | An unsubscribed identity requested background generation |
 | `402 FREE_TRIAL_USED` | The verified identity consumed its one free image |
@@ -118,4 +117,4 @@ The Durable Object scheduler chooses four High jobs, then one Default job, with 
 | MCP | `/mcp` |
 | Health | `/health` |
 
-OpenAPI, both skill resources, the agent installer, and the non-executing MCP discovery methods are public so agents can install and inspect the tool before authentication. MCP `tools/call`, generation, artifacts, account, and billing operations remain behind Cloudflare Access.
+OpenAPI, both skill resources, the agent installer, and the non-executing MCP discovery methods are public so agents can install and inspect the tool before authentication. MCP `tools/call`, generation, artifacts, account, and billing operations require a Nib token or trusted Cloudflare Access identity.

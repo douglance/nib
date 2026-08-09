@@ -22,4 +22,4 @@ Use Nib only when the task requires a generated image of a dashboard, app screen
 3. Call `generate_ui`. Default to Fast, 16:9, 1K, and PNG unless the user asks for another supported value.
 4. Return the generated image directly to the user.
 
-Do not use Nib for interface review, scoring, annotation, comparison, or screenshot capture. The first eligible Fast 1K image is free after sign-in. Never start a subscription without explicit user authorization.
+Do not use Nib for interface review, scoring, annotation, comparison, or screenshot capture. The first eligible Fast 1K image is free after creating an account. Never start a subscription without explicit user authorization.

@@ -17,6 +17,10 @@ const CSS: &str = r#"
 :root{color-scheme:dark;--bg:#090b0f;--panel:#11151b;--line:#242b35;--muted:#9aa6b5;--text:#f6f8fb;--accent:#d8ff63;--accent-ink:#182000;--blue:#81a7ff}*{box-sizing:border-box}html{scroll-behavior:smooth}body{min-height:100vh;margin:0;display:flex;flex-direction:column;background:radial-gradient(circle at 72% 12%,#19263e 0,transparent 30%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6}main{flex:1}a{color:inherit;text-decoration:none}.shell{width:min(1120px,calc(100% - 40px));margin:auto}.nav{height:76px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #ffffff12}.brand{font-weight:760;letter-spacing:-.035em;font-size:1.18rem}.brand-dot{color:var(--accent)}.nav-links{display:flex;align-items:center;gap:24px;color:var(--muted);font-size:.92rem}.button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 19px;border:1px solid var(--line);border-radius:12px;font:680 .92rem/1.2 Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:-.01em;background:#141922;color:var(--text);cursor:pointer}.button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.hero{display:grid;grid-template-columns:1.02fr .98fr;gap:72px;align-items:center;padding:96px 0 112px}.eyebrow{font:600 .75rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.13em;color:var(--accent)}h1{font-size:clamp(3.4rem,6.25vw,6rem);line-height:.98;letter-spacing:-.05em;margin:26px 0 32px;max-width:720px}.lede{font-size:1.18rem;line-height:1.7;color:var(--muted);max-width:610px}.actions{display:flex;gap:12px;margin-top:38px;flex-wrap:wrap}.micro{margin-top:19px;color:#778394;font-size:.82rem;line-height:1.6}.viewport{position:relative;border:1px solid #364150;border-radius:22px;background:#0d1117;box-shadow:0 35px 100px #0009;overflow:hidden;aspect-ratio:4/3}.viewport img{display:block;width:100%;height:100%;object-fit:cover}.section{padding:100px 0;border-top:1px solid #ffffff12}.section h2{font-size:clamp(2.2rem,4vw,4rem);line-height:1.08;letter-spacing:-.045em;margin:17px 0 26px}.section-copy{color:var(--muted);line-height:1.7;max-width:610px}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:48px}.step,.price{border:1px solid var(--line);border-radius:18px;background:#10141a;padding:26px}.step b{font:600 .75rem/1.4 ui-monospace,monospace;color:var(--blue)}.step h3{margin:34px 0 10px;font-size:1.12rem;line-height:1.3}.step p,.price p{color:var(--muted);font-size:.9rem;line-height:1.65}.install-panel{max-width:900px;margin-top:42px;border:1px solid #465264;border-radius:20px;background:linear-gradient(145deg,#141a22,#0d1117);box-shadow:0 24px 70px #0006;overflow:hidden}.install-panel-head{display:flex;justify-content:space-between;gap:24px;padding:20px 22px;border-bottom:1px solid var(--line);color:var(--muted);font-size:.82rem}.install-panel-head strong{color:var(--text);font-weight:680}.install-prompt{margin:0;padding:26px 28px;white-space:pre-wrap;overflow-wrap:anywhere;color:#eef3fa;font:500 1rem/1.75 ui-monospace,SFMono-Regular,Menlo,monospace}.install-actions{display:flex;align-items:center;gap:12px;padding:0 22px 22px;flex-wrap:wrap}.install-status{min-height:1.4em;margin:0;color:var(--accent);font-size:.82rem}.install-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;max-width:900px;margin-top:28px;color:var(--muted);font-size:.86rem}.install-facts strong{display:block;margin-bottom:6px;color:var(--text);font-size:.95rem}.pricing{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;margin-top:46px;max-width:820px}.price.high{border-color:#a9cf42;box-shadow:inset 0 0 0 1px #a9cf4255}.price-label{font-size:.78rem;color:var(--muted)}.price-amount{font-size:3.2rem;line-height:1.05;letter-spacing:-.04em;margin:16px 0}.price-amount small{font-size:.85rem;letter-spacing:0;color:var(--muted)}.price ul{padding:0;list-style:none;color:#c8d0da;font-size:.9rem;min-height:128px}.price li{margin:10px 0}.price li:before{content:"+";color:var(--accent);margin-right:9px}.price form{margin-top:22px}.price button{width:100%}.footer{display:flex;justify-content:space-between;padding:36px 0 60px;color:#778394;font-size:.82rem}.legal,.docs{max-width:820px;padding:80px 0 120px}.legal h1,.docs h1{font-size:clamp(3rem,7vw,5.5rem)}.legal h2,.docs h2{margin-top:48px}.docs .install-panel{margin:42px 0 64px}.docs pre:not(.install-prompt){overflow:auto;padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:#0d1117;color:#dce6f5;font:500 .88rem/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}.docs code{color:var(--accent)}@media(max-width:820px){.nav-links a:not(.button){display:none}.hero{grid-template-columns:1fr;gap:58px;padding:68px 0 104px}.steps,.pricing,.install-facts{grid-template-columns:1fr}.viewport{max-width:620px}h1{font-size:clamp(3.2rem,14vw,3.75rem);line-height:1;letter-spacing:-.045em}.section{padding:88px 0}.install-panel-head{display:block}.install-panel-head span{display:block;margin-top:5px}.install-prompt{padding:22px;font-size:.9rem}.footer{gap:20px;flex-direction:column}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 "#;
 
+const SIGNUP_CSS: &str = r#"
+.signup{max-width:900px;padding:80px 0 120px}.signup h1{font-size:clamp(3rem,7vw,5.5rem)}.credential-panel{margin-top:42px;padding:30px;border:1px solid var(--line);border-radius:20px;background:linear-gradient(145deg,#141a22,#0d1117)}.credential-panel[hidden]{display:none}.credential-panel h2{margin:0 0 12px;font-size:1.4rem}.token-value{display:block;margin:22px 0;padding:18px 20px;overflow-wrap:anywhere;border:1px solid #a9cf4266;border-radius:14px;background:#090b0f;color:var(--accent);font:600 .9rem/1.65 ui-monospace,SFMono-Regular,Menlo,monospace}.credential-actions{display:flex;gap:12px;flex-wrap:wrap}.credential-plans{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:30px}.credential-plans form,.credential-plans button{width:100%}.credential-note{color:var(--muted);font-size:.88rem}.credential-status{min-height:1.4em;color:var(--accent);font-size:.85rem}.signup .button{margin-top:8px}@media(max-width:680px){.credential-panel{padding:22px}.credential-plans{grid-template-columns:1fr}.token-value{font-size:.78rem}}
+"#;
+
 const INSTALL_PROMPT: &str = r#"Install Nib for me. Follow https://nib.doug-lance.workers.dev/install-agent.md exactly. Configure it globally for this agent, install the Nib UI image skill globally, add the managed Nib instruction to this agent's global instruction file, preserve my existing settings, and verify that the generate_ui tool is available without generating an image."#;
 
 const SEO_JSON_LD: &str = r#"{
@@ -48,7 +52,7 @@ const SEO_JSON_LD: &str = r#"{
           "name": "Free trial",
           "price": "0",
           "priceCurrency": "USD",
-          "description": "One eligible Fast 1K UI image after sign-in"
+          "description": "One eligible Fast 1K UI image after creating a free account"
         },
         {
           "@type": "Offer",
@@ -78,6 +82,7 @@ pub fn router() -> Router {
         .page(privacy)
         .page(terms)
         .page(account)
+        .page(signup)
         .build()
 }
 
@@ -140,6 +145,13 @@ pub async fn export_site(output: &Path) -> std::result::Result<(), Box<dyn std::
                 .await
                 .map_err(render_error)?,
         ),
+        (
+            "signup/index.html",
+            signup
+                .render(&cx, SignupProps {})
+                .await
+                .map_err(render_error)?,
+        ),
     ];
     for (relative, page) in pages {
         let destination = output.join(relative);
@@ -158,6 +170,11 @@ pub async fn export_site(output: &Path) -> std::result::Result<(), Box<dyn std::
     )
     .await?;
     tokio::fs::copy(source.join("install.js"), assets.join("install.js")).await?;
+    tokio::fs::copy(
+        source.join("credential.js"),
+        assets.join("credential.js"),
+    )
+    .await?;
     Ok(())
 }
 
@@ -183,7 +200,7 @@ async fn home() -> Result {
                             <a class="button primary" href="#agents">"Install Nib free"</a>
                             <a class="button" href="#how">"See how it works"</a>
                         </div>
-                        <p class="micro">"Paste one prompt into your agent. No card. One eligible Fast 1K UI image is free after sign-in."</p>
+                        <p class="micro">"Paste one prompt into your agent. No card. One eligible Fast 1K UI image is free after creating an account."</p>
                     </div>
                     ui_viewport()
                 </section>
@@ -214,7 +231,7 @@ async fn privacy() -> Result {
 
 #[page("/terms")]
 async fn terms() -> Result {
-    view! { legal_document(title: "Terms", canonical: "https://nib.doug-lance.workers.dev/terms", copy: "Nib provides one Fast 1K trial image to an eligible verified identity without a card. Continued use requires a subscription, and subscription fees do not include generation usage. Each paid generation is metered at the published rate for its quality and resolution. You must have rights to every reference image you submit.") }
+    view! { legal_document(title: "Terms", canonical: "https://nib.doug-lance.workers.dev/terms", copy: "Nib provides one Fast 1K trial image to an eligible account without a card. Continued use requires a subscription, and subscription fees do not include generation usage. Each paid generation is metered at the published rate for its quality and resolution. You must have rights to every reference image you submit.") }
 }
 
 #[page("/account")]
@@ -233,7 +250,59 @@ async fn account() -> Result {
                         <button class="button primary" type="submit">"Open billing portal"</button>
                     </form>
                     <a class="button" href="/docs">"Read the quick start"</a>
+                    <form method="post" action="/auth/credentials/rotate">
+                        <button class="button" type="submit">"Rotate access token"</button>
+                    </form>
+                    <form method="post" action="/auth/logout">
+                        <button class="button" type="submit">"Sign out"</button>
+                    </form>
                 </div>
+            </main>
+        )
+    }
+}
+
+#[page("/signup")]
+async fn signup() -> Result {
+    view! {
+        page_document(
+            title: "Create a Nib account",
+            description: "Create a free Nib account, save your revocable access token, and generate your first eligible Fast 1K UI image without a card.",
+            canonical: "https://nib.doug-lance.workers.dev/signup",
+            <main class="shell signup">
+                <section data-signup-panel="">
+                    <div class="eyebrow">"One free Fast 1K image"</div>
+                    <h1>"Create your Nib access token."</h1>
+                    <p class="lede">"Start without an email or card. Nib creates a private browser session and a revocable token for your CLI or agent."</p>
+                    <form method="post" action="/auth/signup">
+                        <button class="button primary" type="submit">"Create free account"</button>
+                    </form>
+                    <p class="micro">"Your token is shown once. Save it in your password manager before leaving this page."</p>
+                </section>
+                <section class="credential-panel" data-token-panel="" hidden="">
+                    <div class="eyebrow">"Account ready"</div>
+                    <h2>"Save your access token now."</h2>
+                    <p class="credential-note">"Nib stores only its hash and cannot show this token again. Rotating it revokes the old value."</p>
+                    <code class="token-value" data-token-value="" tabindex="0"></code>
+                    <div class="credential-actions">
+                        <button class="button primary" type="button" data-copy-token="">"Copy token"</button>
+                        <a class="button" href="/docs">"Connect an agent"</a>
+                        <a class="button" href="/account">"Open account"</a>
+                    </div>
+                    <p class="credential-status" data-token-status="" aria-live="polite"></p>
+                    <h2>"Need more than the free image?"</h2>
+                    <div class="credential-plans">
+                        <form method="post" action="/billing/checkout">
+                            <input type="hidden" name="plan" value="default">
+                            <button class="button" type="submit">"Subscribe to Default - $9.99/mo"</button>
+                        </form>
+                        <form method="post" action="/billing/checkout">
+                            <input type="hidden" name="plan" value="high">
+                            <button class="button primary" type="submit">"Subscribe to High - $29.99/mo"</button>
+                        </form>
+                    </div>
+                    <p class="micro">"Subscriptions exclude metered generation usage. Stripe shows the exact recurring charge before payment."</p>
+                </section>
             </main>
         )
     }
@@ -252,12 +321,12 @@ async fn docs() -> Result {
                 <p class="lede">"Choose the interface your agent can call. Every option accepts the same UI brief and returns one generated image. Install or discover the tool for free, then authenticate when the agent generates."</p>
                 install_prompt()
                 <h2 id="authentication">"Authenticate on the first image"</h2>
-                <p>"Cloudflare Access opens a browser for user verification and returns a user-scoped session token. The CLI never needs a shared customer credential."</p>
-                <pre>"cloudflared access login https://nib.doug-lance.workers.dev/internal/v1/generate\nexport NIB_ACCESS_TOKEN=\"$(cloudflared access token -app=https://nib.doug-lance.workers.dev/internal/v1/generate)\""</pre>
+                <p>"Create a free account, save the access token shown once, and export it for the CLI or local MCP server. Nib stores only a SHA-256 hash, and rotating the credential from your account revokes the prior token."</p>
+                <pre>"export NIB_ACCESS_TOKEN=\"nib_live_...\""</pre>
                 <h2>"CLI"</h2>
                 <pre>"nib generate \"A compact dark analytics dashboard for a fleet operator\" \\\n  --quality fast --resolution 1K --aspect 16:9 \\\n  --image-format png --output dashboard.png"</pre>
                 <h2 id="mcp">"MCP"</h2>
-                <p>"For local stdio MCP, run " <code>"nib --mcp"</code> " with " <code>"NIB_ACCESS_TOKEN"</code> " set. A Streamable HTTP client connects to " <code>"https://nib.doug-lance.workers.dev/mcp"</code> " without authentication for installation and tool discovery. Before the first image, add the user-scoped token as " <code>"cf-access-jwt-assertion"</code> ". The server exposes exactly one tool: " <code>"generate_ui"</code> "."</p>
+                <p>"For local stdio MCP, run " <code>"nib --mcp"</code> " with " <code>"NIB_ACCESS_TOKEN"</code> " set. A Streamable HTTP client connects to " <code>"https://nib.doug-lance.workers.dev/mcp"</code> " without authentication for installation and tool discovery. Before the first image, add the Nib token as an " <code>"Authorization: Bearer"</code> " credential. The server exposes exactly one tool: " <code>"generate_ui"</code> "."</p>
                 <pre>"{\n  \"prompt\": \"A calm account settings screen\",\n  \"references\": [],\n  \"quality\": \"fast\",\n  \"aspect\": \"16:9\",\n  \"resolution\": \"1K\",\n  \"format\": \"png\",\n  \"background\": false\n}"</pre>
                 <h2>"Agent discovery"</h2>
                 <p>"The OpenAPI document and installable skill are public. Authentication is required only when the agent calls the generation tool."</p>
@@ -292,7 +361,9 @@ async fn page_document(title: &str, description: &str, canonical: &str, child: V
                 <title>(title)</title>
                 <script type="application/ld+json">(SEO_JSON_LD)</script>
                 <script src="/assets/install.js" defer="defer"></script>
+                <script src="/assets/credential.js" defer="defer"></script>
                 <style>(CSS)</style>
+                <style>(SIGNUP_CSS)</style>
             </head>
             <body>
                 site_nav()
@@ -311,7 +382,8 @@ async fn site_nav() -> Result {
             <nav class="nav-links" aria-label="Primary navigation">
                 <a href="/#agents">"For agents"</a>
                 <a href="/#pricing">"Pricing"</a>
-                <a class="button" href="/#agents">"Install Nib"</a>
+                <a href="/account">"Account"</a>
+                <a class="button" href="/signup">"Start free"</a>
             </nav>
         </header>
     }
@@ -381,7 +453,7 @@ async fn pricing() -> Result {
     view! {
         <section class="section" id="pricing"><div class="shell">
             <div class="eyebrow">"Try one UI image free"</div><h2>"Start when you need the image."</h2>
-            <p class="section-copy">"Generate one eligible Fast 1K UI image after sign-in without a card. Subscribe only when you need continued generation, higher quality, or more concurrent jobs."</p>
+            <p class="section-copy">"Generate one eligible Fast 1K UI image after creating an account without a card. Subscribe only when you need continued generation, higher quality, or more concurrent jobs."</p>
             <div class="pricing">
                 price_card(name: "Default", amount: "$9.99", plan: "default", high: false, features: &["2 active generations", "20 queued jobs", "60 requests per minute", "7-day artifact retention"])
                 price_card(name: "High", amount: "$29.99", plan: "high", high: true, features: &["8 active generations", "100 queued jobs", "300 requests per minute", "30-day artifact retention", "4x scheduling weight"])
@@ -404,17 +476,14 @@ async fn price_card(
             <div class="price-label">(name)</div><div class="price-amount">(amount) <small>"/ month"</small></div>
             <p>"Plus uncapped metered generation usage."</p>
             <ul>for feature in features { <li>(feature)</li> }</ul>
-            <form method="post" action="/billing/checkout">
-                <input type="hidden" name="plan" value=(plan)>
-                <button class=(if high { "button primary" } else { "button" }) type="submit">"Choose " (name)</button>
-            </form>
+            <a class=(if high { "button primary" } else { "button" }) href=(format!("/signup?plan={plan}"))>"Choose " (name)</a>
         </article>
     }
 }
 
 #[component]
 async fn site_footer() -> Result {
-    view! { <footer class="shell footer"><span>"Nib - UI image generation from one prompt."</span><span><a href="/privacy">"Privacy"</a> "  /  " <a href="/terms">"Terms"</a></span></footer> }
+    view! { <footer class="shell footer"><span>"Nib - UI image generation from one prompt."</span><span><a href="https://github.com/douglance/nib">"Apache-2.0 source"</a> "  /  " <a href="/privacy">"Privacy"</a> "  /  " <a href="/terms">"Terms"</a></span></footer> }
 }
 
 #[component]
@@ -441,7 +510,7 @@ mod tests {
 
     #[tokio::test]
     async fn router_renders_every_site_page() {
-        for path in ["/", "/docs", "/pricing", "/privacy", "/terms", "/account"] {
+        for path in ["/", "/docs", "/pricing", "/privacy", "/terms", "/account", "/signup"] {
             let response = router()
                 .handle(Request::builder().uri(path).body(Body::empty()).unwrap())
                 .await;
