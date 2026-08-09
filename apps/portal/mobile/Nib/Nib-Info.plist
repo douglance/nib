@@ -42,6 +42,10 @@
 	<string>Nib attaches selected images to requests.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>UIStatusBarStyle</key>
+	<string>UIStatusBarStyleLightContent</string>
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<false/>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

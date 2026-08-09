@@ -31,6 +31,7 @@
 
 pub mod capture;
 pub mod cli;
+pub mod codemode_store;
 pub mod collab;
 pub mod config;
 pub mod core;
@@ -39,8 +40,7 @@ pub mod external;
 pub mod grid;
 #[cfg(feature = "gui")]
 pub mod gui;
-#[cfg(feature = "mcp")]
-pub mod mcp;
+pub mod media;
 #[cfg(feature = "ocr")]
 pub mod ocr;
 pub mod storage;

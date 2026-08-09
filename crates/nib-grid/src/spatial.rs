@@ -40,7 +40,7 @@ pub fn build_grid_index(
     while x <= bounds.max_x {
         // Skip if before region
         if x >= bounds.min_x {
-            let is_major = line_idx % config.major_interval == 0;
+            let is_major = line_idx.is_multiple_of(config.major_interval);
             let line = GridLine::vertical(x, bounds.min_y, bounds.max_y, is_major);
 
             // Thin bounding box for R-tree (1px wide around the line)
@@ -65,7 +65,7 @@ pub fn build_grid_index(
     while y <= bounds.max_y {
         // Skip if before region
         if y >= bounds.min_y {
-            let is_major = line_idx % config.major_interval == 0;
+            let is_major = line_idx.is_multiple_of(config.major_interval);
             let line = GridLine::horizontal(y, bounds.min_x, bounds.max_x, is_major);
 
             // Thin bounding box for R-tree (1px tall around the line)

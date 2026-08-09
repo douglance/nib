@@ -1,0 +1,31 @@
+{
+  "$schema": "../cloudflare/node_modules/wrangler/config-schema.json",
+  "name": "nib-codemode-global",
+  "main": "build/worker/shim.mjs",
+  "compatibility_date": "2026-07-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "NIB_PORTAL_URL": "https://nib-global.doug-lance.workers.dev"
+  },
+  "services": [
+    { "binding": "NIB_PORTAL", "service": "nib-global" }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "CODEMODE", "class_name": "NibCodeMode" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["NibCodeMode"] }
+  ],
+  "worker_loaders": [
+    { "binding": "LOADER" }
+  ],
+  "build": {
+    "command": "worker-build --release"
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "Simulator Target Bundle": "com.douglance.nib",
+  "aps": {
+    "alert": {
+      "title": "Review the deployment",
+      "body": "The production build passed validation. Should I deploy it now?"
+    },
+    "category": "NIB_APPROVE_REJECT",
+    "sound": "default",
+    "thread-id": "request:visual-notification-test"
+  },
+  "nib": {
+    "type": "visual-review",
+    "requestId": "visual-notification-test",
+    "title": "Review the deployment",
+    "body": "The production build passed validation. Should I deploy it now?",
+    "request": "The production build passed validation. Should I deploy it now?",
+    "choices": [
+      "Approve",
+      "Reject"
+    ],
+    "allowText": true,
+    "url": "https://nib-global.doug-lance.workers.dev/r/visual-notification-test",
+    "responseUrl": "https://nib-global.doug-lance.workers.dev/api/requests/visual-notification-test/respond"
+  }
+}

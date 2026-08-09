@@ -1,14 +1,14 @@
 import Foundation
 
-struct NibRequest: Identifiable, Codable, Hashable {
-    struct Target: Codable, Hashable {
+struct NibRequest: Identifiable, Codable, Hashable, Sendable {
+    struct Target: Codable, Hashable, Sendable {
         var projectId: String?
         var projectName: String?
         var appPath: String?
         var url: String?
     }
 
-    struct Attachment: Identifiable, Codable, Hashable {
+    struct Attachment: Identifiable, Codable, Hashable, Sendable {
         var id: String
         var requestId: String
         var name: String
@@ -19,12 +19,21 @@ struct NibRequest: Identifiable, Codable, Hashable {
         var createdAt: String
     }
 
-    struct Response: Identifiable, Codable, Hashable {
+    struct Response: Identifiable, Codable, Hashable, Sendable {
+        struct Device: Codable, Hashable, Sendable {
+            var id: String
+            var name: String
+            var platform: String
+            var pushKind: String
+        }
+
         var id: String
         var kind: String
         var text: String
         var choice: String?
         var choiceIndex: Int?
+        var deviceId: String?
+        var device: Device?
         var createdAt: String
     }
 
@@ -39,6 +48,7 @@ struct NibRequest: Identifiable, Codable, Hashable {
     var target: Target
     var status: String
     var priority: String
+    var source: String?
     var createdAt: String
     var updatedAt: String
     var attachments: [Attachment]
@@ -58,6 +68,34 @@ struct NibRequest: Identifiable, Codable, Hashable {
     var latestResponse: Response? {
         responses.first
     }
+
+    var visualReviewImage: Attachment? {
+        guard kind == "visual-review" else { return nil }
+        return attachments.first { $0.contentType.lowercased().hasPrefix("image/") }
+    }
+
+    var visualReviewVideo: Attachment? {
+        guard kind == "visual-review" else { return nil }
+        return attachments.first { $0.contentType.lowercased() == "video/mp4" || $0.type == "video" }
+    }
+
+    func visualReviewDecision(choiceIndex: Int) -> String? {
+        guard kind == "visual-review" else { return nil }
+        switch choiceIndex {
+        case 0:
+            return "approve"
+        case 1:
+            return "reject"
+        default:
+            return nil
+        }
+    }
+}
+
+struct NibRequestSocketEvent: Decodable, Sendable {
+    var type: String
+    var action: String?
+    var request: NibRequest?
 }
 
 struct NibReviewAnnotation: Identifiable, Codable, Hashable {
@@ -78,9 +116,10 @@ struct NibReviewAnnotation: Identifiable, Codable, Hashable {
     var fontSize: Double? = nil
     var align: String? = nil
     var head: String? = nil
+    var timeMs: Double? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, type, color, x, y, width, height, points, content, align, head
+        case id, type, color, x, y, width, height, points, content, align, head, timeMs
         case startX = "start_x"
         case startY = "start_y"
         case endX = "end_x"

@@ -1,5 +1,103 @@
+import AVFoundation
+import AVKit
+import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
+
+private extension View {
+    @ViewBuilder
+    func nibGlassSurface(
+        tint: Color = Color.white.opacity(0.035),
+        cornerRadius: CGFloat,
+        interactive: Bool = false,
+        reduceTransparency: Bool
+    ) -> some View {
+        #if os(visionOS)
+        self
+            .background(
+                reduceTransparency ? tint.opacity(0.92) : tint.opacity(0.68),
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.18))
+            )
+        #else
+        if #available(iOS 26.0, *), !reduceTransparency {
+            if interactive {
+                self
+                    .background(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.32), tint.opacity(0.58), tint.opacity(0.26)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    )
+                    .glassEffect(.regular.tint(tint.opacity(0.72)).interactive(), in: .rect(cornerRadius: cornerRadius))
+                    .shadow(color: tint.opacity(0.28), radius: 10, y: 4)
+                    .shadow(color: .black.opacity(0.30), radius: 12, y: 7)
+            } else {
+                self
+                    .background(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.24), tint.opacity(0.34), Color.black.opacity(0.16)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    )
+                    .glassEffect(.regular.tint(tint.opacity(0.58)), in: .rect(cornerRadius: cornerRadius))
+                    .nibSpecularEdge(cornerRadius: cornerRadius, tint: tint)
+            }
+        } else {
+            self
+                .background(
+                    reduceTransparency ? tint.opacity(0.92) : tint.opacity(0.68),
+                    in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                )
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(Color.white.opacity(0.18))
+                )
+        }
+        #endif
+    }
+
+    func reviewChromeMotion(scaleX: Double, opacity: Double, blur: Double) -> some View {
+        self
+            .scaleEffect(x: scaleX, y: 1, anchor: .center)
+            .opacity(opacity)
+            .blur(radius: blur)
+    }
+
+    func nibSpecularEdge(cornerRadius: CGFloat, tint: Color) -> some View {
+        self
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.88), tint.opacity(0.52), Color.white.opacity(0.18)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+            )
+            .overlay(alignment: .top) {
+                Capsule()
+                    .fill(Color.white.opacity(0.22))
+                    .frame(height: 2)
+                    .padding(.horizontal, cornerRadius)
+                    .padding(.top, 1)
+            }
+            .shadow(color: tint.opacity(0.34), radius: 11, y: 3)
+            .shadow(color: .black.opacity(0.34), radius: 12, y: 7)
+    }
+}
 
 enum NativeReviewTool: String, Identifiable {
     case select
@@ -34,13 +132,46 @@ enum NativeReviewTool: String, Identifiable {
     }
 }
 
+// Mirrors design/motion.json for the native renderer.
+private enum NibReviewMotion {
+    enum Mode: String { case full, reduced, off }
+
+    static let enterStartScale = 1.06
+    static let enterSettleScale = 0.987
+    static let enterStartOpacity = 0.05
+    static let blurRadius = 8.0
+    static let materializeSeconds = 0.14
+    static let settleSeconds = 0.14
+    static let exitSeconds = 0.12
+    static let reducedSeconds = 0.10
+
+    static func mode(reduceMotion: Bool) -> Mode {
+        if let override = UserDefaults.standard.string(forKey: "nib.motion"),
+           let mode = Mode(rawValue: override) {
+            return mode
+        }
+        return reduceMotion ? .reduced : .full
+    }
+}
+
 struct NativeVisualReviewWorkspace: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     var request: NibRequest
     var imageURL: URL?
+    var videoURL: URL? = nil
     var sending: Bool
+    var uploadReply: (Data, String) async throws -> Void
     var submit: (String, String?, [NibReviewAnnotation]) async -> Void
 
     @State private var image: UIImage?
+    @State private var videoFrame: UIImage?
+    @State private var player: AVPlayer?
+    @State private var currentTimeMs = 0.0
+    @State private var durationMs = 0.0
+    @State private var isPlaying = false
+    @State private var replyVideo: PhotosPickerItem?
+    @State private var replyStatus: String?
     @State private var loadError: String?
     @State private var tool: NativeReviewTool = .select
     @State private var color = "#0A84FF"
@@ -53,6 +184,9 @@ struct NativeVisualReviewWorkspace: View {
     @State private var showingTextPrompt = false
     @State private var textAnnotation = ""
     @State private var textPoint: CGPoint?
+    @State private var chromeScaleX = NibReviewMotion.enterStartScale
+    @State private var chromeOpacity = NibReviewMotion.enterStartOpacity
+    @State private var chromeBlur = NibReviewMotion.blurRadius
 
     var body: some View {
         VStack(spacing: 0) {
@@ -65,47 +199,78 @@ struct NativeVisualReviewWorkspace: View {
                 .padding(.horizontal, 18)
                 .padding(.top, 18)
 
-            NativeReviewCanvas(
-                image: image,
-                loadError: loadError,
-                tool: tool,
-                color: color,
-                zoom: zoom,
-                panOffset: $panOffset,
-                annotations: $annotations,
-                redoAnnotations: $redoAnnotations,
-                requestText: { point in
-                    textPoint = point
-                    textAnnotation = ""
-                    showingTextPrompt = true
-                },
-                expand: { showingExpandedImage = true }
-            )
+            Group {
+                if let player, videoURL != nil, isPlaying {
+                    VideoPlayer(player: player)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .accessibilityLabel(request.title)
+                } else {
+                    NativeReviewCanvas(
+                        image: videoURL == nil ? image : videoFrame ?? image,
+                        loadError: loadError,
+                        tool: tool,
+                        color: color,
+                        zoom: zoom,
+                        panOffset: $panOffset,
+                        annotations: visibleAnnotations,
+                        redoAnnotations: visibleRedoAnnotations,
+                        requestText: { point in
+                            pauseVideo()
+                            textPoint = point
+                            textAnnotation = ""
+                            showingTextPrompt = true
+                        },
+                        expand: { showingExpandedImage = true }
+                    )
+                }
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
             .padding(.horizontal, 18)
             .padding(.top, 14)
 
+            if videoURL != nil {
+                videoControls
+                    .padding(.horizontal, 18)
+                    .padding(.top, 10)
+            }
+
             annotationToolbar
                 .padding(.horizontal, 18)
                 .padding(.top, 14)
+                .reviewChromeMotion(scaleX: chromeScaleX, opacity: chromeOpacity, blur: chromeBlur)
+
+            replyMediaControl
+                .padding(.horizontal, 18)
+                .padding(.top, 12)
 
             commentField
                 .padding(.horizontal, 18)
                 .padding(.top, 12)
+                .reviewChromeMotion(scaleX: chromeScaleX, opacity: chromeOpacity, blur: chromeBlur)
 
             decisionDock
                 .padding(.horizontal, 18)
                 .padding(.top, 12)
                 .padding(.bottom, 12)
+                .reviewChromeMotion(scaleX: chromeScaleX, opacity: chromeOpacity, blur: chromeBlur)
         }
         .background(NibTheme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
-        .statusBarHidden(true)
+        .statusBarHidden(false)
         .preferredColorScheme(.dark)
         .task(id: imageURL) { await loadImage() }
+        .task(id: videoURL) { await loadVideo() }
+        .task(id: replyVideo) { await uploadSelectedReply() }
+        .task(id: isPlaying) {
+            while isPlaying, let player {
+                currentTimeMs = max(0, CMTimeGetSeconds(player.currentTime()) * 1_000)
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        .task { await materializeChrome() }
         .fullScreenCover(isPresented: $showingExpandedImage) {
-            ExpandedReviewImage(image: image, annotations: annotations)
+            ExpandedReviewImage(image: videoURL == nil ? image : videoFrame ?? image, annotations: visibleAnnotations.wrappedValue)
         }
         .alert("Add text annotation", isPresented: $showingTextPrompt) {
             TextField("Annotation", text: $textAnnotation)
@@ -113,6 +278,200 @@ struct NativeVisualReviewWorkspace: View {
             Button("Add") { addTextAnnotation() }
                 .disabled(textAnnotation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+    }
+
+    @MainActor
+    private func materializeChrome() async {
+        switch NibReviewMotion.mode(reduceMotion: reduceMotion) {
+        case .off:
+            chromeScaleX = 1
+            chromeOpacity = 1
+            chromeBlur = 0
+        case .reduced:
+            chromeScaleX = 1
+            chromeBlur = 0
+            chromeOpacity = 0
+            withAnimation(.easeOut(duration: NibReviewMotion.reducedSeconds)) { chromeOpacity = 1 }
+        case .full:
+            chromeScaleX = NibReviewMotion.enterStartScale
+            chromeOpacity = NibReviewMotion.enterStartOpacity
+            chromeBlur = NibReviewMotion.blurRadius
+            withAnimation(.easeInOut(duration: NibReviewMotion.materializeSeconds)) {
+                chromeScaleX = NibReviewMotion.enterSettleScale
+                chromeOpacity = 1
+                chromeBlur = 0
+            }
+            try? await Task.sleep(for: .milliseconds(140))
+            withAnimation(.easeInOut(duration: NibReviewMotion.settleSeconds)) { chromeScaleX = 1 }
+        }
+    }
+
+    @MainActor
+    private func submitAfterDissolve(_ decision: String) async {
+        let mode = NibReviewMotion.mode(reduceMotion: reduceMotion)
+        switch mode {
+        case .off:
+            chromeOpacity = 0
+        case .reduced:
+            withAnimation(.easeIn(duration: NibReviewMotion.reducedSeconds)) { chromeOpacity = 0 }
+            try? await Task.sleep(for: .milliseconds(100))
+        case .full:
+            withAnimation(.easeIn(duration: NibReviewMotion.exitSeconds)) {
+                chromeScaleX = 1.06
+                chromeOpacity = 0
+                chromeBlur = NibReviewMotion.blurRadius
+            }
+            try? await Task.sleep(for: .milliseconds(120))
+        }
+        await submit(decision, normalizedComment, annotations)
+        chromeScaleX = 1
+        chromeOpacity = 1
+        chromeBlur = 0
+    }
+
+    private var visibleAnnotations: Binding<[NibReviewAnnotation]> {
+        Binding(
+            get: {
+                guard videoURL != nil else { return annotations }
+                return annotations.filter { annotation in
+                    guard let timeMs = annotation.timeMs else { return false }
+                    return abs(timeMs - currentTimeMs) <= 75
+                }
+            },
+            set: { updated in
+                guard videoURL != nil else {
+                    annotations = updated
+                    return
+                }
+                annotations.removeAll { annotation in
+                    guard let timeMs = annotation.timeMs else { return false }
+                    return abs(timeMs - currentTimeMs) <= 75
+                }
+                annotations.append(contentsOf: updated.map { annotation in
+                    var anchored = annotation
+                    anchored.timeMs = currentTimeMs
+                    return anchored
+                })
+            }
+        )
+    }
+
+    private var visibleRedoAnnotations: Binding<[NibReviewAnnotation]> {
+        Binding(
+            get: { redoAnnotations },
+            set: { updated in
+                redoAnnotations = updated.map { annotation in
+                    var anchored = annotation
+                    if videoURL != nil { anchored.timeMs = currentTimeMs }
+                    return anchored
+                }
+            }
+        )
+    }
+
+    private var videoControls: some View {
+        HStack(spacing: 10) {
+            Button {
+                toggleVideoPlayback()
+            } label: {
+                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isPlaying ? "Pause video" : "Play video")
+
+            Text(videoTime(currentTimeMs))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Slider(
+                value: Binding(
+                    get: { currentTimeMs },
+                    set: { currentTimeMs = $0 }
+                ),
+                in: 0...max(1, durationMs),
+                onEditingChanged: { editing in
+                    if editing { pauseVideo() }
+                    else { seekVideo(to: currentTimeMs) }
+                }
+            )
+            .accessibilityLabel("Video position")
+
+            Text(videoTime(durationMs))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .nibGlassSurface(tint: Color.white.opacity(0.20), cornerRadius: 12, reduceTransparency: reduceTransparency)
+    }
+
+    @MainActor
+    private func loadVideo() async {
+        player?.pause()
+        player = nil
+        currentTimeMs = 0
+        durationMs = 0
+        isPlaying = false
+        videoFrame = nil
+        guard let videoURL else { return }
+        let asset = AVURLAsset(url: videoURL)
+        do {
+            let duration = try await asset.load(.duration)
+            durationMs = max(0, CMTimeGetSeconds(duration) * 1_000)
+            player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+            await renderVideoFrame(at: 0)
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func toggleVideoPlayback() {
+        guard let player else { return }
+        if isPlaying {
+            pauseVideo()
+        } else {
+            player.play()
+            isPlaying = true
+        }
+    }
+
+    @MainActor
+    private func pauseVideo() {
+        guard videoURL != nil else { return }
+        player?.pause()
+        isPlaying = false
+        currentTimeMs = max(0, CMTimeGetSeconds(player?.currentTime() ?? .zero) * 1_000)
+        Task { await renderVideoFrame(at: currentTimeMs) }
+    }
+
+    @MainActor
+    private func seekVideo(to timeMs: Double) {
+        guard let player else { return }
+        pauseVideo()
+        let clamped = min(max(0, timeMs), max(0, durationMs))
+        currentTimeMs = clamped
+        player.seek(to: CMTime(seconds: clamped / 1_000, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        Task { await renderVideoFrame(at: clamped) }
+    }
+
+    @MainActor
+    private func renderVideoFrame(at timeMs: Double) async {
+        guard let videoURL else { return }
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: videoURL))
+        generator.appliesPreferredTrackTransform = true
+        do {
+            let (image, _) = try await generator.image(at: CMTime(seconds: timeMs / 1_000, preferredTimescale: 600))
+            videoFrame = UIImage(cgImage: image)
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    private func videoTime(_ milliseconds: Double) -> String {
+        let seconds = max(0, Int(milliseconds / 1_000))
+        return "\(seconds / 60):\(String(format: "%02d", seconds % 60))"
     }
 
     private var requestContent: AttributedString {
@@ -125,6 +484,7 @@ struct NativeVisualReviewWorkspace: View {
             HStack(spacing: 4) {
                 ForEach([NativeReviewTool.select]) { item in
                     ReviewToolButton(tool: item, selected: tool == item) {
+                        pauseVideo()
                         tool = item
                     }
                 }
@@ -133,6 +493,7 @@ struct NativeVisualReviewWorkspace: View {
 
                 ForEach([NativeReviewTool.rectangle, .text, .path]) { item in
                     ReviewToolButton(tool: item, selected: tool == item) {
+                        pauseVideo()
                         tool = item
                     }
                 }
@@ -170,8 +531,7 @@ struct NativeVisualReviewWorkspace: View {
             }
             .padding(5)
         }
-        .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.white.opacity(0.14)))
+        .nibGlassSurface(tint: Color.white.opacity(0.20), cornerRadius: 13, reduceTransparency: reduceTransparency)
     }
 
     private var toolbarDivider: some View {
@@ -183,11 +543,13 @@ struct NativeVisualReviewWorkspace: View {
     private var panArrowMenu: some View {
         Menu {
             Button {
+                pauseVideo()
                 tool = .pan
             } label: {
                 Label("Pan", systemImage: NativeReviewTool.pan.systemImage)
             }
             Button {
+                pauseVideo()
                 tool = .arrow
             } label: {
                 Label("Arrow", systemImage: NativeReviewTool.arrow.systemImage)
@@ -223,16 +585,29 @@ struct NativeVisualReviewWorkspace: View {
         .accessibilityLabel(label)
     }
 
+    @ViewBuilder
     private var decisionDock: some View {
+        #if os(visionOS)
+        decisionDockContent
+        #else
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 9) { decisionDockContent }
+        } else {
+            decisionDockContent
+        }
+        #endif
+    }
+
+    private var decisionDockContent: some View {
         HStack(spacing: 9) {
             decisionButton("Approve", color: NibTheme.green) {
-                await submit("approve", normalizedComment, annotations)
+                await submitAfterDissolve("approve")
             }
             decisionButton("Reject", color: NibTheme.red) {
-                await submit("reject", normalizedComment, annotations)
+                await submitAfterDissolve("reject")
             }
-            decisionButton("Comment", color: Color(red: 0.290, green: 0.290, blue: 0.290), disabled: normalizedComment == nil) {
-                await submit("comment", normalizedComment, annotations)
+            decisionButton("Comment", color: Color(red: 0.290, green: 0.290, blue: 0.290), disabled: normalizedComment == nil && replyStatus != "Reply video attached") {
+                await submitAfterDissolve("comment")
             }
         }
     }
@@ -245,9 +620,47 @@ struct NativeVisualReviewWorkspace: View {
             .tint(.white)
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous).stroke(Color.white.opacity(0.24)))
+            .nibGlassSurface(tint: Color.white.opacity(0.20), cornerRadius: 13, reduceTransparency: reduceTransparency)
             .accessibilityLabel("Comment text")
+    }
+
+    private var replyMediaControl: some View {
+        let replyLabel = replyStatus ?? "Attach MP4 reply"
+        return HStack(spacing: 10) {
+            PhotosPicker(selection: $replyVideo, matching: .videos) {
+                Label(replyLabel, systemImage: "paperclip")
+                    .font(.subheadline.weight(.medium))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 42)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.white)
+            .nibGlassSurface(
+                tint: Color.white.opacity(0.20),
+                cornerRadius: 12,
+                interactive: true,
+                reduceTransparency: reduceTransparency
+            )
+        }
+    }
+
+    @MainActor
+    private func uploadSelectedReply() async {
+        guard let replyVideo else { return }
+        guard replyVideo.supportedContentTypes.contains(.mpeg4Movie) else {
+            replyStatus = "MP4 required"
+            return
+        }
+        replyStatus = "Uploading..."
+        do {
+            guard let data = try await replyVideo.loadTransferable(type: Data.self), !data.isEmpty else {
+                throw NSError(domain: "Nib", code: 2, userInfo: [NSLocalizedDescriptionKey: "The selected video could not be read"])
+            }
+            try await uploadReply(data, "reply-\(Int(Date().timeIntervalSince1970)).mp4")
+            replyStatus = "Reply video attached"
+        } catch {
+            replyStatus = error.localizedDescription
+        }
     }
 
     private var normalizedComment: String? {
@@ -280,12 +693,25 @@ struct NativeVisualReviewWorkspace: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
-        .background(color, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .nibGlassSurface(
+            tint: color,
+            cornerRadius: 14,
+            interactive: true,
+            reduceTransparency: reduceTransparency
+        )
         .disabled(sending || !request.isActive || disabled)
         .accessibilityLabel(label)
     }
 
     private func undo() {
+        if videoURL != nil,
+           let index = annotations.lastIndex(where: { annotation in
+               guard let timeMs = annotation.timeMs else { return false }
+               return abs(timeMs - currentTimeMs) <= 75
+           }) {
+            redoAnnotations.append(annotations.remove(at: index))
+            return
+        }
         guard let last = annotations.popLast() else { return }
         redoAnnotations.append(last)
     }
@@ -308,7 +734,7 @@ struct NativeVisualReviewWorkspace: View {
         guard let point = textPoint else { return }
         let content = textAnnotation.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !content.isEmpty else { return }
-        annotations.append(NibReviewAnnotation(
+        var annotation = NibReviewAnnotation(
             id: UUID().uuidString,
             type: "text",
             color: color,
@@ -317,7 +743,9 @@ struct NativeVisualReviewWorkspace: View {
             content: content,
             fontSize: 20,
             align: "left"
-        ))
+        )
+        if videoURL != nil { annotation.timeMs = currentTimeMs }
+        annotations.append(annotation)
         redoAnnotations = []
         textPoint = nil
     }

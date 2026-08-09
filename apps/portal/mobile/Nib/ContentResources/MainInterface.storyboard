@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" toolsVersion="27000" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" useSafeAreas="YES" colorMatched="YES" initialViewController="nib-content-view-controller">
+    <device id="retina6_12" orientation="portrait" appearance="light"/>
+    <dependencies>
+        <deployment identifier="iOS"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="27000"/>
+        <capability name="Safe area layout guides" minToolsVersion="9.0"/>
+    </dependencies>
+    <scenes>
+        <scene sceneID="nib-content-scene">
+            <objects>
+                <viewController id="nib-content-view-controller" customClass="NibNotificationContentViewController" customModule="NibNotificationContent" customModuleProvider="target" sceneMemberID="viewController">
+                    <view key="view" contentMode="scaleToFill" simulatedAppContext="notificationCenter" id="nib-content-view">
+                        <rect key="frame" x="0.0" y="0.0" width="320" height="68"/>
+                        <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                        <viewLayoutGuide key="safeArea" id="nib-content-safe-area"/>
+                    </view>
+                    <extendedEdge key="edgesForExtendedLayout"/>
+                    <freeformSimulatedSizeMetrics key="simulatedDestinationMetrics"/>
+                    <size key="freeformSize" width="320" height="68"/>
+                </viewController>
+                <placeholder placeholderIdentifier="IBFirstResponder" id="nib-content-first-responder" sceneMemberID="firstResponder"/>
+            </objects>
+        </scene>
+    </scenes>
+</document>

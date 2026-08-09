@@ -5,7 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import type { RequestRecord } from "../shared/types";
-import { apnsCategory, apnsJwt, apnsReadiness, apnsTopicForDevice, requestPayload } from "./notifications";
+import {
+  apnsCategory,
+  apnsCollapseId,
+  apnsDevicePayload,
+  apnsJwt,
+  apnsReadiness,
+  apnsTopicForDevice,
+  requestPayload
+} from "./notifications";
 
 test("maps common first-two request choices to native APNs categories", () => {
   assert.equal(apnsCategory({ choices: ["Approve", "Hold"] }), "NIB_APPROVE_HOLD");
@@ -27,6 +35,31 @@ test("uses per-device APNs topics when available", () => {
   const config = { topic: "com.example.nib" };
   assert.equal(apnsTopicForDevice(config, { apnsTopic: "com.example.nib.watchkitapp" }), "com.example.nib.watchkitapp");
   assert.equal(apnsTopicForDevice(config, { apnsTopic: null }), "com.example.nib");
+});
+
+test("APNs payloads identify the exact registered destination device", () => {
+  assert.deepEqual(
+    apnsDevicePayload(
+      { requestId: "req-1", title: "Review this" },
+      {
+        id: "vision-device",
+        name: "Apple Vision Pro",
+        platform: "visionos",
+        pushKind: "apns"
+      }
+    ),
+    {
+      requestId: "req-1",
+      title: "Review this",
+      deviceId: "vision-device"
+    }
+  );
+});
+
+test("uses stable APNs collapse IDs within Apple's 64-byte limit", () => {
+  assert.equal(apnsCollapseId({ tag: "request:abc-123" }), "request:abc-123");
+  assert.equal(apnsCollapseId({ requestId: "abc-123" }), "abc-123");
+  assert.match(apnsCollapseId({ tag: "x".repeat(65) }), /^[a-f0-9]{64}$/);
 });
 
 test("reports APNs readiness issues without requiring a send attempt", async () => {
@@ -81,7 +114,7 @@ test("creates APNs JWTs with a verifiable ES256 signature", () => {
   );
 });
 
-test("visual-review notifications use the canonical review link without quick actions", () => {
+test("visual-review notifications expose decisions, text input, and a direct response endpoint", () => {
   const now = new Date().toISOString();
   const request: RequestRecord = {
     id: "visual-review-1",
@@ -113,7 +146,8 @@ test("visual-review notifications use the canonical review link without quick ac
 
   const payload = requestPayload(request);
 
-  assert.deepEqual(payload.choices, []);
-  assert.equal(payload.allowText, false);
+  assert.deepEqual(payload.choices, ["Approve", "Reject"]);
+  assert.equal(payload.allowText, true);
   assert.match(String(payload.url), /\/r\//);
+  assert.match(String(payload.responseUrl), /\/api\/requests\/visual-review-1\/respond$/);
 });

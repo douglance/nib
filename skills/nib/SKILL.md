@@ -6,7 +6,7 @@ description: >-
   debug a visual issue, check styling, validate a design, or show your work. Capture
   the screen, look at it, figure out what you need feedback on, annotate it, and ask.
   Do not ask the user what to capture — just capture and look.
-license: MIT
+license: Apache-2.0
 compatibility: Requires nib CLI (brew install douglance/tap/nib). macOS.
 metadata:
   author: douglance

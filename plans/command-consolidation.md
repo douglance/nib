@@ -163,7 +163,7 @@ nib import <file> [--output=FILE] [--migrate-sidecar]
 | `list` | List recent captures |
 | `folder` | Open storage folder |
 | `sessions` | List active sessions |
-| `mcp-server` | Start MCP server |
+| `--mcp` | Start the combined Nib and Incurs Code Mode MCP server |
 
 **Removed entirely:**
 - `read` → use `annotation list --format=qml` or `export --format=qml`

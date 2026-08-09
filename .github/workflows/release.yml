@@ -98,12 +98,18 @@ jobs:
         with:
           path: artifacts
 
+      - name: Flatten and checksum release archives
+        run: |
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' \) -exec mv {} . \;
+          sha256sum nib-*.tar.gz nib-*.zip > SHA256SUMS
+
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/**/*.tar.gz
-            artifacts/**/*.zip
+            nib-*.tar.gz
+            nib-*.zip
+            SHA256SUMS
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, '-') }}

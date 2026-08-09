@@ -1,0 +1,25 @@
+[package]
+name = "nib-ui"
+version = "0.3.1"
+publish = false
+description = "Hosted user-interface image generation for nib"
+edition = "2024"
+rust-version.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+incurs = { git = "https://github.com/douglance/incurs.git", rev = "3f96829c7fa442572c4c3fc4040798459e5d4b9f", features = ["http", "mcp", "openapi"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+tempfile = "3"

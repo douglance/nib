@@ -11,6 +11,18 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  open-core-boundary:
+    name: Open-core boundary
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/check-open-core-boundary.mjs
+      - run: npm test
+        working-directory: npm
+
   check:
     name: Check
     runs-on: macos-14

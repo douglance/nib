@@ -39,6 +39,37 @@ test("respondRequest records direct notification actions as notification interac
   assert.ok(answered?.viewedAt);
 });
 
+test("respondRequest snapshots the registered device attribution", async () => {
+  const { registerDevice } = await import("./devices");
+  const { createRequest, respondRequest } = await import("./requests");
+  const device = await registerDevice({
+    name: "Apple Vision Pro",
+    platform: "visionos",
+    pushKind: "apns",
+    token: "vision-device-token",
+    apnsTopic: "com.douglance.nib",
+    capabilities: ["alert", "open"]
+  });
+  const request = await createRequest({
+    prompt: "Does this work in the headset?",
+    choices: ["Approve", "Reject"],
+    notify: false
+  });
+
+  const answered = await respondRequest(request.id, {
+    choiceIndex: 0,
+    deviceId: device.id
+  });
+
+  assert.equal(answered?.responses[0]?.deviceId, device.id);
+  assert.deepEqual(answered?.responses[0]?.device, {
+    id: device.id,
+    name: "Apple Vision Pro",
+    platform: "visionos",
+    pushKind: "apns"
+  });
+});
+
 test("respondRequest keeps normal in-app answers separate from notification interactions", async () => {
   const { createRequest, respondRequest } = await import("./requests");
   const request = await createRequest({
@@ -191,6 +222,74 @@ test("simultaneous visual review responses have exactly one winner", async () =>
   assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
   assert.equal(results.filter((result) => result.status === "rejected").length, 1);
   assert.equal(stored?.responses.length, 1);
+});
+
+test("nib.review/v2 publishes H.264 video and requires paused-frame time anchors", async () => {
+  const {
+    addRequestAttachment,
+    createRequest,
+    patchRequest,
+    publishRequest,
+    respondRequest
+  } = await import("./requests");
+  const request = await createRequest({
+    kind: "visual-review",
+    prompt: "Review this recording",
+    metadata: { contract: "nib.review/v2" },
+    notify: false
+  });
+  const mp4 = Buffer.concat([
+    Buffer.from([0, 0, 0, 24]),
+    Buffer.from("ftyp"),
+    Buffer.from("isom0000avc1")
+  ]);
+  const video = await addRequestAttachment(request.id, {
+    name: "review.mp4",
+    contentType: "video/mp4",
+    contentBase64: mp4.toString("base64"),
+    metadata: { role: "primary" }
+  });
+  assert.ok(video);
+  await patchRequest(request.id, {
+    metadata: {
+      subject: {
+        contract: "nib.review/v2",
+        primary: {
+          attachmentId: video!.id,
+          kind: "video",
+          contentType: "video/mp4",
+          width: 1920,
+          height: 1080,
+          durationMs: 4_000,
+          hasAudio: false,
+          sha256: "test"
+        }
+      }
+    }
+  });
+  const published = await publishRequest(request.id);
+  assert.ok(published?.publishedAt);
+  await assert.rejects(
+    () => respondRequest(request.id, {
+      decision: "reject",
+      annotations: [{ id: "mark-1", type: "rectangle", x: 10, y: 10, width: 20, height: 20 }]
+    }),
+    /timeMs anchor/i
+  );
+  const answered = await respondRequest(request.id, {
+    decision: "reject",
+    comment: "Pause here.",
+    annotations: [{ id: "mark-1", type: "rectangle", timeMs: 1_250, x: 10, y: 10, width: 20, height: 20 }],
+    transcript: {
+      status: "complete",
+      source: "device",
+      locale: "en-US",
+      text: "Pause here.",
+      segments: [{ startMs: 0, endMs: 1_200, text: "Pause here." }]
+    }
+  });
+  assert.equal(answered?.responses[0]?.data?.contract, "nib.review/v2");
+  assert.equal(answered?.responses[0]?.transcript?.source, "device");
 });
 
 async function createPublishedVisualReview() {

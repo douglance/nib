@@ -15,6 +15,9 @@ pub mod style_panel;
 pub mod tool_flyout;
 pub mod toolbar;
 pub mod tools;
+#[cfg(target_os = "macos")]
+mod video;
+mod window_motion;
 pub mod zorder;
 
 pub use app::NibApp;

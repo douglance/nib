@@ -2710,14 +2710,6 @@ pub fn run_windows(args: &WindowsArgs) -> Result<()> {
     Ok(())
 }
 
-/// Run the MCP server for Claude Code integration
-#[cfg(feature = "mcp")]
-pub async fn run_mcp_server(args: &McpServerArgs) -> Result<()> {
-    tracing::info!(?args, "Starting MCP server");
-
-    crate::mcp::run_mcp_server(args.image.clone()).await
-}
-
 /// Ask human for visual feedback via GUI
 ///
 /// This command is optimized for Claude-human collaboration:
@@ -2730,30 +2722,67 @@ pub async fn run_mcp_server(args: &McpServerArgs) -> Result<()> {
 /// 7. Print JSON and optionally render
 pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
     tracing::info!(?args, "Running feedback");
+    validate_feedback_options(args)?;
+
+    let video = args
+        .file
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"));
+    if video {
+        let unsupported = match args.ui {
+            FeedbackUi::Terminal => Some("E_VIDEO_TERMINAL_UNSUPPORTED"),
+            _ => None,
+        };
+        if let Some(code) = unsupported {
+            return Err(crate::core::NibError::Other(format!(
+                "{code}: video review requires the web surface in this build; run: nib feedback {} --ui web",
+                args.file.display()
+            )));
+        }
+    }
 
     match args.ui {
+        FeedbackUi::Native => {
+            let value = run_native_feedback_value(args).await?;
+            println!("{}", serde_json::to_string(&value).unwrap_or_default());
+            Ok(())
+        }
         FeedbackUi::Terminal => return run_terminal_feedback(args).await,
         FeedbackUi::Web => {
             return super::web_feedback::run(args)
+                .await
                 .map_err(|error| crate::core::NibError::Other(error.to_string()))
         }
-        FeedbackUi::Auto => match super::web_feedback::run(args) {
-            Ok(()) => return Ok(()),
+        FeedbackUi::Auto => match super::web_feedback::run(args).await {
+            Ok(()) => Ok(()),
             Err(error) if error.allows_local_fallback() => {
                 tracing::warn!("Web review unavailable; using a local reviewer: {error}");
                 if std::env::var_os("TMUX").is_some() && nib_tui::TerminalReport::detect().is_ok() {
                     return run_terminal_feedback(args).await;
                 }
+                let value = run_native_feedback_value(args).await?;
+                println!("{}", serde_json::to_string(&value).unwrap_or_default());
+                Ok(())
             }
-            Err(error) => return Err(crate::core::NibError::Other(error.to_string())),
+            Err(error) => Err(crate::core::NibError::Other(error.to_string())),
         },
-        FeedbackUi::Gui => {}
     }
-
-    run_gui_feedback(args).await
 }
 
-async fn run_gui_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
+fn validate_feedback_options(args: &super::args::FeedbackArgs) -> Result<()> {
+    if args.ui == FeedbackUi::Native && args.detach {
+        return Err(crate::core::NibError::Other(
+            "E_NATIVE_DETACH_UNSUPPORTED: native feedback is an attached local review; use `nib request create <file>` for a durable detached request"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) async fn run_native_feedback_value(
+    args: &super::args::FeedbackArgs,
+) -> Result<serde_json::Value> {
     use super::annotation_json;
 
     // Verify file exists
@@ -2772,16 +2801,27 @@ async fn run_gui_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
         .to_lowercase();
     let is_image = matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif");
     let is_nib = extension == "nib";
+    let is_video = extension == "mp4";
 
-    if !is_image && !is_nib {
+    if !is_image && !is_nib && !is_video {
         return Err(crate::core::NibError::Other(format!(
-            "Unsupported file type: {}. Expected .nib or image (.png, .jpg, .webp)",
+            "Unsupported file type: {}. Expected .nib, MP4/H.264, or image (.png, .jpg, .webp)",
             args.file.display()
         )));
     }
+    if is_video {
+        crate::media::inspect_media(&args.file)?;
+        if args.annotations.is_some() {
+            return Err(crate::core::NibError::Other(
+                "E_VIDEO_PROMPT_ANNOTATIONS_UNSUPPORTED: add video annotations in the paused-frame reviewer so each annotation has a timeMs anchor"
+                    .into(),
+            ));
+        }
+    }
 
-    // Get or create the .nib file path
-    let nib_path = if is_image {
+    // Images use their canonical .nib session. Videos use the media path itself
+    // as the deterministic collaboration-session identity.
+    let session_path = if is_image {
         let nib_path = args.file.with_extension("nib");
         if !nib_path.exists() {
             let image_data = std::fs::read(&args.file)?;
@@ -2799,7 +2839,7 @@ async fn run_gui_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
     let timeout_duration = feedback_timeout(args.timeout);
 
     // Step 1: Try connecting to an existing GUI session first
-    let session = match Session::connect(&nib_path, ClientType::Cli).await {
+    let session = match Session::connect(&session_path, ClientType::Cli).await {
         Ok(session) => {
             tracing::info!("Connected to existing collab session");
             session
@@ -2814,7 +2854,7 @@ async fn run_gui_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
 
             let _child = std::process::Command::new(&exe_path)
                 .arg("gui")
-                .arg(&nib_path)
+                .arg(&session_path)
                 .stdout(std::process::Stdio::null())
                 .spawn()
                 .map_err(|e| crate::core::NibError::Other(format!("Failed to spawn GUI: {}", e)))?;
@@ -2823,7 +2863,7 @@ async fn run_gui_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
             let mut session_result = Err("No connection".to_string());
             for attempt in 1..=25 {
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                match Session::connect(&nib_path, ClientType::Cli).await {
+                match Session::connect(&session_path, ClientType::Cli).await {
                     Ok(s) => {
                         tracing::info!("Connected to collab session on attempt {}", attempt);
                         session_result = Ok(s);
@@ -2870,29 +2910,39 @@ async fn run_gui_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
     // Step 7: Wait for SendToAgent response
     match session.wait_for_send(timeout_duration) {
         Ok(payload) => {
-            // GUI already prepared the JSON payload with delta annotations
-            println!("{}", payload);
+            let mut value: serde_json::Value = serde_json::from_str(&payload).map_err(|error| {
+                crate::core::NibError::Other(format!(
+                    "Native reviewer returned invalid JSON: {error}"
+                ))
+            })?;
+            if is_video {
+                value["contract"] = serde_json::json!("nib.review/v2");
+                return Ok(value);
+            }
 
             // Render the annotations onto the image
-            let nib = NibFile::open(&nib_path)?;
+            let nib = NibFile::open(&session_path)?;
             let all_annotations = nib.list_annotations()?;
             let assets = nib.get_all_assets()?;
             let (image_data, image_info) = nib.get_image()?;
 
-            let stem = nib_path.file_stem().unwrap_or_default().to_string_lossy();
-            let rendered_path = nib_path.with_file_name(format!("{}.rendered.png", stem));
+            let stem = session_path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let rendered_path = session_path.with_file_name(format!("{}.rendered.png", stem));
 
             let nib_image = NibImage {
                 image_data,
                 width: image_info.width,
                 height: image_info.height,
-                source: crate::core::ImageSource::File(nib_path.clone()),
+                source: crate::core::ImageSource::File(session_path.clone()),
                 annotations: all_annotations,
                 assets,
                 title: None,
                 description: None,
                 tags: Vec::new(),
-                file_path: Some(nib_path.clone()),
+                file_path: Some(session_path.clone()),
                 created_at: SystemTime::now(),
                 modified_at: SystemTime::now(),
             };
@@ -2903,13 +2953,11 @@ async fn run_gui_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
             };
             let _ = export::export_image(&nib_image, &rendered_path, &options);
 
-            Ok(())
+            Ok(value)
         }
         Err(e) => {
             if e.contains("Timeout") {
-                let output = serde_json::json!({"event": "timeout"});
-                println!("{}", serde_json::to_string(&output).unwrap_or_default());
-                Ok(())
+                Ok(serde_json::json!({"event": "timeout"}))
             } else {
                 tracing::warn!("Collab wait failed: {}", e);
                 Err(crate::core::NibError::Other(format!("Wait failed: {}", e)))
@@ -2975,7 +3023,9 @@ async fn run_terminal_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
             .stderr(std::process::Stdio::null())
             .spawn()
             .map_err(|e| {
-                crate::core::NibError::Other(format!("Failed to detach feedback owner: {e}"))
+                crate::core::NibError::Other(format!(
+                    "Failed to start background feedback owner: {e}"
+                ))
             })?;
         let session_id = crate::collab::types::SessionId::from_file_path(&nib_path);
         println!(
@@ -3175,6 +3225,22 @@ mod tests {
     fn zero_feedback_timeout_waits_indefinitely() {
         assert_eq!(feedback_timeout(0), None);
         assert_eq!(feedback_timeout(60), Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn native_feedback_cannot_detach_or_publish_implicitly() {
+        let args = FeedbackArgs {
+            file: PathBuf::from("review.png"),
+            message: None,
+            annotations: None,
+            timeout: 0,
+            ui: FeedbackUi::Native,
+            detach: true,
+        };
+
+        let error = validate_feedback_options(&args).unwrap_err().to_string();
+        assert!(error.contains("E_NATIVE_DETACH_UNSUPPORTED"));
+        assert!(error.contains("nib request create"));
     }
 
     /// Encode a solid-color `width`x`height` RGBA image as PNG bytes.

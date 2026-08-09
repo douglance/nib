@@ -41,6 +41,18 @@ pub enum Command {
     /// Open an existing feedback session in the terminal reviewer
     Review(ReviewArgs),
 
+    /// Inspect or wait for a durable human request
+    #[command(subcommand)]
+    Request(RequestCommand),
+
+    /// Record the screen and manage durable recording workers
+    #[command(subcommand)]
+    Record(RecordCommand),
+
+    /// Inspect and derive supported media files
+    #[command(subcommand)]
+    Media(MediaCommand),
+
     /// Wait for annotation submit event from GUI
     AwaitSubmit(AwaitSubmitArgs),
 
@@ -92,9 +104,6 @@ pub enum Command {
 
     /// List active collaboration sessions
     Sessions,
-
-    /// Start MCP server for Claude Code integration
-    McpServer(McpServerArgs),
 }
 
 // === Subcommand Enums ===
@@ -124,6 +133,40 @@ pub enum TileCommand {
 
     /// List tiles in a tiled capture
     List(TileListArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RequestCommand {
+    /// Publish a durable visual review and return immediately
+    Create(RequestCreateArgs),
+
+    /// Wait for a published request to receive a response
+    Wait(RequestWaitArgs),
+
+    /// Open a durable request in the native Rust reviewer
+    Review(RequestReviewArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RecordCommand {
+    /// Start a macOS screen recording and return its durable ID
+    Start(RecordStartArgs),
+    /// Read one recording or the currently active recording
+    Status(RecordStatusArgs),
+    /// Stop and finalize one recording
+    Stop(RecordStopArgs),
+    /// Wait for one recording to finish
+    Wait(RecordWaitArgs),
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MediaCommand {
+    /// Validate and inspect an MP4/H.264 media file
+    Inspect(MediaInspectArgs),
+    /// Extract a representative PNG poster frame
+    Poster(MediaPosterArgs),
+    /// Transcribe media with on-device speech services when available
+    Transcribe(MediaTranscribeArgs),
 }
 
 // === Argument Structs ===
@@ -200,22 +243,23 @@ pub struct FeedbackArgs {
     #[arg(short = 'a', long)]
     pub annotations: Option<String>,
 
-    /// Timeout in seconds (0 = no timeout, default: 60)
-    #[arg(short = 't', long, default_value = "60")]
+    /// Timeout in seconds (0 = no timeout)
+    #[arg(short = 't', long, default_value = "0")]
     pub timeout: u64,
 
     /// Human review surface
-    #[arg(long, value_enum, default_value = "auto")]
+    #[arg(long, value_enum, default_value = "native")]
     pub ui: FeedbackUi,
 
-    /// Open the review and return its session without waiting
+    /// Explicitly publish without waiting; only use when the caller requests it
     #[arg(long)]
     pub detach: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum FeedbackUi {
-    Gui,
+    #[value(name = "native", alias = "gui")]
+    Native,
     Terminal,
     Web,
     Auto,
@@ -229,6 +273,131 @@ pub struct ReviewArgs {
     /// Review request shown above the decision controls
     #[arg(short = 'm', long)]
     pub message: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+pub struct RequestCreateArgs {
+    /// Image, .nib, or MP4/H.264 file to review
+    pub file: PathBuf,
+
+    /// Question shown to the reviewer
+    #[arg(short = 'm', long)]
+    pub question: Option<String>,
+
+    /// Image-only annotation prompt JSON
+    #[arg(short = 'a', long)]
+    pub annotations: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+pub struct RequestWaitArgs {
+    /// Durable request ID printed when feedback publishes
+    pub request_id: String,
+
+    /// Timeout in seconds (0 = no timeout)
+    #[arg(short = 't', long, default_value = "0")]
+    pub timeout: u64,
+}
+
+#[derive(Parser, Debug)]
+pub struct RequestReviewArgs {
+    /// Durable request ID
+    pub request_id: String,
+
+    /// Portal base URL; defaults to NIB_PORTAL_URL or the configured portal
+    #[arg(long)]
+    pub portal: Option<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct RecordStartArgs {
+    /// Output MP4 path
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Stop automatically after this many seconds
+    #[arg(short = 't', long)]
+    pub duration: Option<u64>,
+
+    /// Record a display number (1 is the primary display)
+    #[arg(long)]
+    pub display: Option<u32>,
+
+    /// Record a CoreGraphics window ID
+    #[arg(long)]
+    pub window: Option<u32>,
+
+    /// Record x,y,width,height
+    #[arg(long)]
+    pub region: Option<String>,
+
+    /// Let the user select a window or region
+    #[arg(short, long)]
+    pub interactive: bool,
+
+    /// Include system audio
+    #[arg(long)]
+    pub system_audio: bool,
+
+    /// Include the default microphone
+    #[arg(long)]
+    pub microphone: bool,
+
+    /// Hide the cursor
+    #[arg(long)]
+    pub no_cursor: bool,
+
+    /// Show pointer clicks
+    #[arg(long)]
+    pub show_clicks: bool,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct RecordStatusArgs {
+    /// Recording ID; defaults to the active recording
+    pub id: Option<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct RecordStopArgs {
+    /// Recording ID; defaults to the active recording
+    pub id: Option<String>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct RecordWaitArgs {
+    /// Recording ID
+    pub id: String,
+
+    /// Timeout in seconds (0 = no timeout)
+    #[arg(short = 't', long, default_value = "0")]
+    pub timeout: u64,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct MediaInspectArgs {
+    /// MP4 media file
+    pub file: PathBuf,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct MediaPosterArgs {
+    /// MP4 media file
+    pub file: PathBuf,
+
+    /// Output PNG path
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug, Clone)]
+pub struct MediaTranscribeArgs {
+    /// MP4 media file
+    pub file: PathBuf,
+
+    /// BCP-47 locale hint
+    #[arg(long)]
+    pub locale: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -426,7 +595,7 @@ pub struct GenerateArgs {
     pub message: Option<String>,
 
     /// Human review surface used with --feedback
-    #[arg(long, value_enum, default_value = "auto")]
+    #[arg(long, value_enum, default_value = "native")]
     pub feedback_ui: FeedbackUi,
 }
 
@@ -636,12 +805,6 @@ pub struct WindowsArgs {
     pub json: bool,
 }
 
-#[derive(Parser, Debug)]
-pub struct McpServerArgs {
-    /// Optional image file to work with
-    pub image: Option<PathBuf>,
-}
-
 #[derive(Debug, Clone, ValueEnum)]
 pub enum OutputFormat {
     Text,
@@ -653,11 +816,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn feedback_defaults_to_web_first_auto_mode() {
+    fn feedback_defaults_to_native_attached_review() {
         let cli = Cli::try_parse_from(["nib", "feedback", "review.png"]).unwrap();
         let Command::Feedback(args) = cli.command else {
             panic!("expected feedback command");
         };
-        assert_eq!(args.ui, FeedbackUi::Auto);
+        assert_eq!(args.ui, FeedbackUi::Native);
+        assert_eq!(args.timeout, 0);
+        assert!(!args.detach, "feedback must wait unless detach is explicit");
+    }
+
+    #[test]
+    fn request_wait_defaults_to_no_timeout() {
+        let cli = Cli::try_parse_from(["nib", "request", "wait", "req-123"]).unwrap();
+        let Command::Request(RequestCommand::Wait(args)) = cli.command else {
+            panic!("expected request wait command");
+        };
+        assert_eq!(args.request_id, "req-123");
+        assert_eq!(args.timeout, 0);
+    }
+
+    #[test]
+    fn request_review_accepts_an_explicit_portal() {
+        let cli = Cli::try_parse_from([
+            "nib",
+            "request",
+            "review",
+            "req-123",
+            "--portal",
+            "https://nib.example",
+        ])
+        .unwrap();
+        let Command::Request(RequestCommand::Review(args)) = cli.command else {
+            panic!("expected request review command");
+        };
+        assert_eq!(args.request_id, "req-123");
+        assert_eq!(args.portal.as_deref(), Some("https://nib.example"));
     }
 }

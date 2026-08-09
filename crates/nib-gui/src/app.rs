@@ -9,15 +9,17 @@ use gpui::{
     ElementInputHandler, Entity, EntityInputHandler, ExternalPaths, FocusHandle, Focusable,
     FontStyle, GlobalElementId, HighlightStyle, InteractiveElement, IntoElement, KeyDownEvent,
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement,
-    PathBuilder, PathPromptOptions, Pixels, Point, Render, Result as GpuiResult, ScrollHandle,
-    ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement, Style, Styled, StyledImage,
-    StyledText, Task, TextAlign, TextRun, TitlebarOptions, UTF16Selection, UnderlineStyle, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, WrappedLine,
+    PathBuilder, PathPromptOptions, Pixels, Point, Render, RenderImage, Result as GpuiResult,
+    ScrollHandle, ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement, Style, Styled,
+    StyledImage, StyledText, Task, TextAlign, TextRun, TitlebarOptions, UTF16Selection,
+    UnderlineStyle, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
+    WrappedLine,
 };
 use std::borrow::Cow;
 use std::fs;
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::{Duration, Instant};
 
@@ -39,6 +41,10 @@ mod embedded_icons {
     pub static IMAGE: &[u8] = include_bytes!("../../../assets/icons/image.svg");
     pub static UNDO: &[u8] = include_bytes!("../../../assets/icons/undo.svg");
     pub static REDO: &[u8] = include_bytes!("../../../assets/icons/redo.svg");
+    pub static PLAY: &[u8] = include_bytes!("../../../assets/icons/play.svg");
+    pub static PAUSE: &[u8] = include_bytes!("../../../assets/icons/pause.svg");
+    pub static PREVIOUS_FRAME: &[u8] = include_bytes!("../../../assets/icons/previous-frame.svg");
+    pub static NEXT_FRAME: &[u8] = include_bytes!("../../../assets/icons/next-frame.svg");
 
     pub fn get(path: &str) -> Option<&'static [u8]> {
         match path {
@@ -58,6 +64,10 @@ mod embedded_icons {
             "assets/icons/image.svg" => Some(IMAGE),
             "assets/icons/undo.svg" => Some(UNDO),
             "assets/icons/redo.svg" => Some(REDO),
+            "assets/icons/play.svg" => Some(PLAY),
+            "assets/icons/pause.svg" => Some(PAUSE),
+            "assets/icons/previous-frame.svg" => Some(PREVIOUS_FRAME),
+            "assets/icons/next-frame.svg" => Some(NEXT_FRAME),
             _ => None,
         }
     }
@@ -101,6 +111,7 @@ use crate::tools::{
     images_from_dropped_paths, Modifiers, MouseButton as ToolMouseButton, StyleState, TextTool,
     ToolContext, ToolEvent, ToolId, ToolManager, ToolMode, ToolPreview, ToolResult,
 };
+use crate::window_motion;
 use crate::zorder;
 use nib_collab::session::Session;
 use nib_collab::types::ClientType;
@@ -1418,16 +1429,25 @@ fn local_selection_handle_position(
 
 #[cfg(target_os = "macos")]
 fn force_frontmost_application() {
+    use std::ffi::c_void;
+
     use objc2::MainThreadMarker;
     use objc2_app_kit::{
         NSApplication, NSApplicationActivationOptions, NSAutoresizingMaskOptions,
-        NSFloatingWindowLevel, NSRunningApplication, NSVisualEffectBlendingMode,
+        NSFloatingWindowLevel, NSImage, NSRunningApplication, NSVisualEffectBlendingMode,
         NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode,
         NSWindowSharingType,
     };
+    use objc2_foundation::NSData;
 
     let main_thread = MainThreadMarker::new().expect("nib GUI must launch on the main thread");
     let application = NSApplication::sharedApplication(main_thread);
+    static APP_ICON: &[u8] = include_bytes!("../../../assets/brand/nib-app-icon.png");
+    let icon_data =
+        unsafe { NSData::dataWithBytes_length(APP_ICON.as_ptr().cast::<c_void>(), APP_ICON.len()) };
+    if let Some(icon) = NSImage::initWithData(main_thread.alloc::<NSImage>(), &icon_data) {
+        unsafe { application.setApplicationIconImage(Some(&icon)) };
+    }
     // GPUI 0.2.2 maps `WindowKind::Floating` to `NSNormalWindowLevel` on macOS.
     // Override the native level so the blocking review surface is not buried
     // beneath the terminal that launched it.
@@ -1453,12 +1473,13 @@ fn force_frontmost_application() {
                 None,
             );
         }
+        window.makeKeyAndOrderFront(None);
         window.setLevel(NSFloatingWindowLevel);
         window.setSharingType(NSWindowSharingType::ReadOnly);
-        window.orderFrontRegardless();
-        window.makeKeyAndOrderFront(None);
+        window_motion::show_with_entry_animation(&window);
     }
-    application.activate();
+    #[allow(deprecated)]
+    application.activateIgnoringOtherApps(true);
     NSRunningApplication::currentApplication()
         .activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
 }
@@ -1586,6 +1607,10 @@ impl NibApp {
 
                 let window_handle = cx
                     .open_window(options, |window, cx| {
+                        window.on_window_should_close(cx, |_window, _cx| {
+                            window_motion::request_exit();
+                            false
+                        });
                         let view = cx.new(|cx| {
                             let view = EditorView::new(file_path.clone(), cx);
                             view.focus_handle.focus(window);
@@ -1604,6 +1629,19 @@ impl NibApp {
                         window.activate_window();
                     });
                 });
+                // A menu-bar launcher can reclaim focus as its popover closes just
+                // after this process creates the GPUI window. Reassert activation
+                // after that handoff so nib:// reviews are visible immediately.
+                cx.spawn(async move |cx| {
+                    for delay in [Duration::from_millis(250), Duration::from_millis(750)] {
+                        cx.background_executor().timer(delay).await;
+                        let _ = cx.update(|cx| {
+                            cx.activate(true);
+                            force_frontmost_application();
+                        });
+                    }
+                })
+                .detach();
 
                 // Quit the app when the window is closed
                 cx.on_window_closed(|_cx| {
@@ -1696,8 +1734,14 @@ pub struct EditorView {
     sent_annotation_ids: std::collections::HashSet<u64>,
     /// Question/message from Claude to display to user
     claude_question: Option<String>,
-    /// Whether GUI should quit after sending response
-    quit_requested: bool,
+    #[cfg(target_os = "macos")]
+    video_player: Option<crate::video::VideoPlayer>,
+    #[cfg(target_os = "macos")]
+    video_frame: Option<Arc<RenderImage>>,
+    video_current_ms: u64,
+    video_duration_ms: u64,
+    pub(crate) video_annotation_times: std::collections::HashMap<AnnotationId, u64>,
+    video_error: Option<String>,
 }
 
 impl EditorView {
@@ -1708,6 +1752,11 @@ impl EditorView {
             .as_ref()
             .map(|p| p.extension().map(|e| e == "nib").unwrap_or(false))
             .unwrap_or(false);
+        let is_video_file = file_path
+            .as_ref()
+            .and_then(|path| path.extension())
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"));
 
         // For .nib files, we need to extract the image and open the NibFile
         let (actual_file_path, nib_file, nib_path, image_width, image_height) = if is_nib_file {
@@ -1784,6 +1833,22 @@ impl EditorView {
         let mut canvas = Canvas::new(image_width, image_height);
         canvas.set_viewport(canvas_width as f64, canvas_height as f64);
 
+        #[cfg(target_os = "macos")]
+        let (video_player, video_error) = if is_video_file {
+            match file_path
+                .as_deref()
+                .ok_or_else(|| "Video path is missing".to_string())
+                .and_then(crate::video::VideoPlayer::open)
+            {
+                Ok(player) => (Some(player), None),
+                Err(error) => (None, Some(error)),
+            }
+        } else {
+            (None, None)
+        };
+        #[cfg(not(target_os = "macos"))]
+        let video_error = is_video_file.then(|| "Native video review requires macOS".to_string());
+
         let mut view = Self {
             file_path: actual_file_path,
             annotations: Vec::new(),
@@ -1816,7 +1881,14 @@ impl EditorView {
             collab_session: None,
             sent_annotation_ids: std::collections::HashSet::new(),
             claude_question: None,
-            quit_requested: false,
+            #[cfg(target_os = "macos")]
+            video_player,
+            #[cfg(target_os = "macos")]
+            video_frame: None,
+            video_current_ms: 0,
+            video_duration_ms: 0,
+            video_annotation_times: std::collections::HashMap::new(),
+            video_error,
         };
 
         view.load_annotations();
@@ -1828,11 +1900,126 @@ impl EditorView {
         }
 
         // Start collab session for .nib files
-        if let Some(ref path) = nib_path {
+        let collab_path = nib_path
+            .clone()
+            .or_else(|| is_video_file.then(|| file_path.clone()).flatten());
+        if let Some(path) = collab_path {
             view.start_collab_session(path.clone());
         }
 
         view
+    }
+
+    fn is_video_review(&self) -> bool {
+        self.file_path
+            .as_ref()
+            .and_then(|path| path.extension())
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+    }
+
+    #[cfg(target_os = "macos")]
+    fn poll_video_frame(&mut self, cx: &mut Context<Self>) {
+        let Some(player) = self.video_player.as_ref() else {
+            return;
+        };
+        self.video_current_ms = player.current_ms();
+        self.video_duration_ms = player.duration_ms().max(self.video_duration_ms);
+        match player.copy_frame() {
+            Ok(Some(frame)) => {
+                if self.image_width != frame.width || self.image_height != frame.height {
+                    self.image_width = frame.width;
+                    self.image_height = frame.height;
+                    self.canvas = Canvas::new(frame.width, frame.height);
+                    self.canvas
+                        .set_viewport(self.canvas_width as f64, self.canvas_height as f64);
+                }
+                self.video_frame = Some(frame.image);
+                self.video_error = None;
+                cx.notify();
+            }
+            Ok(None) => {}
+            Err(error) if self.video_error.as_deref() != Some(error.as_str()) => {
+                self.video_error = Some(error.clone());
+                self.add_toast(format!("Video playback failed: {error}"), cx);
+            }
+            Err(_) => {}
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn poll_video_frame(&mut self, _cx: &mut Context<Self>) {}
+
+    #[cfg(target_os = "macos")]
+    fn toggle_video_playback(&mut self, cx: &mut Context<Self>) {
+        if let Some(player) = &self.video_player {
+            if player.is_playing() {
+                player.pause();
+            } else {
+                if self.video_duration_ms > 0
+                    && self.video_current_ms >= self.video_duration_ms.saturating_sub(50)
+                {
+                    player.seek_ms(0);
+                }
+                player.play();
+            }
+            cx.notify();
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn toggle_video_playback(&mut self, _cx: &mut Context<Self>) {}
+
+    #[cfg(target_os = "macos")]
+    fn pause_video(&self) {
+        if let Some(player) = &self.video_player {
+            player.pause();
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn pause_video(&self) {}
+
+    #[cfg(target_os = "macos")]
+    fn step_video_frame(&mut self, count: isize, cx: &mut Context<Self>) {
+        let Some(player) = &self.video_player else {
+            return;
+        };
+        player.step_frames(count);
+        self.video_current_ms = player.current_ms();
+        cx.notify();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn step_video_frame(&mut self, _count: isize, _cx: &mut Context<Self>) {}
+
+    fn anchor_video_annotation(&mut self, id: AnnotationId) {
+        if self.is_video_review() {
+            self.pause_video();
+            self.video_annotation_times
+                .insert(id, self.video_current_ms);
+        }
+    }
+
+    fn video_annotation_visible(is_playing: bool, current_ms: u64, anchor_ms: u64) -> bool {
+        !is_playing && current_ms.abs_diff(anchor_ms) <= 50
+    }
+
+    fn format_video_time(milliseconds: u64) -> String {
+        let seconds = milliseconds / 1000;
+        format!("{}:{:02}", seconds / 60, seconds % 60)
+    }
+
+    #[cfg(target_os = "macos")]
+    fn video_is_playing(&self) -> bool {
+        self.video_player
+            .as_ref()
+            .is_some_and(crate::video::VideoPlayer::is_playing)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn video_is_playing(&self) -> bool {
+        false
     }
 
     /// Start a collab session for the given .nib file path
@@ -1980,7 +2167,14 @@ impl EditorView {
         }
 
         // Build JSON payload for delta annotations
-        let items = Self::annotation_items_to_json(&delta_annotations);
+        let mut items = Self::annotation_items_to_json(&delta_annotations);
+        if self.is_video_review() {
+            for (item, annotation) in items.iter_mut().zip(delta_annotations.iter()) {
+                if let Some(time_ms) = self.video_annotation_times.get(&annotation.id) {
+                    item["timeMs"] = serde_json::json!(time_ms);
+                }
+            }
+        }
         let payload = Self::build_send_payload(
             decision,
             (!comment.is_empty()).then_some(comment.as_str()),
@@ -2004,7 +2198,7 @@ impl EditorView {
                         self.claude_question = None;
 
                         // Feedback is deliberately one-shot: one payload, then close.
-                        std::process::exit(0);
+                        window_motion::request_exit();
                     }
                     Err(e) => {
                         tracing::error!("Collab send failed: {}", e);
@@ -2026,7 +2220,6 @@ impl EditorView {
 
     /// Send to Claude and request GUI exit
     fn send_to_claude_and_quit(&mut self, cx: &mut Context<Self>) {
-        self.quit_requested = true;
         self.send_to_claude(cx);
     }
 
@@ -2086,8 +2279,7 @@ impl EditorView {
                 }
                 CollabMessage::RequestQuit { client_id: _ } => {
                     tracing::info!("Received quit request");
-                    self.quit_requested = true;
-                    cx.notify();
+                    window_motion::request_exit();
                 }
                 _ => {
                     // Other messages handled elsewhere or ignored
@@ -2760,6 +2952,7 @@ impl EditorView {
     fn process_tool_result(&mut self, result: ToolResult, cx: &mut Context<Self>) {
         match result {
             ToolResult::Created(annotation) => {
+                let annotation_id = annotation.id;
                 // Log with full content for text annotations
                 let details = match &annotation.annotation_type {
                     AnnotationType::Text {
@@ -2798,6 +2991,7 @@ impl EditorView {
                 tracing::info!("human created a{} {}", annotation.id.0, details);
                 self.record_edit(Edit::Added(annotation.clone()));
                 self.annotations.push(annotation);
+                self.anchor_video_annotation(annotation_id);
                 self.save_annotations(cx);
                 cx.notify();
             }
@@ -2806,6 +3000,7 @@ impl EditorView {
                 asset_hash,
                 asset,
             } => {
+                let annotation_id = annotation.id;
                 tracing::info!(
                     "human created a{} image ({}x{})",
                     annotation.id.0,
@@ -2815,6 +3010,7 @@ impl EditorView {
                 self.asset_cache.insert(asset_hash, asset);
                 self.record_edit(Edit::Added(annotation.clone()));
                 self.annotations.push(annotation);
+                self.anchor_video_annotation(annotation_id);
                 self.save_annotations(cx);
                 cx.notify();
             }
@@ -2857,6 +3053,7 @@ impl EditorView {
                     );
                     self.record_edit(Edit::Removed(removed));
                 }
+                self.video_annotation_times.remove(&id);
                 self.save_annotations(cx);
                 cx.notify();
             }
@@ -3664,6 +3861,9 @@ impl EditorView {
 
     /// Handle mouse down event on canvas
     fn handle_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        if self.is_video_review() {
+            self.pause_video();
+        }
         // If in text input mode, clicking away confirms the text (Figma behavior)
         if self.text_input_state.is_some() {
             self.confirm_text_input(cx);
@@ -3855,254 +4055,263 @@ impl EditorView {
             .flex()
             .justify_center()
             .child(
-                // Actual toolbar container
                 div()
                     .flex()
-                    .flex_row()
-                    .h(px(64.))
+                    .flex_col()
                     .bg(rgba(0x2c2c2ce8))
                     .rounded_xl()
                     .border_1()
                     .border_color(rgba(0xffffff24))
                     .shadow_lg()
-                    .px_3()
-                    .gap_1()
-                    .items_center()
-                    .children(tools_before_shapes.iter().map(|tool| {
-                        let is_active = *tool == self.active_tool;
-                        let tool_copy = *tool;
-
-                        div()
-                            .id(tool.name())
-                            .relative()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .w(px(56.))
-                            .h(px(56.))
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(if is_active {
-                                button_active_bg
-                            } else {
-                                rgba(0x3d3d3d00)
-                            })
-                            .hover(|style| style.bg(button_bg))
-                            .child(
-                                svg()
-                                    .path(tool.icon_path())
-                                    .size(px(28.))
-                                    .text_color(icon_color),
-                            )
-                            // Keyboard shortcut badge on top-right
-                            .child(render_shortcut_badge(
-                                tool.shortcut().to_ascii_uppercase().to_string(),
-                                text_color,
-                            ))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.select_tool(tool_copy, cx);
-                            }))
-                    }))
-                    // Shape tools (Rectangle/Ellipse/Line/Pencil/Highlight) collapsed into
-                    // one flyout button (see tool_flyout.rs and toolbar_layout_tests for
-                    // the width accounting this collapse relies on).
-                    .child({
-                        let current_icon = self.shape_flyout_icon();
-                        let is_group_active = tool_flyout::SHAPE_TOOLS.contains(&self.active_tool);
-                        let flyout_open = self.shape_flyout_open;
-
-                        div()
-                            .id("shape-flyout-button")
-                            .relative()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .w(px(56.))
-                            .h(px(56.))
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(if is_group_active || flyout_open {
-                                button_active_bg
-                            } else {
-                                rgba(0x3d3d3d00)
-                            })
-                            .hover(|style| style.bg(button_bg))
-                            .child(
-                                svg()
-                                    .path(current_icon.icon_path())
-                                    .size(px(28.))
-                                    .text_color(icon_color),
-                            )
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.shape_flyout_open = !this.shape_flyout_open;
-                                cx.notify();
-                            }))
-                            .when(flyout_open, |el| {
-                                el.child(self.render_shape_flyout(
-                                    button_bg,
-                                    button_active_bg,
-                                    text_color,
-                                    icon_color,
-                                    cx,
-                                ))
-                            })
-                    })
-                    .children(tools_after_shapes.iter().map(|tool| {
-                        let is_active = *tool == self.active_tool;
-                        let tool_copy = *tool;
-
-                        div()
-                            .id(tool.name())
-                            .relative()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .w(px(56.))
-                            .h(px(56.))
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(if is_active {
-                                button_active_bg
-                            } else {
-                                rgba(0x3d3d3d00)
-                            })
-                            .hover(|style| style.bg(button_bg))
-                            .child(
-                                svg()
-                                    .path(tool.icon_path())
-                                    .size(px(28.))
-                                    .text_color(icon_color),
-                            )
-                            // Keyboard shortcut badge on top-right
-                            .child(render_shortcut_badge(
-                                tool.shortcut().to_ascii_uppercase().to_string(),
-                                text_color,
-                            ))
-                            .on_click(cx.listener(move |this, _event, _window, cx| {
-                                this.select_tool(tool_copy, cx);
-                            }))
-                    }))
-                    // Separator
-                    .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgba(0xffffff33)))
-                    // Style selector: collapsed into one swatch button that toggles a popup
-                    // (see toolbar_layout_tests::toolbar_fits_default_window_with_margin for the
-                    // width accounting this collapse relies on to keep the default 1200x800
-                    // window uncropped)
-                    .child({
-                        let selected_color = self.style_state.effective_color();
-                        let gpui_selected_color = rgb(selected_color.r as u32 * 0x10000
-                            + selected_color.g as u32 * 0x100
-                            + selected_color.b as u32);
-                        let picker_open = self.style_picker_open;
-
-                        div()
-                            .id("style-picker-button")
-                            .relative()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .w(px(48.))
-                            .h(px(48.))
-                            .rounded_md()
-                            .cursor_pointer()
-                            .bg(if picker_open {
-                                button_active_bg
-                            } else {
-                                rgba(0x3d3d3d00)
-                            })
-                            .hover(|s| s.bg(button_bg))
-                            // Keyboard shortcut badge on top-right
-                            .child(render_shortcut_badge(
-                                STYLE_PICKER_SHORTCUT.to_ascii_uppercase().to_string(),
-                                text_color,
-                            ))
-                            // Selected color indicator circle
-                            .child(
-                                div()
-                                    .w(px(20.))
-                                    .h(px(20.))
-                                    .rounded_full()
-                                    .bg(gpui_selected_color)
-                                    .border_2()
-                                    .border_color(rgb(0xffffff)),
-                            )
-                            // Selected style name
-                            .child(
-                                div()
-                                    .text_color(text_color)
-                                    .text_size(px(9.))
-                                    .mt(px(2.))
-                                    .child(self.style_state.style.label()),
-                            )
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.style_picker_open = !this.style_picker_open;
-                                cx.notify();
-                            }))
-                            // Popup flyout body: style/color swatches + contextual style
-                            // rows (stroke width, fill, stroke style, arrowhead, font size,
-                            // blur intensity, opacity), rendered by style_panel.rs
-                            .when(picker_open, |el| {
-                                el.child(self.render_style_flyout(
-                                    button_bg,
-                                    button_active_bg,
-                                    text_color,
-                                    cx,
-                                ))
-                            })
+                    .when(self.is_video_review(), |toolbar| {
+                        toolbar.child(self.render_video_controls(cx))
                     })
                     .child(
+                        // Annotation tools and video transport share one toolbar surface.
                         div()
-                            .id("undo-button")
-                            .relative()
                             .flex()
+                            .flex_row()
+                            .h(px(64.))
+                            .px_3()
+                            .gap_1()
                             .items_center()
-                            .justify_center()
-                            .w(px(56.0))
-                            .h(px(56.0))
-                            .rounded_md()
-                            .cursor_pointer()
-                            .hover(|style| style.bg(button_bg))
-                            .text_color(icon_color)
-                            .child(render_shortcut_badge(UNDO_SHORTCUT_LABEL, text_color))
+                            .children(tools_before_shapes.iter().map(|tool| {
+                                let is_active = *tool == self.active_tool;
+                                let tool_copy = *tool;
+
+                                div()
+                                    .id(tool.name())
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(56.))
+                                    .h(px(56.))
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .bg(if is_active {
+                                        button_active_bg
+                                    } else {
+                                        rgba(0x3d3d3d00)
+                                    })
+                                    .hover(|style| style.bg(button_bg))
+                                    .child(
+                                        svg()
+                                            .path(tool.icon_path())
+                                            .size(px(28.))
+                                            .text_color(icon_color),
+                                    )
+                                    // Keyboard shortcut badge on top-right
+                                    .child(render_shortcut_badge(
+                                        tool.shortcut().to_ascii_uppercase().to_string(),
+                                        text_color,
+                                    ))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.select_tool(tool_copy, cx);
+                                    }))
+                            }))
+                            // Shape tools (Rectangle/Ellipse/Line/Pencil/Highlight) collapsed into
+                            // one flyout button (see tool_flyout.rs and toolbar_layout_tests for
+                            // the width accounting this collapse relies on).
+                            .child({
+                                let current_icon = self.shape_flyout_icon();
+                                let is_group_active =
+                                    tool_flyout::SHAPE_TOOLS.contains(&self.active_tool);
+                                let flyout_open = self.shape_flyout_open;
+
+                                div()
+                                    .id("shape-flyout-button")
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(56.))
+                                    .h(px(56.))
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .bg(if is_group_active || flyout_open {
+                                        button_active_bg
+                                    } else {
+                                        rgba(0x3d3d3d00)
+                                    })
+                                    .hover(|style| style.bg(button_bg))
+                                    .child(
+                                        svg()
+                                            .path(current_icon.icon_path())
+                                            .size(px(28.))
+                                            .text_color(icon_color),
+                                    )
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.shape_flyout_open = !this.shape_flyout_open;
+                                        cx.notify();
+                                    }))
+                                    .when(flyout_open, |el| {
+                                        el.child(self.render_shape_flyout(
+                                            button_bg,
+                                            button_active_bg,
+                                            text_color,
+                                            icon_color,
+                                            cx,
+                                        ))
+                                    })
+                            })
+                            .children(tools_after_shapes.iter().map(|tool| {
+                                let is_active = *tool == self.active_tool;
+                                let tool_copy = *tool;
+
+                                div()
+                                    .id(tool.name())
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(56.))
+                                    .h(px(56.))
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .bg(if is_active {
+                                        button_active_bg
+                                    } else {
+                                        rgba(0x3d3d3d00)
+                                    })
+                                    .hover(|style| style.bg(button_bg))
+                                    .child(
+                                        svg()
+                                            .path(tool.icon_path())
+                                            .size(px(28.))
+                                            .text_color(icon_color),
+                                    )
+                                    // Keyboard shortcut badge on top-right
+                                    .child(render_shortcut_badge(
+                                        tool.shortcut().to_ascii_uppercase().to_string(),
+                                        text_color,
+                                    ))
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.select_tool(tool_copy, cx);
+                                    }))
+                            }))
+                            // Separator
+                            .child(div().w(px(1.)).h(px(40.)).mx_2().bg(rgba(0xffffff33)))
+                            // Style selector: collapsed into one swatch button that toggles a popup
+                            // (see toolbar_layout_tests::toolbar_fits_default_window_with_margin for the
+                            // width accounting this collapse relies on to keep the default 1200x800
+                            // window uncropped)
+                            .child({
+                                let selected_color = self.style_state.effective_color();
+                                let gpui_selected_color = rgb(selected_color.r as u32 * 0x10000
+                                    + selected_color.g as u32 * 0x100
+                                    + selected_color.b as u32);
+                                let picker_open = self.style_picker_open;
+
+                                div()
+                                    .id("style-picker-button")
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(48.))
+                                    .h(px(48.))
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .bg(if picker_open {
+                                        button_active_bg
+                                    } else {
+                                        rgba(0x3d3d3d00)
+                                    })
+                                    .hover(|s| s.bg(button_bg))
+                                    // Keyboard shortcut badge on top-right
+                                    .child(render_shortcut_badge(
+                                        STYLE_PICKER_SHORTCUT.to_ascii_uppercase().to_string(),
+                                        text_color,
+                                    ))
+                                    // Selected color indicator circle
+                                    .child(
+                                        div()
+                                            .w(px(20.))
+                                            .h(px(20.))
+                                            .rounded_full()
+                                            .bg(gpui_selected_color)
+                                            .border_2()
+                                            .border_color(rgb(0xffffff)),
+                                    )
+                                    // Selected style name
+                                    .child(
+                                        div()
+                                            .text_color(text_color)
+                                            .text_size(px(9.))
+                                            .mt(px(2.))
+                                            .child(self.style_state.style.label()),
+                                    )
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.style_picker_open = !this.style_picker_open;
+                                        cx.notify();
+                                    }))
+                                    // Popup flyout body: style/color swatches + contextual style
+                                    // rows (stroke width, fill, stroke style, arrowhead, font size,
+                                    // blur intensity, opacity), rendered by style_panel.rs
+                                    .when(picker_open, |el| {
+                                        el.child(self.render_style_flyout(
+                                            button_bg,
+                                            button_active_bg,
+                                            text_color,
+                                            cx,
+                                        ))
+                                    })
+                            })
                             .child(
-                                svg()
-                                    .path("assets/icons/undo.svg")
-                                    .size(px(28.0))
-                                    .text_color(icon_color),
+                                div()
+                                    .id("undo-button")
+                                    .relative()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(56.0))
+                                    .h(px(56.0))
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(button_bg))
+                                    .text_color(icon_color)
+                                    .child(render_shortcut_badge(UNDO_SHORTCUT_LABEL, text_color))
+                                    .child(
+                                        svg()
+                                            .path("assets/icons/undo.svg")
+                                            .size(px(28.0))
+                                            .text_color(icon_color),
+                                    )
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.undo(cx);
+                                    })),
                             )
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.undo(cx);
-                            })),
-                    )
-                    .child(
-                        div()
-                            .id("redo-button")
-                            .relative()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .w(px(56.0))
-                            .h(px(56.0))
-                            .rounded_md()
-                            .cursor_pointer()
-                            .hover(|style| style.bg(button_bg))
-                            .text_color(icon_color)
-                            .child(render_shortcut_badge(REDO_SHORTCUT_LABEL, text_color))
                             .child(
-                                svg()
-                                    .path("assets/icons/redo.svg")
-                                    .size(px(28.0))
-                                    .text_color(icon_color),
-                            )
-                            .on_click(cx.listener(|this, _event, _window, cx| {
-                                this.redo(cx);
-                            })),
+                                div()
+                                    .id("redo-button")
+                                    .relative()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .w(px(56.0))
+                                    .h(px(56.0))
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(button_bg))
+                                    .text_color(icon_color)
+                                    .child(render_shortcut_badge(REDO_SHORTCUT_LABEL, text_color))
+                                    .child(
+                                        svg()
+                                            .path("assets/icons/redo.svg")
+                                            .size(px(28.0))
+                                            .text_color(icon_color),
+                                    )
+                                    .on_click(cx.listener(|this, _event, _window, cx| {
+                                        this.redo(cx);
+                                    })),
+                            ),
                     ),
-            ) // Close inner toolbar container
+            )
     }
 
     /// Render a single annotation as an overlay element
@@ -4648,6 +4857,130 @@ impl EditorView {
         }
     }
 
+    fn render_video_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let playing = self.video_is_playing();
+        let duration = self.video_duration_ms.max(1);
+        let progress_width = (self.canvas_width - 280.0).max(120.0);
+        let progress =
+            progress_width * self.video_current_ms.min(duration) as f32 / duration as f32;
+        let current = Self::format_video_time(self.video_current_ms);
+        let total = Self::format_video_time(self.video_duration_ms);
+
+        div()
+            .id("video-controls")
+            .h(px(48.0))
+            .px_4()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_3()
+            .border_b_1()
+            .border_color(rgba(0xffffff24))
+            .child(
+                div()
+                    .id("video-seek-back")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(32.0))
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(rgb(0xffffff))
+                    .hover(|style| style.bg(rgba(0xffffff18)))
+                    .child(
+                        svg()
+                            .path("assets/icons/previous-frame.svg")
+                            .size(px(20.0))
+                            .text_color(rgb(0xffffff)),
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.step_video_frame(-1, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .id("video-play-pause")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(32.0))
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(rgb(0xffffff))
+                    .hover(|style| style.bg(rgba(0xffffff18)))
+                    .child(
+                        svg()
+                            .path(if playing {
+                                "assets/icons/pause.svg"
+                            } else {
+                                "assets/icons/play.svg"
+                            })
+                            .size(px(20.0))
+                            .text_color(rgb(0xffffff)),
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.toggle_video_playback(cx);
+                    })),
+            )
+            .child(
+                div()
+                    .id("video-seek-forward")
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .size(px(32.0))
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(rgb(0xffffff))
+                    .hover(|style| style.bg(rgba(0xffffff18)))
+                    .child(
+                        svg()
+                            .path("assets/icons/next-frame.svg")
+                            .size(px(20.0))
+                            .text_color(rgb(0xffffff)),
+                    )
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.step_video_frame(1, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .relative()
+                    .w(px(progress_width))
+                    .h(px(6.0))
+                    .rounded(px(3.0))
+                    .bg(rgba(0xffffff33))
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .w(px(progress))
+                            .h_full()
+                            .rounded(px(3.0))
+                            .bg(rgb(0x90caf9)),
+                    )
+                    .children(self.video_annotation_times.values().map(|time_ms| {
+                        let left =
+                            progress_width * (*time_ms).min(duration) as f32 / duration as f32;
+                        div()
+                            .absolute()
+                            .left(px(left))
+                            .top(px(-3.0))
+                            .w(px(2.0))
+                            .h(px(12.0))
+                            .bg(rgb(0xffc857))
+                    })),
+            )
+            .child(
+                div()
+                    .min_w(px(78.0))
+                    .text_color(rgb(0xdddddd))
+                    .text_size(px(12.0))
+                    .child(format!("{current} / {total}")),
+            )
+    }
+
     /// Render the canvas area with image and annotations
     fn render_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let text_color = rgb(0xcccccc);
@@ -4682,15 +5015,53 @@ impl EditorView {
                 this.handle_file_drop(paths, window, cx);
             }));
 
-        // Add image if we have one - use explicit positioning to match annotation coordinates
-        if let Some(path) = &self.file_path {
+        #[cfg(target_os = "macos")]
+        let video_frame = self.video_frame.clone();
+        #[cfg(not(target_os = "macos"))]
+        let video_frame: Option<Arc<RenderImage>> = None;
+
+        // Add image or decoded video frame with explicit positioning so the
+        // annotation coordinate space remains identical for both subjects.
+        if let Some(frame) = video_frame {
             let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
             let scaled_width = self.image_width as f32 * scale;
             let scaled_height = self.image_height as f32 * scale;
-
-            // Use blur preview if available, otherwise original image
+            canvas = canvas.child(
+                div()
+                    .absolute()
+                    .left(px(offset_x))
+                    .top(px(offset_y))
+                    .w(px(scaled_width))
+                    .h(px(scaled_height))
+                    .rounded(px(4.0))
+                    .border_1()
+                    .border_color(rgba(0xffffff33))
+                    .overflow_hidden()
+                    .child(img(frame).size_full()),
+            );
+        } else if self.is_video_review() {
+            canvas = canvas.child(
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(if self.video_error.is_some() {
+                        rgb(0xff8888)
+                    } else {
+                        rgb(0xcccccc)
+                    })
+                    .child(
+                        self.video_error
+                            .clone()
+                            .unwrap_or_else(|| "Loading video...".to_string()),
+                    ),
+            );
+        } else if let Some(path) = &self.file_path {
+            let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
+            let scaled_width = self.image_width as f32 * scale;
+            let scaled_height = self.image_height as f32 * scale;
             let display_path = self.blur_preview_path.as_ref().unwrap_or(path);
-
             canvas = canvas.child(
                 div()
                     .absolute()
@@ -4741,7 +5112,18 @@ impl EditorView {
         // top -- required for ⌘]/⌘[ z-order to have any visible effect.
         let mut z_ordered: Vec<&Annotation> = self.annotations.iter().collect();
         z_ordered.sort_by_key(|a| a.z_index);
+        let playing = self.video_is_playing();
         for annotation in z_ordered {
+            if self.is_video_review()
+                && self
+                    .video_annotation_times
+                    .get(&annotation.id)
+                    .is_some_and(|anchor| {
+                        !Self::video_annotation_visible(playing, self.video_current_ms, *anchor)
+                    })
+            {
+                continue;
+            }
             // If we're editing this annotation, skip rendering it - we'll render the editable version
             let is_being_edited = self
                 .text_input_state
@@ -4764,7 +5146,6 @@ impl EditorView {
         if let Some(ref input_state) = self.text_input_state {
             canvas = canvas.child(self.render_inline_text_editing(input_state));
         }
-
         canvas
     }
 
@@ -4806,6 +5187,28 @@ impl EditorView {
             }
             // Text editing is owned by ResponseComposer while it has focus.
             return;
+        }
+
+        if self.is_video_review()
+            && !keystroke.modifiers.platform
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+        {
+            match keystroke.key.as_str() {
+                "space" => {
+                    self.toggle_video_playback(cx);
+                    return;
+                }
+                "left" => {
+                    self.step_video_frame(-1, cx);
+                    return;
+                }
+                "right" => {
+                    self.step_video_frame(1, cx);
+                    return;
+                }
+                _ => {}
+            }
         }
 
         // Plain Enter moves directly from canvas shortcuts into the response field.
@@ -5134,6 +5537,13 @@ mod feedback_payload_tests {
         let parsed: serde_json::Value = serde_json::from_str(&payload).unwrap();
         assert!(parsed.get("comment").is_none());
     }
+
+    #[test]
+    fn video_annotations_only_show_on_their_paused_frame() {
+        assert!(EditorView::video_annotation_visible(false, 1_000, 1_050));
+        assert!(!EditorView::video_annotation_visible(false, 1_000, 1_051));
+        assert!(!EditorView::video_annotation_visible(true, 1_000, 1_000));
+    }
 }
 
 #[cfg(test)]
@@ -5204,6 +5614,21 @@ mod window_layout_tests {
         assert_eq!(response_height_for_text_height(18.0), 88.0);
         assert_eq!(response_height_for_text_height(72.0), 88.0);
         assert_eq!(response_height_for_text_height(400.0), 88.0);
+    }
+
+    #[test]
+    fn video_transport_icons_are_embedded_in_the_portable_binary() {
+        for path in [
+            "assets/icons/play.svg",
+            "assets/icons/pause.svg",
+            "assets/icons/previous-frame.svg",
+            "assets/icons/next-frame.svg",
+        ] {
+            assert!(
+                embedded_icons::get(path).is_some(),
+                "{path} is not embedded"
+            );
+        }
     }
 
     #[test]
@@ -5346,6 +5771,7 @@ impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         // Schedule continuous re-renders to detect external file changes when idle
         window.request_animation_frame();
+        self.poll_video_frame(cx);
 
         // Update canvas dimensions from actual window size
         let viewport = window.viewport_size();
@@ -5353,8 +5779,9 @@ impl Render for EditorView {
         let viewport_height: f32 = viewport.height.into();
         let review_rail_visible = self.collab_session.is_some() || self.claude_question.is_some();
         self.canvas_width = canvas_viewport_width(viewport_width, review_rail_visible);
+        let toolbar_safe_area = TOOLBAR_SAFE_AREA + if self.is_video_review() { 48.0 } else { 0.0 };
         self.canvas_height =
-            (viewport_height - TITLEBAR_CONTENT_INSET - TOOLBAR_SAFE_AREA).max(1.0);
+            (viewport_height - TITLEBAR_CONTENT_INSET - toolbar_safe_area).max(1.0);
 
         // Sync canvas viewport (handles resize and initial fit-to-view)
         self.canvas

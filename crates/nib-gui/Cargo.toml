@@ -1,12 +1,13 @@
 [package]
 name = "nib-gui"
-version = "0.3.0"
+version = "0.3.1"
+publish = false
 edition.workspace = true
 rust-version.workspace = true
 description = "GPUI-based graphical editor for Nib"
 authors.workspace = true
 repository.workspace = true
-license-file.workspace = true
+license.workspace = true
 
 [dependencies]
 # Workspace crates
@@ -40,8 +41,15 @@ tokio.workspace = true
 anyhow.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
 objc2 = "0.6.4"
-objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSGraphics", "NSResponder", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow"] }
+objc2-app-kit = { version = "0.3.2", features = ["NSApplication", "NSGraphics", "NSImage", "NSResponder", "NSRunningApplication", "NSView", "NSVisualEffectView", "NSWindow"] }
+objc2-av-foundation = { version = "0.3.2", features = ["AVPlayer", "AVPlayerItem", "AVPlayerItemOutput", "objc2-core-media", "objc2-core-video"] }
+objc2-core-media = { version = "0.3.2", features = ["CMTime", "objc2"], default-features = false }
+objc2-core-video = { version = "0.3.2", features = ["CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn", "objc2"], default-features = false }
+objc2-core-image = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-quartz-core = "0.3.2"
 
 [dev-dependencies]
 tempfile.workspace = true

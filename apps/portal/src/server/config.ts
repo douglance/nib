@@ -4,15 +4,16 @@ export const HOST = process.env.HOST ?? "127.0.0.1";
 export const PORT = Number(process.env.PORT ?? 4070);
 export const CLIENT_PORT = Number(process.env.CLIENT_PORT ?? 4071);
 export const PUBLIC_BASE_URL =
-  process.env.PUBLIC_BASE_URL ?? "https://dave.tail5d92b4.ts.net";
+  process.env.PUBLIC_BASE_URL ?? "http://127.0.0.1:4070";
 export const LOCAL_BASE_URL = process.env.LOCAL_BASE_URL ?? `http://127.0.0.1:${PORT}`;
-export const TAILSCALE_HOSTNAME = process.env.TAILSCALE_HOSTNAME ?? "dave.tail5d92b4.ts.net";
+export const TAILSCALE_HOSTNAME = process.env.TAILSCALE_HOSTNAME ?? "";
 export const TAILSCALE_IP = process.env.TAILSCALE_IP ?? "";
 
 export const DATA_DIR = process.env.NIB_DATA_DIR ?? path.join(process.cwd(), ".nib");
 export const SCREENSHOT_DIR = path.join(DATA_DIR, "screenshots");
 export const ARTIFACT_DIR = path.join(DATA_DIR, "artifacts");
 export const ATTACHMENT_DIR = path.join(DATA_DIR, "attachments");
+export const ATTACHMENT_MAX_BYTES = Number(process.env.NIB_ATTACHMENT_MAX_BYTES ?? 512 * 1024 * 1024);
 
 export const ignoredPorts = new Set([
   9222,
