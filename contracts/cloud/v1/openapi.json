@@ -6,7 +6,7 @@
     "description": "Generate exactly one user-interface viewport image from a text brief and optional references."
   },
   "servers": [
-    { "url": "https://nib.doug-lance.workers.dev" }
+    { "url": "https://nibtool.com" }
   ],
   "paths": {
     "/internal/v1/generate": {

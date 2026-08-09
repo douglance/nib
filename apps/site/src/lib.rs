@@ -21,23 +21,23 @@ const SIGNUP_CSS: &str = r#"
 .signup{max-width:900px;padding:80px 0 120px}.signup h1{font-size:clamp(3rem,7vw,5.5rem)}.credential-panel{margin-top:42px;padding:30px;border:1px solid var(--line);border-radius:20px;background:linear-gradient(145deg,#141a22,#0d1117)}.credential-panel[hidden]{display:none}.credential-panel h2{margin:0 0 12px;font-size:1.4rem}.token-value{display:block;margin:22px 0;padding:18px 20px;overflow-wrap:anywhere;border:1px solid #a9cf4266;border-radius:14px;background:#090b0f;color:var(--accent);font:600 .9rem/1.65 ui-monospace,SFMono-Regular,Menlo,monospace}.credential-actions{display:flex;gap:12px;flex-wrap:wrap}.credential-plans{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:30px}.credential-plans form,.credential-plans button{width:100%}.credential-note{color:var(--muted);font-size:.88rem}.credential-status{min-height:1.4em;color:var(--accent);font-size:.85rem}.signup .button{margin-top:8px}@media(max-width:680px){.credential-panel{padding:22px}.credential-plans{grid-template-columns:1fr}.token-value{font-size:.78rem}}
 "#;
 
-const INSTALL_PROMPT: &str = r#"Install Nib for me. Follow https://nib.doug-lance.workers.dev/install-agent.md exactly. Configure it globally for this agent, install the Nib UI image skill globally, add the managed Nib instruction to this agent's global instruction file, preserve my existing settings, and verify that the generate_ui tool is available without generating an image."#;
+const INSTALL_PROMPT: &str = r#"Install Nib for me. Follow https://nibtool.com/install-agent.md exactly. Configure it globally for this agent, install the Nib UI image skill globally, add the managed Nib instruction to this agent's global instruction file, preserve my existing settings, and verify that the generate_ui tool is available without generating an image."#;
 
 const SEO_JSON_LD: &str = r#"{
   "@context": "https://schema.org",
   "@graph": [
     {
       "@type": "WebSite",
-      "@id": "https://nib.doug-lance.workers.dev/#website",
-      "url": "https://nib.doug-lance.workers.dev/",
+      "@id": "https://nibtool.com/#website",
+      "url": "https://nibtool.com/",
       "name": "Nib",
       "description": "A UI image generator for AI agents and developer tools."
     },
     {
       "@type": "SoftwareApplication",
-      "@id": "https://nib.doug-lance.workers.dev/#software",
+      "@id": "https://nibtool.com/#software",
       "name": "Nib",
-      "url": "https://nib.doug-lance.workers.dev/",
+      "url": "https://nibtool.com/",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Any",
       "description": "Generate one user-interface image from a text prompt and optional reference images for AI agents and developer tools.",
@@ -189,7 +189,7 @@ async fn home() -> Result {
         page_document(
             title: "UI image generator for AI agents | Nib",
             description: "Generate a UI image from a prompt and optional references. Use Nib when your model, coding agent, or workflow can describe an interface but cannot render it.",
-            canonical: "https://nib.doug-lance.workers.dev/",
+            canonical: "https://nibtool.com/",
             <main>
                 <section class="shell hero">
                     <div>
@@ -218,7 +218,7 @@ async fn pricing_page() -> Result {
         page_document(
             title: "UI image generation pricing | Nib",
             description: "Pricing for the Nib UI image generator. Try one eligible Fast 1K image free, then choose a plan and pay for generation usage.",
-            canonical: "https://nib.doug-lance.workers.dev/pricing",
+            canonical: "https://nibtool.com/pricing",
             <main>pricing()</main>
         )
     }
@@ -226,12 +226,12 @@ async fn pricing_page() -> Result {
 
 #[page("/privacy")]
 async fn privacy() -> Result {
-    view! { legal_document(title: "Privacy", canonical: "https://nib.doug-lance.workers.dev/privacy", copy: "Prompts are not written to the product database. AI Gateway request and response logging is disabled. Reference images are temporary and deleted after generation. Generated artifacts are private and retained for 1 day on the free trial, 7 days on Default, or 30 days on High. Trial abuse state stores a keyed network-cohort hash instead of the source IP address.") }
+    view! { legal_document(title: "Privacy", canonical: "https://nibtool.com/privacy", copy: "Prompts are not written to the product database. AI Gateway request and response logging is disabled. Reference images are temporary and deleted after generation. Generated artifacts are private and retained for 1 day on the free trial, 7 days on Default, or 30 days on High. Trial abuse state stores a keyed network-cohort hash instead of the source IP address.") }
 }
 
 #[page("/terms")]
 async fn terms() -> Result {
-    view! { legal_document(title: "Terms", canonical: "https://nib.doug-lance.workers.dev/terms", copy: "Nib provides one Fast 1K trial image to an eligible account without a card. Continued use requires a subscription, and subscription fees do not include generation usage. Each paid generation is metered at the published rate for its quality and resolution. You must have rights to every reference image you submit.") }
+    view! { legal_document(title: "Terms", canonical: "https://nibtool.com/terms", copy: "Nib provides one Fast 1K trial image to an eligible account without a card. Continued use requires a subscription, and subscription fees do not include generation usage. Each paid generation is metered at the published rate for its quality and resolution. You must have rights to every reference image you submit.") }
 }
 
 #[page("/account")]
@@ -240,7 +240,7 @@ async fn account() -> Result {
         page_document(
             title: "Nib account",
             description: "Manage your Nib subscription and UI image generation plan.",
-            canonical: "https://nib.doug-lance.workers.dev/account",
+            canonical: "https://nibtool.com/account",
             <main class="shell legal">
                 <div class="eyebrow">"Account"</div>
                 <h1>"Manage Nib."</h1>
@@ -268,7 +268,7 @@ async fn signup() -> Result {
         page_document(
             title: "Create a Nib account",
             description: "Create a free Nib account, save your revocable access token, and generate your first eligible Fast 1K UI image without a card.",
-            canonical: "https://nib.doug-lance.workers.dev/signup",
+            canonical: "https://nibtool.com/signup",
             <main class="shell signup">
                 <section data-signup-panel="">
                     <div class="eyebrow">"One free Fast 1K image"</div>
@@ -314,7 +314,7 @@ async fn docs() -> Result {
         page_document(
             title: "Generate UI images with MCP, CLI, or API | Nib",
             description: "Connect an AI agent to the Nib UI image generator with MCP, CLI, HTTP, OpenAPI, or an installable skill.",
-            canonical: "https://nib.doug-lance.workers.dev/docs",
+            canonical: "https://nibtool.com/docs",
             <main class="shell docs">
                 <div class="eyebrow">"Connect the image tool"</div>
                 <h1>"Give your agent UI image generation."</h1>
@@ -326,11 +326,11 @@ async fn docs() -> Result {
                 <h2>"CLI"</h2>
                 <pre>"nib generate \"A compact dark analytics dashboard for a fleet operator\" \\\n  --quality fast --resolution 1K --aspect 16:9 \\\n  --image-format png --output dashboard.png"</pre>
                 <h2 id="mcp">"MCP"</h2>
-                <p>"For local stdio MCP, run " <code>"nib --mcp"</code> " with " <code>"NIB_ACCESS_TOKEN"</code> " set. A Streamable HTTP client connects to " <code>"https://nib.doug-lance.workers.dev/mcp"</code> " without authentication for installation and tool discovery. Before the first image, add the Nib token as an " <code>"Authorization: Bearer"</code> " credential. The server exposes exactly one tool: " <code>"generate_ui"</code> "."</p>
+                <p>"For local stdio MCP, run " <code>"nib --mcp"</code> " with " <code>"NIB_ACCESS_TOKEN"</code> " set. A Streamable HTTP client connects to " <code>"https://nibtool.com/mcp"</code> " without authentication for installation and tool discovery. Before the first image, add the Nib token as an " <code>"Authorization: Bearer"</code> " credential. The server exposes exactly one tool: " <code>"generate_ui"</code> "."</p>
                 <pre>"{\n  \"prompt\": \"A calm account settings screen\",\n  \"references\": [],\n  \"quality\": \"fast\",\n  \"aspect\": \"16:9\",\n  \"resolution\": \"1K\",\n  \"format\": \"png\",\n  \"background\": false\n}"</pre>
                 <h2>"Agent discovery"</h2>
                 <p>"The OpenAPI document and installable skill are public. Authentication is required only when the agent calls the generation tool."</p>
-                <pre>"https://nib.doug-lance.workers.dev/openapi.json\nhttps://nib.doug-lance.workers.dev/.well-known/skills/generate/SKILL.md"</pre>
+                <pre>"https://nibtool.com/openapi.json\nhttps://nibtool.com/.well-known/skills/generate/SKILL.md"</pre>
                 <h2>"References"</h2>
                 <p>"Pass up to three PNG, JPEG, or WebP files with repeated " <code>"--ref"</code> " options. Nib deletes temporary references after the generation attempt."</p>
             </main>
