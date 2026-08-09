@@ -6,7 +6,7 @@
   "workers_dev": false,
   "observability": { "enabled": true },
   "assets": {
-    "directory": "./dist/assets",
+    "directory": "./dist",
     "run_worker_first": false,
     "html_handling": "auto-trailing-slash"
   },
