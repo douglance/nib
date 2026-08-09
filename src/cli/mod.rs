@@ -22,6 +22,7 @@ pub mod auth;
 pub mod commands;
 pub mod fields;
 mod incurs_commands;
+pub mod protocol_commands;
 pub mod sessions;
 #[doc(hidden)]
 pub mod web_feedback;

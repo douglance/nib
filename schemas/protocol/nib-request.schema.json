@@ -1,0 +1,689 @@
+{
+  "$defs": {
+    "ApprovalPolicy": {
+      "oneOf": [
+        {
+          "additionalProperties": true,
+          "properties": {
+            "requirements": {
+              "items": {
+                "$ref": "#/$defs/ApprovalRequirement"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "all",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "requirements"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "requirements": {
+              "items": {
+                "$ref": "#/$defs/ApprovalRequirement"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "any",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "requirements"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "reviewers": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "threshold": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": {
+              "const": "quorum",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reviewers",
+            "threshold"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ApprovalRequirement": {
+      "oneOf": [
+        {
+          "additionalProperties": true,
+          "properties": {
+            "count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "count"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "agentType": {
+              "type": "string"
+            },
+            "type": {
+              "const": "agent",
+              "type": "string"
+            },
+            "verdict": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "agentType",
+            "verdict"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "type": {
+              "const": "user",
+              "type": "string"
+            },
+            "userId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "userId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "teamId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "team",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "teamId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "audience",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "count"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Artifact": {
+      "additionalProperties": true,
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "mimeType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "relationships": {
+          "items": {
+            "$ref": "#/$defs/ArtifactRelationship"
+          },
+          "type": "array"
+        },
+        "source": {
+          "$ref": "#/$defs/ArtifactSource"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ArtifactRelationship": {
+      "additionalProperties": true,
+      "properties": {
+        "artifactId": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "artifactId"
+      ],
+      "type": "object"
+    },
+    "ArtifactSource": {
+      "oneOf": [
+        {
+          "additionalProperties": true,
+          "properties": {
+            "byteLength": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "path": {
+              "type": "string"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "type": {
+              "const": "embedded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "sha256",
+            "byteLength"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "byteLength": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "sha256": {
+              "type": "string"
+            },
+            "type": {
+              "const": "external",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url",
+            "sha256",
+            "byteLength"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Continuation": {
+      "oneOf": [
+        {
+          "additionalProperties": true,
+          "properties": {
+            "type": {
+              "const": "webhook",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "type": {
+              "const": "polling",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "type": {
+              "const": "sdk_wait",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "repository": {
+              "type": "string"
+            },
+            "type": {
+              "const": "github_event",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "repository"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "adapter": {
+              "type": "string"
+            },
+            "destination": {
+              "type": "string"
+            },
+            "type": {
+              "const": "queue",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "adapter",
+            "destination"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "type": {
+              "const": "cli_wait",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "DecisionOption": {
+      "additionalProperties": true,
+      "properties": {
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "DecisionRequirement": {
+      "additionalProperties": true,
+      "properties": {
+        "options": {
+          "items": {
+            "$ref": "#/$defs/DecisionOption"
+          },
+          "type": "array"
+        },
+        "prompt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "EscalationPolicy": {
+      "additionalProperties": true,
+      "properties": {
+        "afterSeconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to": {
+          "$ref": "#/$defs/ReviewerTarget"
+        }
+      },
+      "required": [
+        "afterSeconds",
+        "to"
+      ],
+      "type": "object"
+    },
+    "ReviewerIdentity": {
+      "additionalProperties": true,
+      "properties": {
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "type": "object"
+    },
+    "ReviewerTarget": {
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ],
+      "type": "object"
+    },
+    "RoutingPolicy": {
+      "additionalProperties": true,
+      "properties": {
+        "escalation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EscalationPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reviewers": {
+          "items": {
+            "$ref": "#/$defs/ReviewerTarget"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Source": {
+      "additionalProperties": true,
+      "properties": {
+        "actor": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewerIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "system": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    },
+    "Subject": {
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://nibtool.com/schemas/v1/nib-request.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "artifacts": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Artifact"
+      },
+      "type": "array"
+    },
+    "continuation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Continuation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "createdAt": {
+      "type": "string"
+    },
+    "decision": {
+      "$ref": "#/$defs/DecisionRequirement"
+    },
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expiresAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "formatVersion": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "metadata": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "policy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ApprovalPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "revision": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "routing": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RoutingPolicy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "source": {
+      "$ref": "#/$defs/Source"
+    },
+    "subject": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Subject"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "title": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "formatVersion",
+    "revision",
+    "title",
+    "source",
+    "decision",
+    "createdAt"
+  ],
+  "title": "NibRequest",
+  "type": "object"
+}

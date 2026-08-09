@@ -33,6 +33,9 @@ const forbiddenContent = [
 ];
 
 const failures = [];
+const publishableCargoManifests = new Set([
+  'crates/nib-protocol/Cargo.toml',
+]);
 for (const file of tracked) {
   if (forbiddenPaths.some((pattern) => pattern.test(file))) {
     failures.push(`${file}: private runtime path`);
@@ -55,7 +58,13 @@ if (!rootLicense.includes('Apache License') || !rootLicense.includes('Version 2.
 const cargoManifests = tracked.filter((file) => file.endsWith('Cargo.toml'));
 for (const manifest of cargoManifests) {
   const text = fs.readFileSync(path.join(root, manifest), 'utf8');
-  if (!text.includes('publish = false')) failures.push(`${manifest}: missing publish = false`);
+  if (publishableCargoManifests.has(manifest)) {
+    if (!text.includes('license = "Apache-2.0"') && !text.includes('license.workspace = true')) {
+      failures.push(`${manifest}: publishable open-core crate must use Apache-2.0 metadata`);
+    }
+  } else if (!text.includes('publish = false')) {
+    failures.push(`${manifest}: missing publish = false`);
+  }
   if (text.includes('license-file')) failures.push(`${manifest}: uses license-file instead of Apache-2.0 metadata`);
 }
 

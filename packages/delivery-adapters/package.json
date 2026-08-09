@@ -1,0 +1,29 @@
+{
+  "name": "@nib/delivery-adapters",
+  "version": "0.1.0",
+  "description": "Messaging and notification delivery adapters for Nib Request review links",
+  "license": "Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --import tsx --test 'test/**/*.test.ts'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@nib/protocol": "file:../protocol"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3"
+  }
+}

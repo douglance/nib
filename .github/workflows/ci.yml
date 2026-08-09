@@ -23,6 +23,45 @@ jobs:
       - run: npm test
         working-directory: npm
 
+  typescript-packages:
+    name: TypeScript - ${{ matrix.directory }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory:
+          - apps/cloudflare
+          - packages/protocol
+          - packages/sdk
+          - packages/playwright
+          - packages/cypress
+          - packages/delivery-adapters
+          - integrations/github-action
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+      - run: npm ci
+        working-directory: ${{ matrix.directory }}
+      - run: npm run check --if-present
+        working-directory: ${{ matrix.directory }}
+      - run: npm run typecheck --if-present
+        working-directory: ${{ matrix.directory }}
+      - run: npm test --if-present
+        working-directory: ${{ matrix.directory }}
+
+  public-site:
+    name: Public site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --manifest-path apps/site/Cargo.toml
+      - run: cargo run --manifest-path apps/site/Cargo.toml -- --export "$RUNNER_TEMP/nib-site"
+
   check:
     name: Check
     runs-on: macos-14

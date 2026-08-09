@@ -138,6 +138,14 @@ struct RequestArgs {
     request_id: String,
 }
 
+#[derive(Debug, Deserialize, incurs::Args)]
+struct RequestPackArgs {
+    /// .nib request pack.
+    file: PathBuf,
+    /// Durable request ID inside the pack.
+    request_id: String,
+}
+
 #[derive(Debug, Deserialize, incurs::Options)]
 struct CreateRequestOptions {
     /// Question shown to the reviewer.
@@ -156,9 +164,48 @@ struct WaitOptions {
 }
 
 #[derive(Debug, Deserialize, incurs::Options)]
+struct RequestActionOptions {
+    /// Optional response comment.
+    #[incurs(alias = "m")]
+    comment: Option<String>,
+}
+
+#[derive(Debug, Deserialize, incurs::Options)]
+struct RequestReviseOptions {
+    /// Metadata JSON object to merge when the request is still mutable.
+    metadata: Option<String>,
+    /// Request status to set.
+    status: Option<String>,
+}
+
+#[derive(Debug, Deserialize, incurs::Options)]
 struct ReviewRequestOptions {
     /// Portal base URL.
     portal: Option<String>,
+}
+
+#[derive(Debug, Deserialize, incurs::Options)]
+struct RequestRevisionOptions {
+    /// Request revision.
+    #[incurs(default = 1)]
+    revision: u64,
+}
+
+#[derive(Debug, Deserialize, incurs::Options)]
+struct PackOptions {
+    /// Output .nib file.
+    #[incurs(alias = "o")]
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize, incurs::Options)]
+struct UnpackOptions {
+    /// Request revision.
+    #[incurs(default = 1)]
+    revision: u64,
+    /// Output directory.
+    #[incurs(alias = "o")]
+    output: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize, incurs::Options)]
@@ -820,19 +867,46 @@ fn mcp_options(policy: Policy) -> McpCommandOptions {
 }
 
 fn typed_request_group() -> Cli {
-    let create = CommandDef::typed::<
-        FileArgs,
-        CreateRequestOptions,
-        (),
-        super::web_feedback::PublishedFeedback,
-        _,
-        _,
-    >(
+    let get = CommandDef::typed::<RequestArgs, (), (), Value, _, _>(
+        "get",
+        |ctx: TypedContext<RequestArgs, (), ()>| async move {
+            match super::web_feedback::get_request_value(&ctx.args.request_id).await {
+                Ok(request) => TypedResult::ok(request),
+                Err(error) => TypedResult::error("REQUEST_GET_FAILED", error.to_string()),
+            }
+        },
+    )
+    .description("Read one durable request")
+    .examples(vec![Example {
+        command: "req_123".into(),
+        description: Some("Read the current request state".into()),
+    }])
+    .mcp(mcp_options(Policy {
+        read_only: true,
+        idempotent: true,
+        open_world: true,
+        mcp_name: Some("get_request"),
+        ..EXTERNAL_EFFECT
+    }))
+    .done();
+
+    let create = CommandDef::typed::<FileArgs, CreateRequestOptions, (), Value, _, _>(
         "create",
         |ctx: TypedContext<FileArgs, CreateRequestOptions, ()>| async move {
             let file = ctx.args.file;
             let question = ctx.options.question;
             let annotations = ctx.options.annotations;
+            if file.extension().and_then(|extension| extension.to_str()) == Some("json") {
+                match super::web_feedback::create_v1_request_value(&file).await {
+                    Ok(response) => return TypedResult::ok(response),
+                    Err(request_error) => {
+                        return TypedResult::error(
+                            "REQUEST_CREATE_FAILED",
+                            request_error.to_string(),
+                        )
+                    }
+                }
+            }
             match tokio::task::spawn_blocking(move || {
                 super::web_feedback::create_review_request(
                     &file,
@@ -850,7 +924,12 @@ fn typed_request_group() -> Cli {
                         }],
                         description: Some("Continue this durable request:".into()),
                     };
-                    TypedResult::ok_with_cta(published, cta)
+                    match serde_json::to_value(published) {
+                        Ok(value) => TypedResult::ok_with_cta(value, cta),
+                        Err(error) => {
+                            TypedResult::error("REQUEST_CREATE_FAILED", error.to_string())
+                        }
+                    }
                 }
                 Ok(Err(request_error)) => {
                     TypedResult::error("REQUEST_CREATE_FAILED", request_error.to_string())
@@ -869,6 +948,50 @@ fn typed_request_group() -> Cli {
     .hint("Use request wait with the returned request ID.")
     .mcp(mcp_options(Policy {
         mcp_name: Some("create_review_request"),
+        ..EXTERNAL_EFFECT
+    }))
+    .done();
+
+    let revise = CommandDef::typed::<RequestArgs, RequestReviseOptions, (), Value, _, _>(
+        "revise",
+        |ctx: TypedContext<RequestArgs, RequestReviseOptions, ()>| async move {
+            let metadata = match ctx.options.metadata {
+                Some(raw) => match serde_json::from_str::<Value>(&raw) {
+                    Ok(Value::Object(map)) => Some(Value::Object(map)),
+                    Ok(_) => {
+                        return TypedResult::error(
+                            "REQUEST_REVISE_FAILED",
+                            "--metadata must be a JSON object",
+                        )
+                    }
+                    Err(error) => {
+                        return TypedResult::error(
+                            "REQUEST_REVISE_FAILED",
+                            format!("Invalid metadata JSON: {error}"),
+                        )
+                    }
+                },
+                None => None,
+            };
+            match super::web_feedback::revise_request_value(
+                &ctx.args.request_id,
+                metadata,
+                ctx.options.status.as_deref(),
+            )
+            .await
+            {
+                Ok(request) => TypedResult::ok(request),
+                Err(error) => TypedResult::error("REQUEST_REVISE_FAILED", error.to_string()),
+            }
+        },
+    )
+    .description("Patch mutable durable request metadata or status")
+    .examples(vec![Example {
+        command: "req_123 --metadata '{\"phase\":\"qa\"}'".into(),
+        description: Some("Merge metadata into a mutable request".into()),
+    }])
+    .mcp(mcp_options(Policy {
+        mcp_name: Some("revise_request"),
         ..EXTERNAL_EFFECT
     }))
     .done();
@@ -901,6 +1024,34 @@ fn typed_request_group() -> Cli {
     }))
     .done();
 
+    let watch = CommandDef::typed::<RequestArgs, WaitOptions, (), Vec<Value>, _, _>(
+        "watch",
+        |ctx: TypedContext<RequestArgs, WaitOptions, ()>| async move {
+            match super::web_feedback::watch_request_values(
+                &ctx.args.request_id,
+                ctx.options.timeout,
+            )
+            .await
+            {
+                Ok(events) => TypedResult::ok(events),
+                Err(error) => TypedResult::error("REQUEST_WATCH_FAILED", error.to_string()),
+            }
+        },
+    )
+    .description("Read a request and optionally wait for its final response")
+    .examples(vec![Example {
+        command: "req_123 -t 30".into(),
+        description: Some("Read the current state and wait up to 30 seconds".into()),
+    }])
+    .mcp(mcp_options(Policy {
+        read_only: true,
+        idempotent: true,
+        open_world: true,
+        mcp_name: Some("watch_request"),
+        ..EXTERNAL_EFFECT
+    }))
+    .done();
+
     let review = CommandDef::typed::<RequestArgs, ReviewRequestOptions, (), Value, _, _>(
         "review",
         |ctx: TypedContext<RequestArgs, ReviewRequestOptions, ()>| async move {
@@ -922,16 +1073,120 @@ fn typed_request_group() -> Cli {
         description: Some("Review an existing request in the native GPUI window".into()),
     }])
     .mcp(mcp_options(Policy {
+        mcp_name: Some("open_request"),
+        ..EXTERNAL_EFFECT
+    }))
+    .done();
+
+    let open = CommandDef::typed::<RequestArgs, ReviewRequestOptions, (), Value, _, _>(
+        "open",
+        |ctx: TypedContext<RequestArgs, ReviewRequestOptions, ()>| async move {
+            let _ = ctx.options.portal;
+            match super::web_feedback::get_request_value(&ctx.args.request_id).await {
+                Ok(request) => TypedResult::ok(request),
+                Err(open_error) => {
+                    TypedResult::error("REQUEST_OPEN_FAILED", open_error.to_string())
+                }
+            }
+        },
+    )
+    .description("Open a hosted v1 request record")
+    .examples(vec![Example {
+        command: "req_123".into(),
+        description: Some("Open an existing request in the native reviewer".into()),
+    }])
+    .mcp(mcp_options(Policy {
         mcp_name: Some("open_review_request"),
+        ..EXTERNAL_EFFECT
+    }))
+    .done();
+
+    let approve = request_decision_command(
+        "approve",
+        "approved",
+        "Approve a durable request",
+        "approve_request",
+    );
+    let reject = request_decision_command(
+        "reject",
+        "rejected",
+        "Reject a durable request",
+        "reject_request",
+    );
+    let request_changes = request_decision_command(
+        "request-changes",
+        "changes_requested",
+        "Request changes on a durable request",
+        "request_changes",
+    );
+
+    let cancel = CommandDef::typed::<RequestArgs, (), (), Value, _, _>(
+        "cancel",
+        |ctx: TypedContext<RequestArgs, (), ()>| async move {
+            match super::web_feedback::cancel_request_value(&ctx.args.request_id).await {
+                Ok(request) => TypedResult::ok(request),
+                Err(error) => TypedResult::error("REQUEST_CANCEL_FAILED", error.to_string()),
+            }
+        },
+    )
+    .description("Cancel a durable request")
+    .examples(vec![Example {
+        command: "req_123".into(),
+        description: Some("Mark a request canceled".into()),
+    }])
+    .mcp(mcp_options(Policy {
+        destructive: true,
+        mcp_name: Some("cancel_request"),
         ..EXTERNAL_EFFECT
     }))
     .done();
 
     Cli::create("request")
         .description("Create, review, and wait for durable human requests")
+        .command("get", get)
         .command("create", create)
+        .command("revise", revise)
+        .command("open", open)
         .command("review", review)
         .command("wait", wait)
+        .command("watch", watch)
+        .command("approve", approve)
+        .command("reject", reject)
+        .command("request-changes", request_changes)
+        .command("cancel", cancel)
+}
+
+fn request_decision_command(
+    name: &'static str,
+    decision: &'static str,
+    description: &'static str,
+    mcp_name: &'static str,
+) -> CommandDef {
+    CommandDef::typed::<RequestArgs, RequestActionOptions, (), Value, _, _>(
+        name,
+        move |ctx: TypedContext<RequestArgs, RequestActionOptions, ()>| async move {
+            match super::web_feedback::submit_request_decision(
+                &ctx.args.request_id,
+                decision,
+                ctx.options.comment.as_deref(),
+            )
+            .await
+            {
+                Ok(request) => TypedResult::ok(request),
+                Err(error) => TypedResult::error("REQUEST_DECISION_FAILED", error.to_string()),
+            }
+        },
+    )
+    .description(description)
+    .examples(vec![Example {
+        command: "req_123 -m \"Looks correct\"".into(),
+        description: Some(description.into()),
+    }])
+    .mcp(mcp_options(Policy {
+        mcp_name: Some(mcp_name),
+        ..EXTERNAL_EFFECT
+    }))
+    .done()
 }
 
 fn typed_auth_group() -> Cli {
@@ -1252,6 +1507,118 @@ fn typed_record_group() -> Cli {
         .command("status", status)
         .command("stop", stop)
         .command("wait", wait)
+}
+
+fn pack_command() -> CommandDef {
+    CommandDef::typed::<FileArgs, PackOptions, (), super::protocol_commands::PackedRequest, _, _>(
+        "pack",
+        |ctx: TypedContext<FileArgs, PackOptions, ()>| async move {
+            match tokio::task::spawn_blocking(move || {
+                super::protocol_commands::pack_request(
+                    &ctx.args.file,
+                    ctx.options.output.as_deref(),
+                )
+            })
+            .await
+            {
+                Ok(Ok(summary)) => TypedResult::ok(summary),
+                Ok(Err(error)) => TypedResult::error("PACK_REQUEST_FAILED", error.to_string()),
+                Err(error) => TypedResult::error("PACK_REQUEST_FAILED", error.to_string()),
+            }
+        },
+    )
+    .description("Pack a portable request JSON document into a .nib request pack")
+    .examples(vec![Example {
+        command: "request.json -o request.nib".into(),
+        description: Some("Pack request JSON and embedded artifact bytes".into()),
+    }])
+    .mcp(mcp_options(Policy {
+        mcp_name: Some("pack_request"),
+        ..LOCAL_EFFECT
+    }))
+    .done()
+}
+
+fn unpack_command() -> CommandDef {
+    CommandDef::typed::<
+        RequestPackArgs,
+        UnpackOptions,
+        (),
+        super::protocol_commands::UnpackedRequest,
+        _,
+        _,
+    >(
+        "unpack",
+        |ctx: TypedContext<RequestPackArgs, UnpackOptions, ()>| async move {
+            let output = ctx.options.output.unwrap_or_else(|| PathBuf::from("."));
+            match tokio::task::spawn_blocking(move || {
+                super::protocol_commands::unpack_request(
+                    &ctx.args.file,
+                    &ctx.args.request_id,
+                    ctx.options.revision,
+                    &output,
+                )
+            })
+            .await
+            {
+                Ok(Ok(summary)) => TypedResult::ok(summary),
+                Ok(Err(error)) => TypedResult::error("UNPACK_REQUEST_FAILED", error.to_string()),
+                Err(error) => TypedResult::error("UNPACK_REQUEST_FAILED", error.to_string()),
+            }
+        },
+    )
+    .description("Unpack a .nib request pack into request JSON and embedded artifacts")
+    .examples(vec![Example {
+        command: "request.nib req_123 -o unpacked".into(),
+        description: Some("Unpack revision 1 into a directory".into()),
+    }])
+    .mcp(mcp_options(Policy {
+        mcp_name: Some("unpack_request"),
+        ..LOCAL_EFFECT
+    }))
+    .done()
+}
+
+fn inspect_pack_command() -> CommandDef {
+    CommandDef::typed::<
+        RequestPackArgs,
+        RequestRevisionOptions,
+        (),
+        super::protocol_commands::InspectedRequestPack,
+        _,
+        _,
+    >(
+        "inspect",
+        |ctx: TypedContext<RequestPackArgs, RequestRevisionOptions, ()>| async move {
+            match tokio::task::spawn_blocking(move || {
+                super::protocol_commands::inspect_request_pack(
+                    &ctx.args.file,
+                    &ctx.args.request_id,
+                    ctx.options.revision,
+                )
+            })
+            .await
+            {
+                Ok(Ok(summary)) => TypedResult::ok(summary),
+                Ok(Err(error)) => {
+                    TypedResult::error("INSPECT_REQUEST_PACK_FAILED", error.to_string())
+                }
+                Err(error) => TypedResult::error("INSPECT_REQUEST_PACK_FAILED", error.to_string()),
+            }
+        },
+    )
+    .description("Inspect a .nib request pack as structured JSON")
+    .examples(vec![Example {
+        command: "request.nib req_123 --json".into(),
+        description: Some("Inspect request pack metadata and artifact availability".into()),
+    }])
+    .mcp(mcp_options(Policy {
+        read_only: true,
+        idempotent: true,
+        mcp_name: Some("inspect_request_pack"),
+        ..LOCAL_READ
+    }))
+    .done()
 }
 
 fn typed_media_group() -> Cli {
@@ -1842,6 +2209,9 @@ pub fn register(cli: Cli) -> Cli {
             "generate",
             nib_ui::catalog::build_generate_command(std::sync::Arc::new(EnvUiGenerator)),
         )
+        .command("pack", pack_command())
+        .command("unpack", unpack_command())
+        .command("inspect", inspect_pack_command())
         .group(request)
         .group(record)
         .group(media)
@@ -2791,8 +3161,18 @@ mod tests {
             .expect("the canonical command graph must not expose duplicate tool names");
         for name in [
             "create_review_request",
+            "get_request",
+            "revise_request",
             "open_review_request",
             "wait_for_request",
+            "watch_request",
+            "approve_request",
+            "reject_request",
+            "request_changes",
+            "cancel_request",
+            "pack_request",
+            "unpack_request",
+            "inspect_request_pack",
             "start_recording",
             "recording_status",
             "stop_recording",

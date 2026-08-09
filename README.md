@@ -1,10 +1,19 @@
 # Nib
 
-Open visual tooling for AI agents: capture, annotation, human feedback, and hosted UI image generation.
+The fastest way for humans to review AI-generated software.
 
-Nib gives agents a single open CLI for working with visual context. Local capture, annotation, review, and the hosted `generate_ui` client share one command catalog and MCP server.
+Nib is the human-decision layer for autonomous software. Software sends a portable request containing evidence, policy, and the decision it needs. A human or review agent returns a structured decision that the originating software can consume.
 
-The CLI, local applications, client library, public site, and service contracts are open source under Apache 2.0. The hosted image-generation runtime is a separate proprietary service; see [the open-core boundary](docs/open-core.md).
+Tests verify behavior. Nib verifies intent.
+
+```ts
+const decision = await nib.request({
+  title: "Approve checkout redesign",
+  artifacts,
+}).wait();
+```
+
+The protocol, `.nib` format, CLI, SDKs, reviewer, and integrations are open source under Apache 2.0. Nib Cloud provides the managed network, billing, routing, delivery, and organization controls. See [the protocol](docs/protocol.md), [hosted request API](docs/request-api.md), and [open-core boundary](docs/open-core.md).
 
 ## Installation
 
@@ -67,9 +76,28 @@ nib generate "A compact dark fleet analytics dashboard" --output dashboard.png
 | `grid` | Add coordinate grid overlay |
 | `feedback` | Wait for human feedback in GPUI or a full-color terminal review window |
 | `review` | Open an existing feedback session in the terminal reviewer |
+| `request create` | Publish a durable request and return its request ID and review link |
+| `request get` | Read the current canonical request state |
+| `request wait` | Wait for a final structured decision without keeping CI alive |
+| `request watch` | Read replayable request events |
+| `request approve`, `request reject`, `request request-changes` | Submit a machine-readable decision |
+| `pack`, `unpack`, `inspect` | Create, extract, or inspect a portable SQLite `.nib` request pack |
 | `watch` | Watch a .nib file for annotation changes |
 | `list` | List recent captures |
 | `info` | Show image and annotation details |
+
+Create a request directly from protocol JSON:
+
+```bash
+nib request create request.json
+# { "request": { "id": "req_..." }, "reviewLink": "https://nibtool.com/r/..." }
+
+nib request wait req_...
+```
+
+The GitHub Action, TypeScript SDK, Playwright reporter, Cypress adapter, and
+delivery adapters live in [`integrations`](integrations) and [`packages`](packages).
+Review links work in a browser without installing Nib or creating an account.
 
 ## CLI Annotation Workflow
 
@@ -170,25 +198,28 @@ cargo build --release
 codex mcp add nib -- /absolute/path/to/nib --mcp
 ```
 
-## Hosted UI generation
+## Optional UI generation
 
 The public `nib-ui` crate and generated command catalog expose `generate_ui`
-through the hosted Nib service. The public interface is documented at
+through the hosted Nib service as an artifact generator. It is not the Nib Request primitive. The public interface is documented at
 <https://nibtool.com> and versioned under
-[`contracts/cloud/v1`](contracts/cloud/v1). Hosted generation, authentication,
-billing, abuse controls, storage, and operations are not part of this Apache
-repository.
+[`contracts/cloud/v1`](contracts/cloud/v1). Production model orchestration, account controls, billing, abuse controls, and operations are private Nib Cloud components.
 
 The public site source lives in `apps/site`. From the repository root, build it
 with `cargo run --manifest-path apps/site/Cargo.toml -- --export apps/site/dist`
 or deploy its Worker with `wrangler deploy --config apps/site/wrangler.jsonc`.
 
-## File Format
+## `.nib` file format
 
-Nib uses `.nib` files - SQLite databases containing:
-- Original image data
-- Annotations in QML format
-- Metadata and history
+Nib uses portable SQLite `.nib` files. Schema version 4 stores:
+
+- Versioned Nib Request JSON
+- Content-addressed image, video, HTML, JSON, and file bytes
+- External artifact references with byte length and SHA-256 integrity
+- Append-only decisions, feedback, and replayable events
+- Legacy image data, QML annotations, metadata, and history
+
+Nib stores embedded media bytes without recompression. Schema versions 1 through 3 remain readable and upgrade transactionally on the first protocol write.
 
 Annotations can also be stored as sidecar `.annotations.json` files for PNG/JPEG images.
 

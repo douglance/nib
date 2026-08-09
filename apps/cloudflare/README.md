@@ -5,6 +5,19 @@ storage owns request state and R2 owns image, `.nib`, and MP4 attachments. The
 CLI and installed native clients connect outbound to this service; no machine
 on the private network is an origin or availability dependency.
 
+The stable `/v1` API implements the open Nib Request protocol. It supports
+idempotent request creation and revision, capability-scoped guest review,
+structured feedback and decisions, replayable JSON or SSE events, signed
+webhook continuations, and single-part or native R2 multipart artifact uploads.
+See [`docs/request-api.md`](../../docs/request-api.md) for the route contract.
+
+Hosted multipart uploads use Cloudflare R2 native multipart state in production:
+the Durable Object stores the `uploadId` and returned part `etag`s, then calls
+R2 `complete` or `abort`. The Worker validates declared part sizes and any
+declared per-part SHA-256 values before upload. For large multipart objects the
+declared full SHA-256 is retained as object metadata; production completion does
+not read back and assemble all parts in Worker memory to recompute the full hash.
+
 ## Deploy
 
 ```sh
@@ -40,3 +53,11 @@ nib auth pair
 Open the returned `nib://` URL on the device or paste the code in Nib settings.
 The code expires after 10 minutes and works once. `NIB_PORTAL_URL` can override
 the Worker URL for a development or recovery deployment.
+
+## Managed tenancy boundary
+
+The public HTTP entrypoint always uses the public/default tenant and ignores
+tenant-selection headers. Nib Cloud receives a named service binding to the
+Worker and selects an organization tenant through the typed RPC entrypoint.
+Possession of the private service binding is the authorization boundary; no
+tenant-routing secret or customer-controlled header crosses public HTTP.

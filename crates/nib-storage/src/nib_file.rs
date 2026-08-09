@@ -13,15 +13,88 @@ use nib_core::{
     Annotation, AnnotationId, AnnotationType, ArrowHead, AssetData, BlurIntensity, Color, Point,
     Region, Severity, StorageError, StrokeStyle, TextAlign,
 };
+use nib_protocol::{ArtifactSource, Decision, Event, Feedback, NibRequest};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Current schema version - increment when schema changes
 /// v2: added the `assets` table (out-of-band bytes for Image annotations)
-const CURRENT_SCHEMA_VERSION: i32 = 3;
+/// v3: added annotation groups
+/// v4: added portable requests, general artifact blobs, decisions, feedback, and events
+const CURRENT_SCHEMA_VERSION: i32 = 4;
+
+const PROTOCOL_SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS protocol_documents (
+    kind TEXT NOT NULL,
+    id TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    json TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (kind, id, revision)
+);
+
+CREATE TABLE IF NOT EXISTS artifact_blobs (
+    sha256 TEXT PRIMARY KEY CHECK (length(sha256) = 64),
+    mime_type TEXT NOT NULL,
+    byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
+    bytes BLOB NOT NULL,
+    created_at INTEGER NOT NULL,
+    CHECK (length(bytes) = byte_length)
+);
+
+CREATE TABLE IF NOT EXISTS protocol_artifacts (
+    request_id TEXT NOT NULL,
+    request_revision INTEGER NOT NULL,
+    artifact_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    mime_type TEXT,
+    source_type TEXT NOT NULL,
+    source_url TEXT,
+    source_path TEXT,
+    blob_sha256 TEXT NOT NULL,
+    byte_length INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    PRIMARY KEY (request_id, request_revision, artifact_id)
+);
+
+CREATE TABLE IF NOT EXISTS decisions (
+    id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    request_revision INTEGER NOT NULL,
+    json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_request
+    ON decisions(request_id, request_revision, created_at);
+
+CREATE TABLE IF NOT EXISTS feedback (
+    id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    request_revision INTEGER NOT NULL,
+    json TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_feedback_request
+    ON feedback(request_id, request_revision, created_at);
+
+CREATE TABLE IF NOT EXISTS protocol_events (
+    id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    request_revision INTEGER NOT NULL,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    type TEXT NOT NULL,
+    json TEXT NOT NULL,
+    prev_hash TEXT,
+    hash TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (request_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_protocol_events_request
+    ON protocol_events(request_id, sequence);
+"#;
 
 /// Image metadata returned alongside image data
 #[derive(Debug, Clone)]
@@ -44,6 +117,15 @@ pub struct OcrCacheEntry {
     pub confidence: f64,
 }
 
+/// Raw content-addressed bytes stored without media recompression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolBlob {
+    pub sha256: String,
+    pub mime_type: String,
+    pub byte_length: u64,
+    pub bytes: Vec<u8>,
+}
+
 /// A .nib file handle
 pub struct NibFile {
     conn: Connection,
@@ -51,6 +133,29 @@ pub struct NibFile {
 }
 
 impl NibFile {
+    /// Create a request-only .nib file without requiring a source image.
+    pub fn create_request(path: &Path, request: &NibRequest) -> StorageResult<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if path.exists() {
+            return Err(StorageError::InvalidFormat(format!(
+                "File already exists: {}",
+                path.display()
+            )));
+        }
+
+        let conn = Connection::open(path)?;
+        let nib_file = Self {
+            conn,
+            path: path.to_path_buf(),
+        };
+        nib_file.init_schema()?;
+        nib_file.set_pragmas()?;
+        nib_file.put_request(request)?;
+        Ok(nib_file)
+    }
+
     /// Create a new .nib file with the given image data
     ///
     /// # Arguments
@@ -154,6 +259,219 @@ impl NibFile {
         };
 
         Ok((row.0, info))
+    }
+
+    /// Store one immutable request revision and its artifact index.
+    pub fn put_request(&self, request: &NibRequest) -> StorageResult<()> {
+        request
+            .validate()
+            .map_err(|error| StorageError::InvalidFormat(error.to_string()))?;
+        self.ensure_protocol_schema()?;
+
+        let json = serde_json::to_string(request)
+            .map_err(|error| StorageError::InvalidFormat(error.to_string()))?;
+        let now = system_time_to_unix(SystemTime::now());
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> StorageResult<()> {
+            self.conn.execute(
+                "INSERT INTO protocol_documents (kind, id, revision, json, created_at) VALUES ('request', ?1, ?2, ?3, ?4)",
+                params![request.id, request.revision, json, now],
+            )?;
+            self.conn.execute(
+                "DELETE FROM protocol_artifacts WHERE request_id = ?1 AND request_revision = ?2",
+                params![request.id, request.revision],
+            )?;
+            for artifact in &request.artifacts {
+                let (source_type, source_url, source_path, sha256, byte_length) =
+                    match &artifact.source {
+                        ArtifactSource::Embedded {
+                            path,
+                            sha256,
+                            byte_length,
+                            ..
+                        } => ("embedded", None, Some(path.as_str()), sha256, *byte_length),
+                        ArtifactSource::External {
+                            url,
+                            sha256,
+                            byte_length,
+                            ..
+                        } => ("external", Some(url.as_str()), None, sha256, *byte_length),
+                    };
+                let metadata = serde_json::to_string(&artifact.metadata)
+                    .map_err(|error| StorageError::InvalidFormat(error.to_string()))?;
+                self.conn.execute(
+                    r#"INSERT INTO protocol_artifacts
+                       (request_id, request_revision, artifact_id, type, mime_type, source_type,
+                        source_url, source_path, blob_sha256, byte_length, metadata_json)
+                       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+                    params![
+                        request.id,
+                        request.revision,
+                        artifact.id,
+                        artifact.artifact_type,
+                        artifact.mime_type,
+                        source_type,
+                        source_url,
+                        source_path,
+                        sha256,
+                        byte_length,
+                        metadata,
+                    ],
+                )?;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self.conn.execute_batch("COMMIT")?,
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    /// Load one request revision. Reading an old file does not migrate it.
+    pub fn get_request(&self, id: &str, revision: u64) -> StorageResult<Option<NibRequest>> {
+        if !self.has_table("protocol_documents") {
+            return Ok(None);
+        }
+        let json = self
+            .conn
+            .query_row(
+                "SELECT json FROM protocol_documents WHERE kind = 'request' AND id = ?1 AND revision = ?2",
+                params![id, revision],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        json.map(|document| {
+            serde_json::from_str(&document)
+                .map_err(|error| StorageError::InvalidFormat(error.to_string()))
+        })
+        .transpose()
+    }
+
+    /// Store raw artifact bytes after verifying their SHA-256 digest.
+    pub fn put_artifact_blob(
+        &self,
+        sha256: &str,
+        mime_type: &str,
+        bytes: &[u8],
+    ) -> StorageResult<()> {
+        let actual = format!("{:x}", Sha256::digest(bytes));
+        if actual != sha256 {
+            return Err(StorageError::InvalidFormat(format!(
+                "artifact hash mismatch: expected {sha256}, got {actual}"
+            )));
+        }
+        self.ensure_protocol_schema()?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO artifact_blobs (sha256, mime_type, byte_length, bytes, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![sha256, mime_type, bytes.len() as u64, bytes, system_time_to_unix(SystemTime::now())],
+        )?;
+        Ok(())
+    }
+
+    /// Load raw artifact bytes by content hash.
+    pub fn get_artifact_blob(&self, sha256: &str) -> StorageResult<Option<ProtocolBlob>> {
+        if !self.has_table("artifact_blobs") {
+            return Ok(None);
+        }
+        self.conn
+            .query_row(
+                "SELECT sha256, mime_type, byte_length, bytes FROM artifact_blobs WHERE sha256 = ?1",
+                params![sha256],
+                |row| {
+                    Ok(ProtocolBlob {
+                        sha256: row.get(0)?,
+                        mime_type: row.get(1)?,
+                        byte_length: row.get(2)?,
+                        bytes: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn append_decision(&self, decision: &Decision) -> StorageResult<()> {
+        self.ensure_protocol_schema()?;
+        let json = serde_json::to_string(decision)
+            .map_err(|error| StorageError::InvalidFormat(error.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO decisions (id, request_id, request_revision, json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![decision.id, decision.request_id, decision.request_revision, json, decision.created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_decisions(&self, request_id: &str) -> StorageResult<Vec<Decision>> {
+        self.read_protocol_rows(
+            "decisions",
+            "SELECT json FROM decisions WHERE request_id = ?1 ORDER BY created_at, id",
+            request_id,
+        )
+    }
+
+    pub fn append_feedback(&self, feedback: &Feedback) -> StorageResult<()> {
+        self.ensure_protocol_schema()?;
+        let json = serde_json::to_string(feedback)
+            .map_err(|error| StorageError::InvalidFormat(error.to_string()))?;
+        self.conn.execute(
+            "INSERT INTO feedback (id, request_id, request_revision, json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![feedback.id, feedback.request_id, feedback.request_revision, json, feedback.created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_feedback(&self, request_id: &str) -> StorageResult<Vec<Feedback>> {
+        self.read_protocol_rows(
+            "feedback",
+            "SELECT json FROM feedback WHERE request_id = ?1 ORDER BY created_at, id",
+            request_id,
+        )
+    }
+
+    pub fn append_event(&self, event: &Event) -> StorageResult<()> {
+        self.ensure_protocol_schema()?;
+        let json = serde_json::to_string(event)
+            .map_err(|error| StorageError::InvalidFormat(error.to_string()))?;
+        self.conn.execute(
+            r#"INSERT INTO protocol_events
+               (id, request_id, request_revision, sequence, type, json, prev_hash, hash, created_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
+            params![
+                event.id,
+                event.request_id,
+                event.request_revision,
+                event.sequence,
+                event.event_type,
+                json,
+                event.prev_hash,
+                event.hash,
+                event.timestamp,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_events(&self, request_id: &str, after: u64) -> StorageResult<Vec<Event>> {
+        if !self.has_table("protocol_events") {
+            return Ok(Vec::new());
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT json FROM protocol_events WHERE request_id = ?1 AND sequence > ?2 ORDER BY sequence",
+        )?;
+        let documents = statement
+            .query_map(params![request_id, after], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        documents
+            .into_iter()
+            .map(|document| {
+                serde_json::from_str(&document)
+                    .map_err(|error| StorageError::InvalidFormat(error.to_string()))
+            })
+            .collect()
     }
 
     /// Add an annotation and return its ID (e.g., "a1", "a2")
@@ -726,6 +1044,7 @@ impl NibFile {
             PRAGMA cache_size = -2000;
             "#,
         )?;
+        self.conn.execute_batch(PROTOCOL_SCHEMA_SQL)?;
         Ok(())
     }
 
@@ -855,8 +1174,72 @@ impl NibFile {
                 version
             )));
         }
+        if version > CURRENT_SCHEMA_VERSION {
+            return Err(StorageError::InvalidFormat(format!(
+                "Unsupported schema version: {version}"
+            )));
+        }
 
         Ok(())
+    }
+
+    fn has_table(&self, table: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table],
+                |row| row.get(0),
+            )
+            .unwrap_or(false)
+    }
+
+    fn ensure_protocol_schema(&self) -> StorageResult<()> {
+        let version: i32 =
+            self.conn
+                .query_row("SELECT version FROM schema_version", [], |row| row.get(0))?;
+        if version >= CURRENT_SCHEMA_VERSION && self.has_table("protocol_documents") {
+            return Ok(());
+        }
+
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| -> StorageResult<()> {
+            self.conn.execute_batch(PROTOCOL_SCHEMA_SQL)?;
+            self.conn.execute(
+                "UPDATE schema_version SET version = ?1",
+                params![CURRENT_SCHEMA_VERSION],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => self.conn.execute_batch("COMMIT")?,
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    fn read_protocol_rows<T: DeserializeOwned>(
+        &self,
+        table: &str,
+        sql: &str,
+        request_id: &str,
+    ) -> StorageResult<Vec<T>> {
+        if !self.has_table(table) {
+            return Ok(Vec::new());
+        }
+        let mut statement = self.conn.prepare(sql)?;
+        let documents = statement
+            .query_map(params![request_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        documents
+            .into_iter()
+            .map(|document| {
+                serde_json::from_str(&document)
+                    .map_err(|error| StorageError::InvalidFormat(error.to_string()))
+            })
+            .collect()
     }
 
     /// Migrate schema to latest version

@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/nib-core",
+    "crates/nib-protocol",
     "crates/nib-serde",
     "crates/nib-storage",
     "crates/nib-capture",
@@ -27,6 +28,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Workspace crates
 nib-core = { path = "crates/nib-core" }
+nib-protocol = { path = "crates/nib-protocol" }
 nib-serde = { path = "crates/nib-serde" }
 nib-storage = { path = "crates/nib-storage" }
 nib-capture = { path = "crates/nib-capture" }
@@ -97,13 +99,13 @@ version = "0.3.1"
 publish = false
 edition.workspace = true
 rust-version.workspace = true
-description = "Open visual tooling for agents: capture, annotation, feedback, and hosted UI image generation"
+description = "Open human-decision infrastructure for autonomous software"
 authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 license.workspace = true
-keywords = ["screenshot", "annotation", "image", "tool"]
-categories = ["graphics", "gui", "command-line-utilities"]
+keywords = ["agents", "approval", "review", "protocol"]
+categories = ["command-line-utilities", "development-tools"]
 readme = "README.md"
 
 [[bin]]
@@ -117,6 +119,7 @@ path = "src/lib.rs"
 [dependencies]
 # Workspace crates
 nib-core.workspace = true
+nib-protocol.workspace = true
 nib-serde.workspace = true
 nib-storage.workspace = true
 nib-capture.workspace = true

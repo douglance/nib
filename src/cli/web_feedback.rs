@@ -633,6 +633,177 @@ pub(crate) async fn wait_for_request(
     wait_for_request_with(agent, base_url, request_id, timeout_seconds).await
 }
 
+pub(crate) async fn get_request_value(request_id: &str) -> crate::core::Result<Value> {
+    let agent = portal_agent();
+    let base_url = portal_url();
+    get_v1_request_value_with(agent, base_url, request_id).await
+}
+
+async fn get_v1_request_value_with(
+    agent: ureq::Agent,
+    base_url: String,
+    request_id: &str,
+) -> crate::core::Result<Value> {
+    let request_id = request_id.to_string();
+    tokio::task::spawn_blocking(move || get_v1_request_json(&agent, &base_url, &request_id))
+        .await
+        .map_err(|error| crate::core::NibError::Other(format!("Portal read task failed: {error}")))?
+        .map_err(crate::core::NibError::Other)
+}
+
+pub(crate) async fn create_v1_request_value(file: &Path) -> crate::core::Result<Value> {
+    let value: Value = serde_json::from_slice(&std::fs::read(file)?)
+        .map_err(|error| crate::core::NibError::Other(error.to_string()))?;
+    let request = nib_protocol::NibRequest::from_value(value).map_err(|error| {
+        crate::core::NibError::Other(format!(
+            "Invalid request document {}: {error}",
+            file.display()
+        ))
+    })?;
+    let body = serde_json::to_value(request)
+        .map_err(|error| crate::core::NibError::Other(error.to_string()))?;
+    let agent = portal_agent();
+    let base_url = portal_url();
+    post_v1_request_value_with(agent, base_url, body).await
+}
+
+async fn post_v1_request_value_with(
+    agent: ureq::Agent,
+    base_url: String,
+    body: Value,
+) -> crate::core::Result<Value> {
+    tokio::task::spawn_blocking(move || {
+        send_json_value(
+            authorize(agent.post(&format!("{base_url}/v1/requests"))),
+            &body,
+        )
+    })
+    .await
+    .map_err(|error| crate::core::NibError::Other(format!("Portal create task failed: {error}")))?
+    .map_err(crate::core::NibError::Other)
+}
+
+pub(crate) async fn revise_request_value(
+    request_id: &str,
+    metadata: Option<Value>,
+    status: Option<&str>,
+) -> crate::core::Result<Value> {
+    let mut body = serde_json::Map::new();
+    if let Some(metadata) = metadata {
+        body.insert("metadata".to_string(), metadata);
+    }
+    if let Some(status) = status {
+        body.insert("status".to_string(), Value::String(status.to_string()));
+    }
+    if body.is_empty() {
+        return Err(crate::core::NibError::Other(
+            "request revise needs --metadata or --status".into(),
+        ));
+    }
+    revise_v1_request_value(request_id, Value::Object(body)).await
+}
+
+pub(crate) async fn cancel_request_value(request_id: &str) -> crate::core::Result<Value> {
+    revise_v1_request_value(request_id, cancel_revision_body()).await
+}
+
+async fn revise_v1_request_value(request_id: &str, body: Value) -> crate::core::Result<Value> {
+    let agent = portal_agent();
+    let base_url = portal_url();
+    revise_v1_request_value_with(agent, base_url, request_id, body).await
+}
+
+async fn revise_v1_request_value_with(
+    agent: ureq::Agent,
+    base_url: String,
+    request_id: &str,
+    body: Value,
+) -> crate::core::Result<Value> {
+    let request_id = request_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        send_json_value(
+            authorize(agent.post(&format!("{base_url}/v1/requests/{request_id}/revisions"))),
+            &body,
+        )
+    })
+    .await
+    .map_err(|error| crate::core::NibError::Other(format!("Portal revise task failed: {error}")))?
+    .map_err(crate::core::NibError::Other)
+}
+
+pub(crate) async fn submit_request_decision(
+    request_id: &str,
+    decision: &str,
+    comment: Option<&str>,
+) -> crate::core::Result<Value> {
+    let body = decision_payload(decision, comment);
+    let agent = portal_agent();
+    let base_url = portal_url();
+    create_v1_decision_with(agent, base_url, request_id, body).await
+}
+
+fn cancel_revision_body() -> Value {
+    json!({"status":"cancelled"})
+}
+
+fn decision_payload(decision: &str, comment: Option<&str>) -> Value {
+    let mut body = json!({ "outcome": decision, "terminal": true });
+    if let Some(comment) = comment {
+        body["comment"] = Value::String(comment.to_string());
+    }
+    body
+}
+
+async fn create_v1_decision_with(
+    agent: ureq::Agent,
+    base_url: String,
+    request_id: &str,
+    body: Value,
+) -> crate::core::Result<Value> {
+    let request_id = request_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        send_json_value(
+            authorize(agent.post(&format!("{base_url}/v1/requests/{request_id}/decisions"))),
+            &body,
+        )
+    })
+    .await
+    .map_err(|error| crate::core::NibError::Other(format!("Portal decision task failed: {error}")))?
+    .map_err(crate::core::NibError::Other)
+}
+
+pub(crate) async fn watch_request_values(
+    request_id: &str,
+    timeout_seconds: u64,
+) -> crate::core::Result<Vec<Value>> {
+    let agent = portal_agent();
+    let base_url = portal_url();
+    let first = get_v1_request_value_with(agent.clone(), base_url.clone(), request_id).await?;
+    if timeout_seconds == 0 {
+        return Ok(vec![first]);
+    }
+    let events = get_v1_request_events_with(agent, base_url, request_id).await?;
+    Ok(vec![first, events])
+}
+
+async fn get_v1_request_events_with(
+    agent: ureq::Agent,
+    base_url: String,
+    request_id: &str,
+) -> crate::core::Result<Value> {
+    let request_id = request_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        authorize(agent.get(&format!("{base_url}/v1/requests/{request_id}/events")))
+            .call()
+            .map_err(http_error)?
+            .into_json()
+            .map_err(|error| format!("Invalid portal response: {error}"))
+    })
+    .await
+    .map_err(|error| crate::core::NibError::Other(format!("Portal watch task failed: {error}")))?
+    .map_err(crate::core::NibError::Other)
+}
+
 async fn wait_for_request_with(
     agent: ureq::Agent,
     base_url: String,
@@ -668,7 +839,7 @@ async fn wait_for_request_with(
                 }
                 if matches!(
                     request.status.as_str(),
-                    "stale" | "expired" | "answered" | "acted" | "resolved"
+                    "stale" | "expired" | "answered" | "acted" | "resolved" | "canceled"
                 ) {
                     return Err(WaitError::Terminal {
                         request_id: request_id.to_string(),
@@ -739,6 +910,18 @@ fn get_request(
     }
 }
 
+fn get_v1_request_json(
+    agent: &ureq::Agent,
+    base_url: &str,
+    request_id: &str,
+) -> Result<Value, String> {
+    authorize(agent.get(&format!("{base_url}/v1/requests/{request_id}")))
+        .call()
+        .map_err(http_error)?
+        .into_json()
+        .map_err(|error| format!("Invalid portal response: {error}"))
+}
+
 fn is_retryable_status(status: u16) -> bool {
     status == 408 || status == 429 || status >= 500
 }
@@ -786,6 +969,10 @@ fn send_json<T: for<'de> Deserialize<'de>>(
         .map_err(http_error)?
         .into_json()
         .map_err(|error| format!("Invalid portal response: {error}"))
+}
+
+fn send_json_value(request: ureq::Request, body: &Value) -> Result<Value, String> {
+    send_json(request, body)
 }
 
 fn http_error(error: ureq::Error) -> String {
@@ -936,6 +1123,7 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::mpsc::{self, Receiver};
     use std::thread;
 
     #[test]
@@ -1109,6 +1297,88 @@ mod tests {
         assert!(error.to_string().contains("terminal status 'resolved'"));
     }
 
+    #[tokio::test]
+    async fn canceled_without_a_response_is_terminal() {
+        let base_url = mock_portal(vec![(
+            200,
+            json!({"id":"req-canceled","status":"canceled","responses":[]}).to_string(),
+        )]);
+
+        let error = wait_for_request_with(portal_agent(), base_url, "req-canceled", 2)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("terminal status 'canceled'"));
+    }
+
+    #[tokio::test]
+    async fn v1_request_helpers_use_stable_routes_and_canonical_payloads() {
+        let (base_url, requests) = mock_portal_capture(vec![
+            json!({"request":{"id":"req-created"}}).to_string(),
+            json!({"request":{"id":"req-1"}}).to_string(),
+            json!({"revision":{"requestRevision":2}}).to_string(),
+            json!({"decision":{"outcome":"approved","requestRevision":2}}).to_string(),
+            json!({"events":[]}).to_string(),
+        ]);
+        let agent = portal_agent();
+
+        post_v1_request_value_with(
+            agent.clone(),
+            base_url.clone(),
+            json!({"formatVersion":"1.0","id":"req_json","revision":1}),
+        )
+        .await
+        .unwrap();
+        get_v1_request_value_with(agent.clone(), base_url.clone(), "req-1")
+            .await
+            .unwrap();
+        revise_v1_request_value_with(
+            agent.clone(),
+            base_url.clone(),
+            "req-1",
+            json!({"metadata":{"phase":"qa"}}),
+        )
+        .await
+        .unwrap();
+        create_v1_decision_with(
+            agent.clone(),
+            base_url.clone(),
+            "req-1",
+            decision_payload("approved", Some("Looks right")),
+        )
+        .await
+        .unwrap();
+        get_v1_request_events_with(agent, base_url, "req-1")
+            .await
+            .unwrap();
+
+        let create = requests.recv().unwrap();
+        assert!(request_line(&create).starts_with("POST /v1/requests "));
+        assert_eq!(request_body_json(&create)["formatVersion"], "1.0");
+
+        let get = requests.recv().unwrap();
+        assert!(request_line(&get).starts_with("GET /v1/requests/req-1 "));
+
+        let revise = requests.recv().unwrap();
+        assert!(request_line(&revise).starts_with("POST /v1/requests/req-1/revisions "));
+        assert_eq!(request_body_json(&revise)["metadata"]["phase"], "qa");
+
+        let decision = requests.recv().unwrap();
+        assert!(request_line(&decision).starts_with("POST /v1/requests/req-1/decisions "));
+        let decision_body = request_body_json(&decision);
+        assert_eq!(decision_body["outcome"], "approved");
+        assert_eq!(decision_body["terminal"], true);
+        assert_eq!(decision_body["comment"], "Looks right");
+        assert!(decision_body.get("decision").is_none());
+
+        let events = requests.recv().unwrap();
+        assert!(request_line(&events).starts_with("GET /v1/requests/req-1/events "));
+    }
+
+    #[test]
+    fn cancel_uses_canonical_v1_cancelled_status() {
+        assert_eq!(cancel_revision_body()["status"], "cancelled");
+    }
+
     fn mock_portal(responses: Vec<(u16, String)>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -1130,5 +1400,62 @@ mod tests {
             }
         });
         format!("http://{address}")
+    }
+
+    fn mock_portal_capture(responses: Vec<String>) -> (String, Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            for body in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_http_request(&mut stream);
+                tx.send(request).unwrap();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (format!("http://{address}"), rx)
+    }
+
+    fn read_http_request(stream: &mut std::net::TcpStream) -> String {
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 1024];
+        loop {
+            let read = stream.read(&mut chunk).unwrap();
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            let Some(header_end) = find_header_end(&buffer) else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&buffer[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| line.strip_prefix("Content-Length: "))
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            if buffer.len() >= header_end + 4 + content_length {
+                break;
+            }
+        }
+        String::from_utf8_lossy(&buffer).into_owned()
+    }
+
+    fn find_header_end(buffer: &[u8]) -> Option<usize> {
+        buffer.windows(4).position(|window| window == b"\r\n\r\n")
+    }
+
+    fn request_line(request: &str) -> &str {
+        request.lines().next().unwrap_or("")
+    }
+
+    fn request_body_json(request: &str) -> Value {
+        let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+        serde_json::from_str(body).unwrap()
     }
 }
