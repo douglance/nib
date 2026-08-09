@@ -507,17 +507,22 @@ export class HostedRequestCoreService implements HostedRequestCore {
         createdBy: options.subject || "unknown"
       };
       const draft = input.draft === true || input.status === "draft";
+      const terminalStatus = terminalRevisionStatus(patch.status);
       applyRevision(request, patch);
       request.revision = revision.requestRevision;
-      request.status = draft ? "draft" : "pending";
+      request.status = terminalStatus ?? (draft ? "draft" : "pending");
       request.reviewable = false;
       request.metering.currentReviewableRevision = null;
+      if (terminalStatus) request.resolvedAt = now;
       request.updatedAt = now;
       await Promise.all([
         this.store.put(`request:${id}`, request),
         this.store.put(`request:${id}:revision:${revision.number.toString().padStart(12, "0")}`, revision)
       ]);
       await this.appendEvent("request.revised", id, request.revision, { revision: revision as unknown as JsonObject, request: publicRequest(request) });
+      if (terminalStatus) {
+        await this.appendEvent(`request.${terminalStatus}`, id, request.revision, { request: publicRequest(request) });
+      }
       return { status: 201, body: { revision, request: publicRequest(request), status: snapshotStatus(request) } };
     });
   }
@@ -904,7 +909,13 @@ export class HostedRequestCoreService implements HostedRequestCore {
   }
 
   private async getRequestRecord(id: string): Promise<HostedRequest | undefined> {
-    return this.store.get<HostedRequest>(`request:${id}`);
+    const request = await this.store.get<HostedRequest>(`request:${id}`);
+    if (!request) return undefined;
+    request.metering ??= {
+      firstReviewableRevision: request.reviewable ? request.revision : null,
+      currentReviewableRevision: request.reviewable ? request.revision : null
+    };
+    return request;
   }
 
   private async access(id: string, scope: CapabilityScope, options: { subject?: string; capabilityToken?: string }): Promise<
@@ -1124,6 +1135,10 @@ function revisionPatch(input: Record<string, unknown>): JsonObject {
   return patch;
 }
 
+function terminalRevisionStatus(value: JsonValue | undefined): "cancelled" | "expired" | null {
+  return value === "cancelled" || value === "expired" ? value : null;
+}
+
 function applyRevision(request: HostedRequest, patch: JsonObject): void {
   if (typeof patch.title === "string") request.title = patch.title;
   if (typeof patch.description === "string") request.description = patch.description;
@@ -1266,7 +1281,8 @@ function continuationValue(value: unknown): { ok: true; public: JsonObject; priv
 
 function snapshotStatus(request: HostedRequest, decision?: HostedDecision): string {
   if (decision) return decision.outcome;
-  return request.status === "draft" ? "pending" : "pending";
+  if (request.status === "cancelled" || request.status === "expired") return request.status;
+  return "pending";
 }
 
 function cleanUndefined(value: Record<string, unknown>): JsonObject {
