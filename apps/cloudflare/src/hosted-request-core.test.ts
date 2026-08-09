@@ -288,6 +288,40 @@ describe("hosted request core", () => {
     });
   });
 
+  it("hydrates legacy metering and preserves terminal cancellation state", async () => {
+    const store = new MemoryKeyValueStore();
+    const core = new HostedRequestCoreService(store, new MemoryMediaStore());
+    const created = await readJson(await core.createRequest({ title: "Legacy request" }, {
+      idempotencyKey: "legacy-create"
+    }));
+    const request = created.request as { id: string };
+    const legacy = await store.get<Record<string, unknown>>(`request:${request.id}`);
+    expect(legacy).toBeDefined();
+    delete legacy?.metering;
+    await store.put(`request:${request.id}`, legacy);
+
+    const cancelled = await readJson(await core.createRevision(request.id, { status: "cancelled" }, {
+      idempotencyKey: "legacy-cancel",
+      subject: "owner"
+    }));
+    const stored = await store.get<Record<string, unknown>>(`request:${request.id}`);
+    const events = await core.listEvents({ after: "0", requestId: request.id });
+
+    expect(cancelled).toMatchObject({
+      status: "cancelled",
+      request: {
+        status: "cancelled",
+        reviewable: false,
+        metering: {
+          firstReviewableRevision: 1,
+          currentReviewableRevision: null
+        }
+      }
+    });
+    expect(stored).toMatchObject({ status: "cancelled", resolvedAt: expect.any(String) });
+    expect(events.events.at(-1)).toMatchObject({ type: "request.cancelled", requestRevision: 2 });
+  });
+
   it("tracks artifact upload initiation, complete, and abort states", async () => {
     const core = createHostedRequestCoreForTest();
     const created = await readJson(await core.createRequest({ title: "Review asset" }, { idempotencyKey: "asset" }));
