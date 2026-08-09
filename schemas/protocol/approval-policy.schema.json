@@ -1,0 +1,170 @@
+{
+  "$defs": {
+    "ApprovalRequirement": {
+      "oneOf": [
+        {
+          "additionalProperties": true,
+          "properties": {
+            "count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "human",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "count"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "agentType": {
+              "type": "string"
+            },
+            "type": {
+              "const": "agent",
+              "type": "string"
+            },
+            "verdict": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "agentType",
+            "verdict"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "type": {
+              "const": "user",
+              "type": "string"
+            },
+            "userId": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "userId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "teamId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "team",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "teamId"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": true,
+          "properties": {
+            "count": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "audience",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "count"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$id": "https://nibtool.com/schemas/v1/approval-policy.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": true,
+      "properties": {
+        "requirements": {
+          "items": {
+            "$ref": "#/$defs/ApprovalRequirement"
+          },
+          "type": "array"
+        },
+        "type": {
+          "const": "all",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "requirements"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "requirements": {
+          "items": {
+            "$ref": "#/$defs/ApprovalRequirement"
+          },
+          "type": "array"
+        },
+        "type": {
+          "const": "any",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "requirements"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": true,
+      "properties": {
+        "reviewers": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "threshold": {
+          "format": "double",
+          "type": "number"
+        },
+        "type": {
+          "const": "quorum",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "reviewers",
+        "threshold"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "ApprovalPolicy"
+}

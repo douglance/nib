@@ -1,0 +1,19 @@
+name: "Nib Request"
+description: "Create a Nib Request from pull request artifacts without polling for a decision."
+inputs:
+  nib-api-url:
+    description: "Nib API base URL."
+    required: false
+  nib-token:
+    description: "Nib API token."
+    required: true
+  github-token:
+    description: "GitHub token used to read artifacts, create a check, and comment on the pull request."
+    required: true
+    default: ${{ github.token }}
+  title:
+    description: "Request title."
+    required: false
+runs:
+  using: "node20"
+  main: "dist/index.js"

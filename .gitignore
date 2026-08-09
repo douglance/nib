@@ -9,6 +9,8 @@ target/
 node_modules/
 .wrangler/
 dist/
+!integrations/github-action/dist/
+!integrations/github-action/dist/index.js
 
 # Local worker secrets
 .dev.vars

@@ -1,0 +1,308 @@
+{
+  "$defs": {
+    "DecisionOutcome": {
+      "enum": [
+        "approved",
+        "rejected",
+        "changes_requested"
+      ],
+      "type": "string"
+    },
+    "Feedback": {
+      "oneOf": [
+        {
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "comment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "anchor": true,
+            "artifactId": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "annotation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "artifactId",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "optionId": {
+              "type": "string"
+            },
+            "text": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "selection",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "optionId"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "scale": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "rating",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "answer": true,
+            "type": {
+              "const": "structured_answer",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "answer"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "artifactId": {
+              "type": "string"
+            },
+            "seconds": {
+              "format": "double",
+              "type": "number"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "timestamp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "artifactId",
+            "seconds",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "artifactId": {
+              "type": "string"
+            },
+            "bounds": {
+              "$ref": "#/$defs/RegionBounds"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "const": "region",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "artifactId",
+            "bounds",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "artifactId": {
+              "type": "string"
+            },
+            "type": {
+              "const": "attachment",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "artifactId"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "author": {
+          "$ref": "#/$defs/ReviewerIdentity"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "requestRevision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "requestId",
+        "requestRevision",
+        "author",
+        "createdAt"
+      ],
+      "type": "object",
+      "unevaluatedProperties": true
+    },
+    "RegionBounds": {
+      "properties": {
+        "height": {
+          "format": "double",
+          "type": "number"
+        },
+        "width": {
+          "format": "double",
+          "type": "number"
+        },
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "width",
+        "height"
+      ],
+      "type": "object"
+    },
+    "ReviewerIdentity": {
+      "additionalProperties": true,
+      "properties": {
+        "email": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "type"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://nibtool.com/schemas/v1/decision.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "createdAt": {
+      "type": "string"
+    },
+    "feedback": {
+      "items": {
+        "$ref": "#/$defs/Feedback"
+      },
+      "type": "array"
+    },
+    "id": {
+      "type": "string"
+    },
+    "outcome": {
+      "$ref": "#/$defs/DecisionOutcome"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "requestRevision": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "reviewer": {
+      "$ref": "#/$defs/ReviewerIdentity"
+    },
+    "supersedesDecisionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "requestId",
+    "requestRevision",
+    "outcome",
+    "reviewer",
+    "createdAt"
+  ],
+  "title": "Decision",
+  "type": "object"
+}

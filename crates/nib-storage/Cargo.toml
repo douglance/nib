@@ -11,6 +11,7 @@ license.workspace = true
 
 [dependencies]
 nib-core.workspace = true
+nib-protocol.workspace = true
 nib-serde.workspace = true
 rusqlite.workspace = true
 image.workspace = true

@@ -1,10 +1,15 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+import { HostedRequestCoreService, type KeyValueStore } from "./hosted-request-core";
+import { R2MediaStore } from "./r2-media-store";
+import { reviewPageHeaders, reviewPageHtml } from "./review-page";
+import { publicTenantId, stubForTenant, trustedTenantId } from "./tenant-routing";
 
 interface Env {
   REQUESTS: DurableObjectNamespace<NibRequestHub>;
   MEDIA: R2Bucket;
   NIB_AUTH_TOKEN?: string;
   NIB_TENANT_ID?: string;
+  NIB_CONTINUATION_HMAC_SECRET?: string;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -113,19 +118,29 @@ const MAX_ATTACHMENT_BYTES = 96 * 1024 * 1024;
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-    if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
-    if (url.pathname === "/api/health") {
-      return json({ ok: true, service: "nib-global", durable: true, media: "r2" });
-    }
-    if (url.pathname === "/.well-known/apple-app-site-association" || url.pathname === "/apple-app-site-association") {
-      return json({ applinks: { apps: [], details: [{ appID: "2AS3V73632.com.douglance.nib", paths: ["/r/*"] }] } });
-    }
-    if (url.pathname.startsWith("/r/") && request.method === "GET") {
-      return requestPage(url.pathname.split("/")[2] ?? "", url.origin);
-    }
-    const tenant = env.NIB_TENANT_ID?.trim() || "primary";
-    const stub = env.REQUESTS.get(env.REQUESTS.idFromName(tenant));
+    return handleWorkerRequest(request, env, publicTenantId(env, request));
+  }
+};
+
+export class NibGlobalEntrypoint extends WorkerEntrypoint<Env> {
+  async fetchForTenant(request: Request, tenantId: string): Promise<Response> {
+    return handleWorkerRequest(request, this.env, trustedTenantId(tenantId));
+  }
+}
+
+async function handleWorkerRequest(request: Request, env: Env, tenant: string): Promise<Response> {
+  const url = new URL(request.url);
+  if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
+  if (url.pathname === "/api/health") {
+    return json({ ok: true, service: "nib-global", durable: true, media: "r2" });
+  }
+  if (url.pathname === "/.well-known/apple-app-site-association" || url.pathname === "/apple-app-site-association") {
+    return json({ applinks: { apps: [], details: [{ appID: "2AS3V73632.com.douglance.nib", paths: ["/r/*"] }] } });
+  }
+  if (url.pathname.startsWith("/r/") && request.method === "GET") {
+    return requestPage(url.pathname.split("/")[2] ?? "", url.origin);
+  }
+  const stub = stubForTenant(env, tenant);
 
     if (url.pathname === "/api/auth/exchange" && request.method === "POST") {
       if (!bootstrapAuthorized(request, env)) return unauthorized();
@@ -140,6 +155,11 @@ export default {
     const auth = await authenticate(request, env, stub);
     if (url.pathname.startsWith("/attachments/") && request.method === "GET") {
       return attachmentResponse(url.pathname.split("/")[2] ?? "", request, env, Boolean(auth));
+    }
+    if (url.pathname.startsWith("/v1/")) {
+      const headers = new Headers(request.headers);
+      if (auth) headers.set("x-nib-auth-subject", auth.subject);
+      return stub.fetch(new Request(request, { headers }));
     }
     if (!auth) return unauthorized();
     const requiredScope = scopeFor(request.method, url.pathname);
@@ -170,15 +190,20 @@ export default {
     }
     const headers = new Headers(request.headers);
     headers.set("x-nib-auth-subject", auth.subject);
-    return stub.fetch(new Request(request, { headers }));
-  }
-};
+  return stub.fetch(new Request(request, { headers }));
+}
 
 export class NibRequestHub extends DurableObject<Env> {
   private sockets = new Set<WebSocket>();
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/v1/")) {
+      return this.hostedCore().fetch(request, {
+        subject: request.headers.get("x-nib-auth-subject"),
+        origin: url.origin
+      });
+    }
     if (url.pathname === "/internal/auth/verify" && request.method === "POST") {
       return this.verifyToken(await request.json<JsonObject>());
     }
@@ -626,6 +651,47 @@ export class NibRequestHub extends DurableObject<Env> {
       }
     }
   }
+
+  private hostedCore(): HostedRequestCoreService {
+    return new HostedRequestCoreService(
+      new DurableObjectKeyValueStore(this.ctx.storage),
+      new R2MediaStore(this.env.MEDIA),
+      () => new Date(),
+      {
+        dispatch: async (delivery) => {
+          const response = await fetch(delivery.url, {
+            method: "POST",
+            headers: delivery.headers,
+            body: JSON.stringify({ event: delivery.event, request: delivery.request })
+          });
+          return { ok: response.ok, status: response.status };
+        },
+        sign: this.env.NIB_CONTINUATION_HMAC_SECRET
+          ? async (delivery) => hmacSha256(this.env.NIB_CONTINUATION_HMAC_SECRET || "", JSON.stringify(delivery.event))
+          : undefined
+      }
+    );
+  }
+}
+
+class DurableObjectKeyValueStore implements KeyValueStore {
+  constructor(private readonly storage: DurableObjectStorage) {}
+
+  async get<T>(key: string): Promise<T | undefined> {
+    return this.storage.get<T>(key);
+  }
+
+  async put<T>(key: string, value: T): Promise<void> {
+    await this.storage.put(key, value);
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.storage.delete(key);
+  }
+
+  async list<T>(prefix: string): Promise<Map<string, T>> {
+    return this.storage.list<T>({ prefix });
+  }
 }
 
 async function attachmentResponse(id: string, request: Request, env: Env, authorized: boolean): Promise<Response> {
@@ -730,6 +796,18 @@ async function sha256(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+async function hmacSha256(secret: string, value: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value));
+  return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
 function constantTimeEqual(left: string, right: string): boolean {
   let difference = left.length ^ right.length;
   const length = Math.max(left.length, right.length);
@@ -738,9 +816,7 @@ function constantTimeEqual(left: string, right: string): boolean {
 }
 
 function requestPage(id: string, origin: string): Response {
-  const native = `nib://request/${encodeURIComponent(id)}?server=${encodeURIComponent(origin)}`;
-  const html = `<!doctype html><meta name="viewport" content="width=device-width"><title>Nib review</title><style>body{font:16px system-ui;max-width:42rem;margin:10vh auto;padding:2rem;color:#171717}a{display:inline-block;padding:.8rem 1rem;background:#18181b;color:white;border-radius:.6rem;text-decoration:none}</style><h1>Nib review</h1><p>Open this request in the installed Nib app.</p><a href="${native}">Open Nib</a>`;
-  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", ...corsHeaders() } });
+  return new Response(reviewPageHtml(id, origin), { headers: reviewPageHeaders() });
 }
 
 function json(value: unknown, status = 200, extra: Record<string, string> = {}): Response {
@@ -750,8 +826,8 @@ function json(value: unknown, status = 200, extra: Record<string, string> = {}):
 function corsHeaders(): Record<string, string> {
   return {
     "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
-    "access-control-allow-headers": "authorization,content-type,x-nib-filename,x-nib-metadata"
+    "access-control-allow-methods": "GET,POST,PUT,PATCH,OPTIONS",
+    "access-control-allow-headers": "accept,authorization,content-type,idempotency-key,last-event-id,x-nib-capability,x-nib-filename,x-nib-metadata"
   };
 }
 

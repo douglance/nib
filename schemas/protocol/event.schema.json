@@ -1,0 +1,54 @@
+{
+  "$id": "https://nibtool.com/schemas/v1/event.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "data": {
+      "default": null
+    },
+    "hash": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "type": "string"
+    },
+    "prevHash": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "requestRevision": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sequence": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "timestamp": {
+      "type": "string"
+    },
+    "type": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "type",
+    "requestId",
+    "requestRevision",
+    "sequence",
+    "timestamp"
+  ],
+  "title": "Event",
+  "type": "object"
+}
