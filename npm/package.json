@@ -1,7 +1,7 @@
 {
   "name": "@douglance/nib",
   "version": "0.3.1",
-  "description": "Screenshot annotation tool that bridges human visual thinking with AI comprehension",
+  "description": "Open visual tooling for agents: capture, annotation, feedback, and hosted UI image generation",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -9,7 +9,7 @@
   },
   "homepage": "https://nib.doug-lance.workers.dev",
   "author": "Doug Lance",
-  "keywords": ["screenshot", "annotation", "image", "ocr", "mcp", "claude"],
+  "keywords": ["agent", "screenshot", "annotation", "image-generation", "ui", "ocr", "mcp", "claude", "codex"],
   "bin": {
     "nib": "bin/nib"
   },

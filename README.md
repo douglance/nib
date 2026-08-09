@@ -1,8 +1,8 @@
 # Nib
 
-Fast, native screenshot annotation tool with semantic visual communication.
+Open visual tooling for AI agents: capture, annotation, human feedback, and hosted UI image generation.
 
-Nib bridges human visual thinking with AI comprehension using QML (Quick Markup Language) - a semantic annotation protocol where every annotation type has defined meaning.
+Nib gives agents a single open CLI for working with visual context. Local capture, annotation, review, and the hosted `generate_ui` client share one command catalog and MCP server.
 
 The CLI, local applications, client library, public site, and service contracts are open source under Apache 2.0. The hosted image-generation runtime is a separate proprietary service; see [the open-core boundary](docs/open-core.md).
 
@@ -44,6 +44,10 @@ nib add-annotation image.png -t rectangle -x 100 -y 100 -w 200 -H 50 -c "#ff0000
 
 # Render annotations onto image
 nib render image.png
+
+# Generate a UI image through the hosted service
+export NIB_ACCESS_TOKEN="nib_live_..."
+nib generate "A compact dark fleet analytics dashboard" --output dashboard.png
 ```
 
 ## Commands
@@ -51,6 +55,7 @@ nib render image.png
 | Command | Description |
 |---------|-------------|
 | `capture` | Capture screen region interactively |
+| `generate` | Generate one UI image through the hosted Nib service |
 | `gui <image>` | Open GUI annotation editor |
 | `add-annotation` | Add annotation headlessly |
 | `remove-annotation` | Remove annotation by ID |

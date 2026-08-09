@@ -1,6 +1,6 @@
 # @douglance/nib
 
-Screenshot annotation tool that bridges human visual thinking with AI comprehension.
+Open visual tooling for AI agents: capture, annotation, human feedback, and hosted UI image generation.
 
 ## Installation
 
@@ -46,6 +46,13 @@ nib gui image.png        # Open GUI editor
 nib add-annotation ...   # Add annotation headlessly
 nib render image.png     # Render annotations onto image
 nib find-text image.png  # OCR text detection
+nib generate "A dark analytics dashboard" --output dashboard.png
+```
+
+Hosted generation requires a revocable Nib token from the public signup page:
+
+```bash
+export NIB_ACCESS_TOKEN="nib_live_..."
 ```
 
 ## License
