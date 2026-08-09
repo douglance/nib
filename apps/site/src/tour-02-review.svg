@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+  <title id="title">A human reviews visual evidence in Nib</title>
+  <desc id="desc">A browser review surface displays a checkout image, a comment pin, and decision buttons.</desc>
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#090b0f"/><stop offset="1" stop-color="#151b24"/></linearGradient></defs>
+  <rect width="1440" height="900" fill="url(#bg)"/>
+  <text x="96" y="104" fill="#d8ff63" font-family="ui-monospace, monospace" font-size="22" font-weight="700" letter-spacing="3">02 / HUMAN REVIEWS</text>
+  <text x="96" y="185" fill="#f6f8fb" font-family="Inter, system-ui, sans-serif" font-size="64" font-weight="760" letter-spacing="-3">See the change. Make the call.</text>
+  <g transform="translate(96 250)">
+    <rect width="1248" height="500" rx="34" fill="#11151b" stroke="#465264" stroke-width="2"/>
+    <rect width="1248" height="64" rx="34" fill="#171d25"/>
+    <path d="M0 64h1248" stroke="#303a48"/>
+    <circle cx="36" cy="32" r="7" fill="#ff6b6b"/><circle cx="60" cy="32" r="7" fill="#ffd166"/><circle cx="84" cy="32" r="7" fill="#7bd88f"/>
+    <rect x="172" y="16" width="720" height="32" rx="10" fill="#0d1117"/>
+    <text x="532" y="38" text-anchor="middle" fill="#778394" font-family="ui-monospace, monospace" font-size="14">nibtool.com/r/checkout</text>
+
+    <g transform="translate(32 96)">
+      <rect width="750" height="364" rx="24" fill="#eceff2"/>
+      <rect x="32" y="28" width="686" height="50" rx="12" fill="#ffffff"/>
+      <circle cx="62" cy="53" r="11" fill="#151b24"/>
+      <rect x="90" y="44" width="140" height="18" rx="9" fill="#c3cad2"/>
+      <rect x="50" y="118" width="316" height="196" rx="20" fill="#d9dee4"/>
+      <rect x="94" y="148" width="228" height="28" rx="9" fill="#aab4bf"/>
+      <rect x="94" y="194" width="178" height="18" rx="9" fill="#bdc5ce"/>
+      <rect x="94" y="226" width="210" height="18" rx="9" fill="#bdc5ce"/>
+      <rect x="94" y="266" width="160" height="30" rx="10" fill="#151b24"/>
+      <g transform="translate(408 116)">
+        <rect width="278" height="54" rx="12" fill="#ffffff"/><circle cx="30" cy="27" r="12" fill="#81a7ff"/><rect x="55" y="18" width="138" height="18" rx="9" fill="#aab4bf"/>
+        <rect y="72" width="278" height="54" rx="12" fill="#ffffff"/><circle cx="30" cy="99" r="12" fill="#d8ff63"/><rect x="55" y="90" width="172" height="18" rx="9" fill="#aab4bf"/>
+        <rect y="144" width="278" height="54" rx="12" fill="#ffffff"/><circle cx="30" cy="171" r="12" fill="#ffd166"/><rect x="55" y="162" width="116" height="18" rx="9" fill="#aab4bf"/>
+      </g>
+      <circle cx="350" cy="190" r="25" fill="#d8ff63" stroke="#182000" stroke-width="4"/>
+      <text x="350" y="199" text-anchor="middle" fill="#182000" font-family="Inter, system-ui, sans-serif" font-size="22" font-weight="800">1</text>
+    </g>
+
+    <g transform="translate(824 96)">
+      <text x="0" y="26" fill="#9aa6b5" font-family="ui-monospace, monospace" font-size="15" letter-spacing="2">DECISION</text>
+      <text x="0" y="78" fill="#f6f8fb" font-family="Inter, system-ui, sans-serif" font-size="32" font-weight="720">Checkout redesign</text>
+      <g transform="translate(0 112)">
+        <rect width="392" height="112" rx="20" fill="#181f29" stroke="#303a48"/>
+        <circle cx="38" cy="38" r="18" fill="#d8ff63"/><text x="38" y="45" text-anchor="middle" fill="#182000" font-family="Inter, system-ui, sans-serif" font-size="18" font-weight="800">1</text>
+        <text x="72" y="38" fill="#f6f8fb" font-family="Inter, system-ui, sans-serif" font-size="19" font-weight="670">Keep this payment selector.</text>
+        <text x="72" y="70" fill="#9aa6b5" font-family="Inter, system-ui, sans-serif" font-size="16">Alice · just now</text>
+      </g>
+      <rect y="254" width="190" height="60" rx="16" fill="#d8ff63"/>
+      <path d="m30 284 8 8 16-19" fill="none" stroke="#182000" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="70" y="292" fill="#182000" font-family="Inter, system-ui, sans-serif" font-size="19" font-weight="760">Approve</text>
+      <rect x="202" y="254" width="190" height="60" rx="16" fill="#151b24" stroke="#3a4452"/>
+      <path d="m230 276 18 18m0-18-18 18" stroke="#f6f8fb" stroke-width="4" stroke-linecap="round"/>
+      <text x="271" y="292" fill="#f6f8fb" font-family="Inter, system-ui, sans-serif" font-size="19" font-weight="680">Send back</text>
+      <g transform="translate(0 347)" fill="#9aa6b5" font-family="Inter, system-ui, sans-serif" font-size="16">
+        <circle cx="8" cy="-5" r="7" fill="#7bd88f"/><text x="26">No account required to review</text>
+      </g>
+    </g>
+  </g>
+  <g transform="translate(666 835)"><circle cx="0" cy="0" r="7" fill="#3b4552"/><circle cx="26" cy="0" r="7" fill="#d8ff63"/><circle cx="52" cy="0" r="7" fill="#3b4552"/></g>
+</svg>

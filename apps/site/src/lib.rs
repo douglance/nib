@@ -21,6 +21,18 @@ const SIGNUP_CSS: &str = r#"
 .signup{max-width:900px;padding:80px 0 120px}.signup h1{font-size:clamp(3rem,7vw,5.5rem)}.credential-panel{margin-top:42px;padding:30px;border:1px solid var(--line);border-radius:20px;background:linear-gradient(145deg,#141a22,#0d1117)}.credential-panel[hidden]{display:none}.credential-panel h2{margin:0 0 12px;font-size:1.4rem}.token-value{display:block;margin:22px 0;padding:18px 20px;overflow-wrap:anywhere;border:1px solid #a9cf4266;border-radius:14px;background:#090b0f;color:var(--accent);font:600 .9rem/1.65 ui-monospace,SFMono-Regular,Menlo,monospace}.credential-actions{display:flex;gap:12px;flex-wrap:wrap}.credential-plans{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-top:30px}.credential-plans form,.credential-plans button{width:100%}.credential-note{color:var(--muted);font-size:.88rem}.credential-status{min-height:1.4em;color:var(--accent);font-size:.85rem}.signup .button{margin-top:8px}@media(max-width:680px){.credential-panel{padding:22px}.credential-plans{grid-template-columns:1fr}.token-value{font-size:.78rem}}
 "#;
 
+const HOME_CSS: &str = r#"
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.story-hero{display:grid;grid-template-columns:minmax(0,.88fr) minmax(520px,1.12fr);gap:64px;align-items:center;padding:82px 0 44px}.story-hero h1{font-size:clamp(3.5rem,6.2vw,6rem);margin:20px 0 24px}.hero-sub{max-width:570px;margin:0;color:#c5ced9;font-size:1.16rem;line-height:1.65}.hero-sub strong{color:var(--text)}.story-hero .actions{margin-top:30px}.button.play-link{gap:9px;background:transparent}.button.play-link svg{width:18px;height:18px;fill:currentColor}.hero-facts{display:flex;gap:26px;margin:32px 0 0;padding:24px 0 0;border-top:1px solid var(--line)}.hero-facts div{min-width:92px}.hero-facts dt{color:var(--accent);font-size:1.28rem;font-weight:780;letter-spacing:-.03em}.hero-facts dd{margin:2px 0 0;color:var(--muted);font-size:.78rem}.hero-art{position:relative;margin:0;border:1px solid #394553;border-radius:28px;overflow:hidden;background:#0d1117;box-shadow:0 38px 100px #000a;aspect-ratio:16/10}.hero-art img{display:block;width:100%;height:100%;object-fit:cover}.hero-media-tags{position:absolute;left:22px;bottom:20px;display:flex;gap:8px}.hero-media-tags span{display:inline-flex;align-items:center;gap:7px;padding:8px 11px;border:1px solid #ffffff24;border-radius:999px;background:#090b0fdd;backdrop-filter:blur(10px);color:#eef3fa;font:650 .72rem/1 ui-monospace,monospace}.hero-media-tags i{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.loop-shell{padding:32px 0 88px}.flow-strip{display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr auto 1fr;gap:12px;align-items:center;padding:20px;border:1px solid var(--line);border-radius:24px;background:#0d1117}.flow-node{min-width:0;text-align:center}.flow-icon{display:grid;place-items:center;width:64px;height:64px;margin:0 auto 12px;border:1px solid #34404e;border-radius:18px;background:#171d25;color:#dce5ef}.flow-node.request .flow-icon,.flow-node.decision .flow-icon{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}.flow-icon svg{width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.flow-node strong{display:block;font-size:.86rem}.flow-node small{display:block;margin-top:2px;color:var(--muted);font-size:.7rem}.flow-arrow{color:#657080}.flow-arrow svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.visual-section{padding:96px 0;border-top:1px solid #ffffff12}.visual-head{display:flex;align-items:end;justify-content:space-between;gap:40px;margin-bottom:38px}.visual-head h2{max-width:760px;margin:12px 0 0;font-size:clamp(2.5rem,5vw,4.6rem);line-height:1.02;letter-spacing:-.05em}.visual-note{max-width:300px;margin:0;color:var(--muted);font-size:.9rem}.film-frame{position:relative;margin:0;border:1px solid #394553;border-radius:28px;overflow:hidden;background:#0d1117;box-shadow:0 28px 80px #0008}.product-film{display:block;width:100%;aspect-ratio:16/10;background:#0d1117}.film-key{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);background:#11151b}.film-key div{display:flex;align-items:center;gap:11px;padding:18px 22px;border-right:1px solid var(--line);color:#cbd3dc;font-size:.86rem}.film-key div:last-child{border:0}.film-key b{display:grid;place-items:center;width:25px;height:25px;border-radius:50%;background:#202833;color:var(--accent);font:700 .72rem/1 ui-monospace,monospace}
+.review-showcase{display:grid;grid-template-columns:minmax(300px,.64fr) minmax(0,1.36fr);gap:22px;align-items:stretch}.phone-card,.artifact-board{border:1px solid var(--line);border-radius:28px;background:#10141a;overflow:hidden}.phone-card{position:relative;display:grid;place-items:center;min-height:600px;padding:34px;background:radial-gradient(circle at 50% 20%,#233044,#10141a 62%)}.phone-card img{display:block;width:min(100%,350px);height:auto;border-radius:28px;box-shadow:0 28px 70px #000a}.phone-card figcaption{position:absolute;left:22px;bottom:20px;padding:8px 12px;border:1px solid #ffffff20;border-radius:999px;background:#090b0fdd;color:#dce5ef;font-size:.74rem}.artifact-board{padding:28px}.board-top{display:flex;align-items:center;justify-content:space-between;padding-bottom:22px;border-bottom:1px solid var(--line)}.board-brand{font-size:1.1rem;font-weight:760}.board-brand span{color:var(--accent)}.board-status{display:inline-flex;align-items:center;gap:8px;color:#cbd3dc;font-size:.76rem}.board-status i{width:8px;height:8px;border-radius:50%;background:#7bd88f}.artifact-grid{display:grid;grid-template-columns:1.2fr .8fr;grid-template-rows:1fr 1fr;gap:14px;margin-top:22px;min-height:342px}.artifact-tile{position:relative;overflow:hidden;border:1px solid #303a48;border-radius:20px;background:#181f29}.artifact-tile.image{grid-row:1/3;background:linear-gradient(145deg,#26303c,#12171e)}.artifact-tile.image .mock-screen{position:absolute;inset:34px;border-radius:15px;background:#edf0f3}.mock-screen:before{content:"";position:absolute;left:28px;top:34px;width:42%;height:14px;border-radius:8px;background:#aeb8c2;box-shadow:0 34px 0 #c3cad2,0 68px 0 #c3cad2}.mock-screen:after{content:"";position:absolute;left:28px;bottom:32px;width:35%;height:34px;border-radius:10px;background:#151b24}.annotation-pin{position:absolute;right:20%;top:42%;display:grid;place-items:center;width:40px;height:40px;border:3px solid #182000;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-weight:800}.artifact-tile.video{display:grid;place-items:center;background:linear-gradient(145deg,#1d2630,#11161d)}.play-mark{display:grid;place-items:center;width:70px;height:70px;border-radius:50%;background:var(--accent);color:var(--accent-ink)}.play-mark svg{width:27px;height:27px;fill:currentColor}.artifact-tile.diff{padding:32px 24px}.diff-line{height:9px;margin:12px 0;border-radius:8px;background:#7bd88f}.diff-line.remove{width:62%;background:#ff837a}.diff-line.short{width:74%}.tile-label{position:absolute;left:14px;bottom:12px;padding:6px 9px;border-radius:8px;background:#090b0fcc;color:#e9eef4;font:650 .7rem/1 ui-monospace,monospace}.feedback-bubble{display:flex;gap:13px;margin-top:14px;padding:17px 18px;border:1px solid #a9cf4245;border-radius:18px;background:#171d25}.feedback-pin{display:grid;place-items:center;flex:0 0 30px;height:30px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-weight:800}.feedback-bubble strong{display:block;font-size:.9rem}.feedback-bubble span{display:block;margin-top:3px;color:var(--muted);font-size:.78rem}
+.home-pricing{padding:96px 0;border-top:1px solid #ffffff12}.pricing-compact{display:grid;grid-template-columns:1fr repeat(3,.58fr);gap:14px;align-items:stretch;margin-top:36px}.pricing-intro{display:flex;flex-direction:column;justify-content:space-between;padding:28px;border:1px solid #3c4755;border-radius:22px;background:linear-gradient(145deg,#151b24,#0d1117)}.pricing-intro h2{margin:10px 0 18px;font-size:clamp(2.3rem,4vw,3.8rem);line-height:1.04;letter-spacing:-.05em}.pricing-intro p{margin:0;color:var(--muted);font-size:.88rem}.pricing-intro .button{align-self:flex-start;margin-top:28px}.mini-plan{padding:24px;border:1px solid var(--line);border-radius:22px;background:#10141a}.mini-plan.featured{border-color:#a9cf42;box-shadow:inset 0 0 0 1px #a9cf4244}.mini-plan h3{margin:0;font-size:.92rem}.mini-price{margin:28px 0 6px;font-size:2.7rem;line-height:1;letter-spacing:-.05em;font-weight:780}.mini-price small{font-size:.72rem;color:var(--muted);letter-spacing:0}.mini-plan p{margin:0;color:var(--muted);font-size:.8rem}.mini-plan .plan-dot{display:block;width:10px;height:10px;margin-top:34px;border-radius:50%;background:#3c4652}.mini-plan.featured .plan-dot{background:var(--accent)}
+@media(max-width:980px){.story-hero{grid-template-columns:1fr;gap:44px}.hero-art{max-width:760px}.pricing-compact{grid-template-columns:repeat(3,1fr)}.pricing-intro{grid-column:1/-1}.review-showcase{grid-template-columns:1fr}.phone-card{min-height:auto}.phone-card img{width:min(100%,320px)}}
+@media(max-width:720px){.story-hero{padding-top:56px}.story-hero h1{font-size:clamp(3.1rem,14vw,4.2rem)}.hero-facts{gap:18px}.hero-art{border-radius:20px}.hero-media-tags{left:12px;bottom:12px}.hero-media-tags span{padding:7px 9px}.loop-shell{padding-bottom:70px}.flow-strip{grid-template-columns:1fr;gap:6px}.flow-node{display:grid;grid-template-columns:48px 1fr;column-gap:12px;align-items:center;text-align:left;width:min(100%,260px);margin:auto}.flow-icon{grid-row:1/3;width:48px;height:48px;margin:0;border-radius:14px}.flow-icon svg{width:24px;height:24px}.flow-arrow{transform:rotate(90deg);text-align:center}.visual-section,.home-pricing{padding:76px 0}.visual-head{display:block}.visual-note{margin-top:16px}.film-frame{border-radius:20px}.film-key{grid-template-columns:1fr}.film-key div{border-right:0;border-bottom:1px solid var(--line);padding:14px 18px}.film-key div:last-child{border:0}.artifact-board{padding:18px}.artifact-grid{grid-template-columns:1fr;grid-template-rows:270px 170px 170px}.artifact-tile.image{grid-row:auto}.pricing-compact{grid-template-columns:1fr}.pricing-intro{grid-column:auto}.phone-card{padding:22px}.phone-card figcaption{position:static;margin-top:18px}.hero-facts dd{font-size:.7rem}}
+@media(prefers-reduced-motion:reduce){.product-film{animation:none}}
+"#;
+
 const INSTALL_PROMPT: &str = r#"Install Nib for me. Follow https://nibtool.com/install-agent.md exactly. Configure it globally for this agent, install the Nib UI image skill globally, add the managed Nib instruction to this agent's global instruction file, preserve my existing settings, and verify that the generate_ui tool is available without generating an image."#;
 
 const SEO_JSON_LD: &str = r#"{
@@ -164,11 +176,15 @@ pub async fn export_site(output: &Path) -> std::result::Result<(), Box<dyn std::
     let assets = output.join("assets");
     tokio::fs::create_dir_all(&assets).await?;
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    tokio::fs::copy(
-        source.join("generated-ui-hero.png"),
-        assets.join("generated-ui-hero.png"),
-    )
-    .await?;
+    for asset in [
+        "generated-ui-hero.png",
+        "nib-decision-loop-hero.png",
+        "nib-mobile-review.png",
+        "nib-product-tour.mp4",
+        "tour-01.png",
+    ] {
+        tokio::fs::copy(source.join(asset), assets.join(asset)).await?;
+    }
     tokio::fs::copy(source.join("install.js"), assets.join("install.js")).await?;
     tokio::fs::copy(source.join("credential.js"), assets.join("credential.js")).await?;
     Ok(())
@@ -184,25 +200,13 @@ async fn home() -> Result {
     view! {
         page_document(
             title: "Human review for AI-generated software | Nib",
-            description: "The fastest way for humans to review AI-generated software. Tests verify behavior. Nib verifies intent.",
+            description: "Your agent did the work. Nib packages the evidence, gets a human decision, and returns it to the agent.",
             canonical: "https://nibtool.com/",
             <main>
-                <section class="shell hero">
-                    <div>
-                        <div class="eyebrow">"Human review for AI software"</div>
-                        <h1>"The fastest way for humans to review AI-generated software"</h1>
-                        <p class="lede">"Tests verify behavior. Nib verifies intent. Create hosted review requests from the agent that made the change, invite the right people, and keep the approval trail attached to the work."</p>
-                        <div class="actions">
-                            <a class="button primary" href="/signup">"Start free"</a>
-                            <a class="button" href="#pricing">"See pricing"</a>
-                        </div>
-                        <p class="micro">"Reviewing, guest participants, repositories, and self-hosted use are free. Hosted request volume is the paid meter."</p>
-                    </div>
-                    ui_viewport()
-                </section>
+                hero_story()
                 how_it_works()
                 agent_connection()
-                pricing()
+                home_pricing()
             </main>
         )
     }
@@ -360,6 +364,7 @@ async fn page_document(title: &str, description: &str, canonical: &str, child: V
                 <script src="/assets/credential.js" defer="defer"></script>
                 <style>(CSS)</style>
                 <style>(SIGNUP_CSS)</style>
+                <style>(HOME_CSS)</style>
             </head>
             <body>
                 site_nav()
@@ -376,7 +381,7 @@ async fn site_nav() -> Result {
         <header class="shell nav">
             <a class="brand" href="/">"nib" <span class="brand-dot">"."</span></a>
             <nav class="nav-links" aria-label="Primary navigation">
-                <a href="/#agents">"For agents"</a>
+                <a href="/#how">"How it works"</a>
                 <a href="/#pricing">"Pricing"</a>
                 <a href="/account">"Account"</a>
                 <a class="button" href="/signup">"Start free"</a>
@@ -386,40 +391,105 @@ async fn site_nav() -> Result {
 }
 
 #[component]
-async fn ui_viewport() -> Result {
+async fn hero_story() -> Result {
     view! {
-        <div class="viewport">
-            <img src="/assets/generated-ui-hero.png" alt="Dark Nib dashboard showing API requests, compute hours, a generation-volume chart, and recent image jobs.">
-        </div>
+        <section class="shell story-hero">
+            <div>
+                <div class="eyebrow">"Human review for AI software"</div>
+                <h1>"Your agent did the work. You make the call."</h1>
+                <p class="hero-sub">"Nib turns " <strong>"code, images, and video"</strong> " into one decision your agent can use."</p>
+                <div class="actions">
+                    <a class="button primary" href="/signup">"Start free"</a>
+                    <a class="button play-link" href="#tour">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
+                        "Watch 11-sec tour"
+                    </a>
+                </div>
+                <dl class="hero-facts">
+                    <div><dt>"$0"</dt><dd>"for reviewers"</dd></div>
+                    <div><dt>"25"</dt><dd>"free requests"</dd></div>
+                    <div><dt>"1 link"</dt><dd>"to decide"</dd></div>
+                </dl>
+            </div>
+            <figure class="hero-art">
+                <img src="/assets/nib-decision-loop-hero.png" alt="Code, image, video, and diff evidence flowing into a human approval and back to the agent." fetchpriority="high">
+                <div class="hero-media-tags" aria-hidden="true"><span><i></i>"IMAGE"</span><span><i></i>"VIDEO"</span><span><i></i>"DIFF"</span></div>
+                <figcaption class="sr-only">"Nib closes the loop between autonomous software and human judgment."</figcaption>
+            </figure>
+        </section>
     }
 }
 
 #[component]
 async fn how_it_works() -> Result {
     view! {
-        <section class="section" id="how"><div class="shell">
-            <div class="eyebrow">"One review path"</div><h2>"Turn agent output into a clear human decision."</h2>
-            <p class="section-copy">"Nib gives a coding agent a place to ask for review when tests are not enough. The request explains the change, carries the artifacts, and records what the human approved or sent back."</p>
-            <div class="steps">
-                <article class="step"><b>"01 / ASK"</b><h3>"Create the hosted request"</h3><p>"The agent packages the change, context, and acceptance question into one review request."</p></article>
-                <article class="step"><b>"02 / REVIEW"</b><h3>"Invite the right humans"</h3><p>"Reviewers and guests can participate for free, so approval does not require seat accounting."</p></article>
-                <article class="step"><b>"03 / RESOLVE"</b><h3>"Ship or send it back"</h3><p>"The decision stays attached to the work and gives the agent a precise next step."</p></article>
+        <section class="shell loop-shell" id="how">
+            <h2 class="sr-only">"How Nib works"</h2>
+            <div class="flow-strip" role="img" aria-label="Agent creates a Nib Request, you review it, the decision returns, and the agent resumes.">
+                <div class="flow-node"><div class="flow-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="m7 9 3 3-3 3M13 15h4"></path></svg></div><strong>"Agent"</strong><small>"creates work"</small></div>
+                <div class="flow-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg></div>
+                <div class="flow-node request"><div class="flow-icon"><svg viewBox="0 0 24 24"><path d="M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"></path><path d="M14 3v6h6M8 14h8M8 17h5"></path></svg></div><strong>"Nib Request"</strong><small>"carries evidence"</small></div>
+                <div class="flow-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg></div>
+                <div class="flow-node"><div class="flow-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg></div><strong>"You"</strong><small>"review"</small></div>
+                <div class="flow-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg></div>
+                <div class="flow-node decision"><div class="flow-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="m8 12 3 3 5-6"></path></svg></div><strong>"Decision"</strong><small>"structured"</small></div>
+                <div class="flow-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg></div>
+                <div class="flow-node"><div class="flow-icon"><svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 1-2.3-5.7L20 8"></path><path d="M20 3v5h-5"></path></svg></div><strong>"Agent"</strong><small>"resumes"</small></div>
             </div>
-        </div></section>
+        </section>
     }
 }
 
 #[component]
 async fn agent_connection() -> Result {
     view! {
-        <section class="section" id="agents"><div class="shell">
-            <div class="eyebrow">"Free where collaboration should be free"</div>
-            <h2>"Review participation is not the meter."</h2>
-            <p class="section-copy">"Nib charges for hosted request volume and generation credit. The people and repositories involved in deciding whether the software is right stay outside the seat meter."</p>
-            <div class="install-facts" aria-label="Installation results">
-                <div><strong>"Free reviewing"</strong>"Humans can approve, reject, and comment without paid reviewer seats."</div>
-                <div><strong>"Free guests and repos"</strong>"Invite external participants and connect repositories without expanding the bill."</div>
-                <div><strong>"Free self-hosted use"</strong>"Run your own review flow without paying hosted request overage."</div>
+        <section class="visual-section" id="tour"><div class="shell">
+            <div class="visual-head">
+                <div><div class="eyebrow">"11 seconds. The whole loop."</div><h2>"Ask. Review. Decide. Continue."</h2></div>
+                <p class="visual-note">"No meeting. No runner waiting. No reviewer account required."</p>
+            </div>
+            <figure class="film-frame">
+                <video class="product-film" controls="controls" preload="metadata" playsinline="playsinline" poster="/assets/tour-01.png" aria-label="How a Nib request moves from agent to human and back">
+                    <source src="/assets/nib-product-tour.mp4" type="video/mp4">
+                    "Your browser does not support video. The flow is agent, Nib Request, human decision, and agent continuation."
+                </video>
+                <figcaption class="film-key"><div><b>"1"</b>"Agent packages evidence"</div><div><b>"2"</b>"Human reviews visually"</div><div><b>"3"</b>"Decision resumes work"</div></figcaption>
+            </figure>
+        </div></section>
+        <section class="visual-section" id="evidence"><div class="shell">
+            <div class="visual-head">
+                <div><div class="eyebrow">"Review anywhere"</div><h2>"Everything they need. Nothing they don't."</h2></div>
+                <p class="visual-note">"Images, video, diffs, URLs, comments, and annotations travel together."</p>
+            </div>
+            <div class="review-showcase">
+                <figure class="phone-card">
+                    <img src="/assets/nib-mobile-review.png" alt="Nib mobile notification for a deployment review with Approve, Reject, and Open actions." loading="lazy">
+                    <figcaption>"Approve from the notification"</figcaption>
+                </figure>
+                <div class="artifact-board" aria-label="A Nib Request with image, video, diff, and annotation artifacts">
+                    <div class="board-top"><div class="board-brand">"nib" <span>"."</span></div><div class="board-status"><i></i>"Ready for Alice"</div></div>
+                    <div class="artifact-grid">
+                        <div class="artifact-tile image"><div class="mock-screen"></div><div class="annotation-pin">"1"</div><span class="tile-label">"IMAGE · 1440 x 900"</span></div>
+                        <div class="artifact-tile video"><div class="play-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg></div><span class="tile-label">"VIDEO · 18 SEC"</span></div>
+                        <div class="artifact-tile diff"><div class="diff-line remove"></div><div class="diff-line"></div><div class="diff-line short"></div><span class="tile-label">"DIFF · 12 LINES"</span></div>
+                    </div>
+                    <div class="feedback-bubble"><div class="feedback-pin">"1"</div><div><strong>"Keep this payment selector."</strong><span>"Alice · annotation on checkout image"</span></div></div>
+                </div>
+            </div>
+        </div></section>
+    }
+}
+
+#[component]
+async fn home_pricing() -> Result {
+    view! {
+        <section class="home-pricing" id="pricing"><div class="shell">
+            <div class="eyebrow">"Simple pricing"</div>
+            <div class="pricing-compact">
+                <div class="pricing-intro"><div><h2>"Reviewers are free."</h2><p>"Pay for hosted requests, not seats."</p></div><a class="button" href="/pricing">"Compare all plans"</a></div>
+                <article class="mini-plan"><h3>"Free"</h3><div class="mini-price">"$0"</div><p>"25 requests / month"</p><span class="plan-dot"></span></article>
+                <article class="mini-plan"><h3>"Starter"</h3><div class="mini-price">"$9" <small>"/ mo"</small></div><p>"100 requests / month"</p><span class="plan-dot"></span></article>
+                <article class="mini-plan featured"><h3>"Pro"</h3><div class="mini-price">"$24" <small>"/ mo"</small></div><p>"500 requests / month"</p><span class="plan-dot"></span></article>
             </div>
         </div></section>
     }
@@ -570,6 +640,30 @@ mod tests {
             let html = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             assert!(html.starts_with(b"<!DOCTYPE html>"), "{path}");
         }
+    }
+
+    #[tokio::test]
+    async fn homepage_explains_the_review_loop_with_visual_media() {
+        let response = router()
+            .handle(
+                Request::builder()
+                    .uri("/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await;
+        let html = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html = String::from_utf8(html.to_vec()).unwrap();
+
+        assert!(html.contains("Your agent did the work. You make the call."));
+        assert!(html.contains("/assets/nib-decision-loop-hero.png"));
+        assert!(html.contains("/assets/nib-product-tour.mp4"));
+        assert!(html.contains("/assets/nib-mobile-review.png"));
+        assert!(html.contains("Agent creates a Nib Request"));
+        assert!(html.contains("Everything they need. Nothing they don't."));
+        assert_eq!(html.matches("<video").count(), 1);
+        assert!(!html.contains("Turn agent output into a clear human decision."));
+        assert!(!html.contains("Checkout not configured"));
     }
 
     #[tokio::test]
