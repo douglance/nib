@@ -56,17 +56,17 @@ const SEO_JSON_LD: &str = r#"{
         },
         {
           "@type": "Offer",
-          "name": "Default",
-          "price": "9.99",
+          "name": "Starter",
+          "price": "9",
           "priceCurrency": "USD",
-          "description": "$9.99 per month plus metered image-generation usage"
+          "description": "$9 per month including $5 of image-generation usage, then metered overage"
         },
         {
           "@type": "Offer",
-          "name": "High",
-          "price": "29.99",
+          "name": "Pro",
+          "price": "24",
           "priceCurrency": "USD",
-          "description": "$29.99 per month plus metered image-generation usage"
+          "description": "$24 per month including $20 of image-generation usage, then metered overage"
         }
       ]
     }
@@ -170,11 +170,7 @@ pub async fn export_site(output: &Path) -> std::result::Result<(), Box<dyn std::
     )
     .await?;
     tokio::fs::copy(source.join("install.js"), assets.join("install.js")).await?;
-    tokio::fs::copy(
-        source.join("credential.js"),
-        assets.join("credential.js"),
-    )
-    .await?;
+    tokio::fs::copy(source.join("credential.js"), assets.join("credential.js")).await?;
     Ok(())
 }
 
@@ -226,12 +222,12 @@ async fn pricing_page() -> Result {
 
 #[page("/privacy")]
 async fn privacy() -> Result {
-    view! { legal_document(title: "Privacy", canonical: "https://nibtool.com/privacy", copy: "Prompts are not written to the product database. AI Gateway request and response logging is disabled. Reference images are temporary and deleted after generation. Generated artifacts are private and retained for 1 day on the free trial, 7 days on Default, or 30 days on High. Trial abuse state stores a keyed network-cohort hash instead of the source IP address.") }
+    view! { legal_document(title: "Privacy", canonical: "https://nibtool.com/privacy", copy: "Prompts are not written to the product database. AI Gateway request and response logging is disabled. Reference images are temporary and deleted after generation. Generated artifacts are private and retained for 1 day on the free trial, 7 days on Starter, or 30 days on Pro. Trial abuse state stores a keyed network-cohort hash instead of the source IP address.") }
 }
 
 #[page("/terms")]
 async fn terms() -> Result {
-    view! { legal_document(title: "Terms", canonical: "https://nibtool.com/terms", copy: "Nib provides one Fast 1K trial image to an eligible account without a card. Continued use requires a subscription, and subscription fees do not include generation usage. Each paid generation is metered at the published rate for its quality and resolution. You must have rights to every reference image you submit.") }
+    view! { legal_document(title: "Terms", canonical: "https://nibtool.com/terms", copy: "Nib provides one Fast 1K trial image to an eligible account without a card. Continued use requires a subscription. Each paid plan includes the published monthly generation allowance; additional generation is metered at the published rate for its quality and resolution. Allowances reset each billing month and do not roll over. You must have rights to every reference image you submit.") }
 }
 
 #[page("/account")]
@@ -294,14 +290,14 @@ async fn signup() -> Result {
                     <div class="credential-plans">
                         <form method="post" action="/billing/checkout">
                             <input type="hidden" name="plan" value="default">
-                            <button class="button" type="submit">"Subscribe to Default - $9.99/mo"</button>
+                            <button class="button" type="submit">"Subscribe to Starter - $9/mo"</button>
                         </form>
                         <form method="post" action="/billing/checkout">
                             <input type="hidden" name="plan" value="high">
-                            <button class="button primary" type="submit">"Subscribe to High - $29.99/mo"</button>
+                            <button class="button primary" type="submit">"Subscribe to Pro - $24/mo"</button>
                         </form>
                     </div>
-                    <p class="micro">"Subscriptions exclude metered generation usage. Stripe shows the exact recurring charge before payment."</p>
+                    <p class="micro">"Every paid plan includes monthly generation usage. Stripe shows the recurring charge, overage terms, and tax before payment."</p>
                 </section>
             </main>
         )
@@ -453,12 +449,12 @@ async fn pricing() -> Result {
     view! {
         <section class="section" id="pricing"><div class="shell">
             <div class="eyebrow">"Try one UI image free"</div><h2>"Start when you need the image."</h2>
-            <p class="section-copy">"Generate one eligible Fast 1K UI image after creating an account without a card. Subscribe only when you need continued generation, higher quality, or more concurrent jobs."</p>
+            <p class="section-copy">"Generate one eligible Fast 1K UI image after creating an account without a card. Paid plans include monthly generation usage, then charge only for overage at the published rates."</p>
             <div class="pricing">
-                price_card(name: "Default", amount: "$9.99", plan: "default", high: false, features: &["2 active generations", "20 queued jobs", "60 requests per minute", "7-day artifact retention"])
-                price_card(name: "High", amount: "$29.99", plan: "high", high: true, features: &["8 active generations", "100 queued jobs", "300 requests per minute", "30-day artifact retention", "4x scheduling weight"])
+                price_card(name: "Starter", amount: "$9", plan: "default", high: false, features: &["$5 generation usage included monthly", "2 active generations", "20 queued jobs", "60 requests per minute", "7-day artifact retention"])
+                price_card(name: "Pro", amount: "$24", plan: "high", high: true, features: &["$20 generation usage included monthly", "8 active generations", "100 queued jobs", "300 requests per minute", "30-day artifact retention", "4x scheduling weight"])
             </div>
-            <p class="micro">"First eligible Fast 1K image: free. Paid generation rates: fast 1K $0.12; standard $0.22 / $0.32 / $0.48; pro $0.43 / $0.43 / $0.75. Subscriptions have no included credits or usage cap."</p>
+            <p class="micro">"First eligible Fast 1K image: free. Paid generation rates: fast 1K $0.12; standard $0.22 / $0.32 / $0.48; pro $0.43 / $0.43 / $0.75. Included usage resets monthly; overage is uncapped."</p>
         </div></section>
     }
 }
@@ -474,7 +470,7 @@ async fn price_card(
     view! {
         <article class=(if high { "price high" } else { "price" })>
             <div class="price-label">(name)</div><div class="price-amount">(amount) <small>"/ month"</small></div>
-            <p>"Plus uncapped metered generation usage."</p>
+            <p>"Included monthly usage, then uncapped metered overage."</p>
             <ul>for feature in features { <li>(feature)</li> }</ul>
             <a class=(if high { "button primary" } else { "button" }) href=(format!("/signup?plan={plan}"))>"Choose " (name)</a>
         </article>
@@ -510,7 +506,9 @@ mod tests {
 
     #[tokio::test]
     async fn router_renders_every_site_page() {
-        for path in ["/", "/docs", "/pricing", "/privacy", "/terms", "/account", "/signup"] {
+        for path in [
+            "/", "/docs", "/pricing", "/privacy", "/terms", "/account", "/signup",
+        ] {
             let response = router()
                 .handle(Request::builder().uri(path).body(Body::empty()).unwrap())
                 .await;
@@ -523,5 +521,27 @@ mod tests {
             let html = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             assert!(html.starts_with(b"<!DOCTYPE html>"), "{path}");
         }
+    }
+
+    #[tokio::test]
+    async fn pricing_matches_the_credit_backed_plans() {
+        let response = router()
+            .handle(
+                Request::builder()
+                    .uri("/pricing")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await;
+        let html = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let html = String::from_utf8(html.to_vec()).unwrap();
+
+        assert!(html.contains("Starter"));
+        assert!(html.contains("$9"));
+        assert!(html.contains("$5 generation usage included monthly"));
+        assert!(html.contains("Pro"));
+        assert!(html.contains("$24"));
+        assert!(html.contains("$20 generation usage included monthly"));
+        assert!(!html.contains("Subscriptions have no included credits"));
     }
 }
