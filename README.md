@@ -174,7 +174,7 @@ codex mcp add nib -- /absolute/path/to/nib --mcp
 
 The public `nib-ui` crate and generated command catalog expose `generate_ui`
 through the hosted Nib service. The public interface is documented at
-<https://nib.doug-lance.workers.dev> and versioned under
+<https://nibtool.com> and versioned under
 [`contracts/cloud/v1`](contracts/cloud/v1). Hosted generation, authentication,
 billing, abuse controls, storage, and operations are not part of this Apache
 repository.

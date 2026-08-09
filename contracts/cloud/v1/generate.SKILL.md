@@ -10,10 +10,10 @@ Use Nib only when the task requires a generated image of a dashboard, app screen
 
 ## Interfaces
 
-- Remote MCP: `https://nib.doug-lance.workers.dev/mcp`
+- Remote MCP: `https://nibtool.com/mcp`
 - MCP tool: `generate_ui`
-- HTTP: `POST https://nib.doug-lance.workers.dev/internal/v1/generate`
-- OpenAPI: `https://nib.doug-lance.workers.dev/openapi.json`
+- HTTP: `POST https://nibtool.com/internal/v1/generate`
+- OpenAPI: `https://nibtool.com/openapi.json`
 
 ## Method
 

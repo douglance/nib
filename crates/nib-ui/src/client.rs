@@ -21,9 +21,8 @@ pub struct HttpGenerator {
 
 impl HttpGenerator {
     pub fn from_env() -> Result<Self, UiError> {
-        let endpoint = std::env::var("NIB_BACKEND_URL").unwrap_or_else(|_| {
-            "https://nib.doug-lance.workers.dev/internal/v1/generate".to_string()
-        });
+        let endpoint = std::env::var("NIB_BACKEND_URL")
+            .unwrap_or_else(|_| "https://nibtool.com/internal/v1/generate".to_string());
         let mut headers = HeaderMap::new();
         if let Ok(tenant_id) = std::env::var("NIB_DEV_TENANT")
             && let Some(value) = development_tenant_header(&endpoint, Some(&tenant_id))?

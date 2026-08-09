@@ -7,7 +7,7 @@
     "type": "git",
     "url": "https://github.com/douglance/nib"
   },
-  "homepage": "https://nib.doug-lance.workers.dev",
+  "homepage": "https://nibtool.com",
   "author": "Doug Lance",
   "keywords": ["agent", "screenshot", "annotation", "image-generation", "ui", "ocr", "mcp", "claude", "codex"],
   "bin": {
