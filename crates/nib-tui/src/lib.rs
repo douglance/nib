@@ -27,13 +27,17 @@ use ratatui::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{File, OpenOptions},
     io::{self, Stdout, Write},
-    os::fd::AsRawFd,
     path::PathBuf,
     process::Command,
-    thread,
     time::{Duration, SystemTime},
+};
+
+#[cfg(unix)]
+use std::{
+    fs::{File, OpenOptions},
+    os::fd::AsRawFd,
+    thread,
 };
 
 // Use an 8-bit image ID so tmux clients without the RGB feature preserve the
@@ -698,38 +702,48 @@ pub fn kitty_transmit(
 /// transcript rows. Callers must still return the normal MCP image content so
 /// graphical clients retain the protocol-native path.
 pub fn try_schedule_codex_inline_image(png: Vec<u8>, width: u32, height: u32) -> bool {
-    let Ok(report) = TerminalReport::detect() else {
-        return false;
-    };
-    if !matches!(
-        report.protocol,
-        GraphicsProtocol::KittyPlaceholder | GraphicsProtocol::KittyDirect
-    ) {
+    #[cfg(not(unix))]
+    {
+        let _ = (png, width, height);
         return false;
     }
 
-    let Ok(mut tty) = OpenOptions::new().read(true).write(true).open("/dev/tty") else {
-        return false;
-    };
-    let Ok((columns, rows)) = terminal_size(&tty) else {
-        return false;
-    };
-    let mut sequence = codex_inline_sequence(&png, columns, rows, width, height);
-    if report.tmux_version.is_some() {
-        sequence = tmux_wrap(&sequence);
-    }
-
-    thread::spawn(move || {
-        for delay in [350_u64, 250, 250] {
-            thread::sleep(Duration::from_millis(delay));
-            if tty.write_all(sequence.as_bytes()).is_err() || tty.flush().is_err() {
-                break;
-            }
+    #[cfg(unix)]
+    {
+        let Ok(report) = TerminalReport::detect() else {
+            return false;
+        };
+        if !matches!(
+            report.protocol,
+            GraphicsProtocol::KittyPlaceholder | GraphicsProtocol::KittyDirect
+        ) {
+            return false;
         }
-    });
-    true
+
+        let Ok(mut tty) = OpenOptions::new().read(true).write(true).open("/dev/tty") else {
+            return false;
+        };
+        let Ok((columns, rows)) = terminal_size(&tty) else {
+            return false;
+        };
+        let mut sequence = codex_inline_sequence(&png, columns, rows, width, height);
+        if report.tmux_version.is_some() {
+            sequence = tmux_wrap(&sequence);
+        }
+
+        thread::spawn(move || {
+            for delay in [350_u64, 250, 250] {
+                thread::sleep(Duration::from_millis(delay));
+                if tty.write_all(sequence.as_bytes()).is_err() || tty.flush().is_err() {
+                    break;
+                }
+            }
+        });
+        true
+    }
 }
 
+#[cfg(unix)]
 fn terminal_size(tty: &File) -> io::Result<(u16, u16)> {
     let mut size = libc::winsize {
         ws_row: 0,
