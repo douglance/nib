@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::fmt;
 use std::io::Write;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const DEFAULT_PORTAL_URL: &str = "https://nib-global.doug-lance.workers.dev";
 
@@ -674,7 +674,7 @@ async fn post_v1_request_value_with(
 ) -> crate::core::Result<Value> {
     tokio::task::spawn_blocking(move || {
         send_json_value(
-            authorize(agent.post(&format!("{base_url}/v1/requests"))),
+            idempotent(authorize(agent.post(&format!("{base_url}/v1/requests")))),
             &body,
         )
     })
@@ -722,7 +722,9 @@ async fn revise_v1_request_value_with(
     let request_id = request_id.to_string();
     tokio::task::spawn_blocking(move || {
         send_json_value(
-            authorize(agent.post(&format!("{base_url}/v1/requests/{request_id}/revisions"))),
+            idempotent(authorize(
+                agent.post(&format!("{base_url}/v1/requests/{request_id}/revisions")),
+            )),
             &body,
         )
     })
@@ -763,7 +765,9 @@ async fn create_v1_decision_with(
     let request_id = request_id.to_string();
     tokio::task::spawn_blocking(move || {
         send_json_value(
-            authorize(agent.post(&format!("{base_url}/v1/requests/{request_id}/decisions"))),
+            idempotent(authorize(
+                agent.post(&format!("{base_url}/v1/requests/{request_id}/decisions")),
+            )),
             &body,
         )
     })
@@ -802,6 +806,17 @@ async fn get_v1_request_events_with(
     .await
     .map_err(|error| crate::core::NibError::Other(format!("Portal watch task failed: {error}")))?
     .map_err(crate::core::NibError::Other)
+}
+
+fn idempotent(request: ureq::Request) -> ureq::Request {
+    let key = std::env::var("NIB_IDEMPOTENCY_KEY").unwrap_or_else(|_| {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        format!("nib-cli-{}-{nanos}", std::process::id())
+    });
+    request.set("Idempotency-Key", &key)
 }
 
 async fn wait_for_request_with(
@@ -1353,6 +1368,9 @@ mod tests {
 
         let create = requests.recv().unwrap();
         assert!(request_line(&create).starts_with("POST /v1/requests "));
+        assert!(create
+            .to_ascii_lowercase()
+            .contains("\r\nidempotency-key: nib-cli-"));
         assert_eq!(request_body_json(&create)["formatVersion"], "1.0");
 
         let get = requests.recv().unwrap();
@@ -1360,10 +1378,16 @@ mod tests {
 
         let revise = requests.recv().unwrap();
         assert!(request_line(&revise).starts_with("POST /v1/requests/req-1/revisions "));
+        assert!(revise
+            .to_ascii_lowercase()
+            .contains("\r\nidempotency-key: nib-cli-"));
         assert_eq!(request_body_json(&revise)["metadata"]["phase"], "qa");
 
         let decision = requests.recv().unwrap();
         assert!(request_line(&decision).starts_with("POST /v1/requests/req-1/decisions "));
+        assert!(decision
+            .to_ascii_lowercase()
+            .contains("\r\nidempotency-key: nib-cli-"));
         let decision_body = request_body_json(&decision);
         assert_eq!(decision_body["outcome"], "approved");
         assert_eq!(decision_body["terminal"], true);
