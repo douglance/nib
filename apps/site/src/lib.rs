@@ -14,7 +14,7 @@ use topcoat::{context::Cx, view::Component};
 use worker::{Context, Env, event};
 
 const CSS: &str = r#"
-:root{color-scheme:dark;--bg:#090b0f;--panel:#11151b;--panel-strong:#151b24;--line:#242b35;--muted:#9aa6b5;--text:#f6f8fb;--accent:#d8ff63;--accent-ink:#182000;--blue:#81a7ff;--focus:#f4ff9d}*{box-sizing:border-box}html{scroll-behavior:smooth}body{min-height:100vh;margin:0;display:flex;flex-direction:column;background:radial-gradient(circle at 72% 12%,#19263e 0,transparent 30%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6}main{flex:1}a{color:inherit;text-decoration:none}a:focus-visible,button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);outline-offset:3px}.shell{width:min(1120px,calc(100% - 40px));margin:auto}.nav{height:76px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #ffffff12}.brand{font-weight:760;letter-spacing:-.035em;font-size:1.18rem}.brand-dot{color:var(--accent)}.nav-links{display:flex;align-items:center;gap:24px;color:var(--muted);font-size:.92rem}.button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 19px;border:1px solid var(--line);border-radius:12px;font:680 .92rem/1.2 Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:-.01em;background:#141922;color:var(--text);cursor:pointer}.button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.hero{display:grid;grid-template-columns:1.02fr .98fr;gap:72px;align-items:center;padding:96px 0 112px}.eyebrow{font:600 .75rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.13em;color:var(--accent)}h1{font-size:clamp(3.4rem,6.25vw,6rem);line-height:.98;letter-spacing:-.05em;margin:26px 0 32px;max-width:760px;text-wrap:balance}.lede{font-size:1.18rem;line-height:1.7;color:var(--muted);max-width:650px;text-wrap:pretty}.actions{display:flex;gap:12px;margin-top:38px;flex-wrap:wrap}.micro{margin-top:19px;color:#778394;font-size:.82rem;line-height:1.6}.viewport{position:relative;border:1px solid #364150;border-radius:22px;background:#0d1117;box-shadow:0 35px 100px #0009;overflow:hidden;aspect-ratio:4/3}.viewport img{display:block;width:100%;height:100%;object-fit:cover}.section{padding:100px 0;border-top:1px solid #ffffff12}.section h2{font-size:clamp(2.2rem,4vw,4rem);line-height:1.08;letter-spacing:-.045em;margin:17px 0 26px;text-wrap:balance}.section-copy{color:var(--muted);line-height:1.7;max-width:650px;text-wrap:pretty}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:48px}.step{border:1px solid var(--line);border-radius:18px;background:#10141a;padding:26px}.step b{font:600 .75rem/1.4 ui-monospace,monospace;color:var(--blue)}.step h3{margin:34px 0 10px;font-size:1.12rem;line-height:1.3}.step p,.price-card p{color:var(--muted);font-size:.9rem;line-height:1.65}.install-panel{max-width:900px;margin-top:42px;border:1px solid #465264;border-radius:20px;background:linear-gradient(145deg,#141a22,#0d1117);box-shadow:0 24px 70px #0006;overflow:hidden}.install-panel-head{display:flex;justify-content:space-between;gap:24px;padding:20px 22px;border-bottom:1px solid var(--line);color:var(--muted);font-size:.82rem}.install-panel-head strong{color:var(--text);font-weight:680}.install-prompt{margin:0;padding:26px 28px;white-space:pre-wrap;overflow-wrap:anywhere;color:#eef3fa;font:500 1rem/1.75 ui-monospace,SFMono-Regular,Menlo,monospace}.install-actions{display:flex;align-items:center;gap:12px;padding:0 22px 22px;flex-wrap:wrap}.install-status{min-height:1.4em;margin:0;color:var(--accent);font-size:.82rem}.install-facts,.free-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;max-width:900px;margin-top:28px;color:var(--muted);font-size:.86rem}.install-facts strong,.free-grid strong{display:block;margin-bottom:6px;color:var(--text);font-size:.95rem}.pricing-layout{display:grid;grid-template-columns:.55fr 1.45fr;gap:18px;align-items:start;margin-top:46px}.pricing-callout,.pricing-table-wrap,.price-card{border:1px solid var(--line);border-radius:18px;background:#10141a}.pricing-callout{padding:28px;background:linear-gradient(160deg,#151b24,#0f1319)}.pricing-callout .price-amount{font-size:3.5rem}.price-kicker{font:600 .75rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}.price-amount{font-size:3rem;line-height:1.05;letter-spacing:-.04em;margin:14px 0}.price-amount small{font-size:.85rem;letter-spacing:0;color:var(--muted)}.pricing-note{margin:24px 0 0;color:#c8d0da;font-size:.9rem;line-height:1.7}.pricing-table-wrap{overflow:hidden}.pricing-table{width:100%;border-collapse:collapse;font-size:.9rem}.pricing-table th,.pricing-table td{padding:16px 18px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}.pricing-table th{color:var(--muted);font:600 .72rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.12em;background:#131821}.pricing-table tr:last-child td{border-bottom:0}.pricing-table strong{display:block;color:var(--text);font-size:1rem}.pricing-table small{display:block;color:var(--muted);line-height:1.5}.pricing-table .amount{font-weight:760;color:var(--text)}.pricing-table .button{white-space:nowrap}.checkout-cell{width:178px}.checkout-pending{display:inline-flex;align-items:center;min-height:36px;padding:0 12px;border:1px solid #39424f;border-radius:10px;color:#9aa6b5;background:#11151b;font-size:.78rem;font-weight:680}.configured-plans{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;margin-top:18px;max-width:820px}.price-card{padding:24px}.price-card.high{border-color:#a9cf42;box-shadow:inset 0 0 0 1px #a9cf4255}.price-card ul{padding:0;list-style:none;color:#c8d0da;font-size:.9rem;min-height:96px}.price-card li{margin:10px 0}.price-card li:before{content:"+";color:var(--accent);margin-right:9px}.price-card .button{width:100%}.footer{display:flex;justify-content:space-between;padding:36px 0 60px;color:#778394;font-size:.82rem}.legal,.docs{max-width:820px;padding:80px 0 120px}.legal h1,.docs h1{font-size:clamp(3rem,7vw,5.5rem)}.legal h2,.docs h2{margin-top:48px}.docs .install-panel{margin:42px 0 64px}.docs pre:not(.install-prompt){overflow:auto;padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:#0d1117;color:#dce6f5;font:500 .88rem/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}.docs code{color:var(--accent)}@media(max-width:980px){.pricing-layout{grid-template-columns:1fr}.checkout-cell{width:auto}}@media(max-width:820px){.nav-links a:not(.button){display:none}.hero{grid-template-columns:1fr;gap:58px;padding:68px 0 104px}.steps,.install-facts,.free-grid,.configured-plans{grid-template-columns:1fr}.viewport{max-width:620px}h1{font-size:clamp(3.05rem,13vw,3.75rem);line-height:1;letter-spacing:-.045em}.section{padding:88px 0}.install-panel-head{display:block}.install-panel-head span{display:block;margin-top:5px}.install-prompt{padding:22px;font-size:.9rem}.pricing-table,.pricing-table tbody,.pricing-table tr,.pricing-table td{display:block}.pricing-table thead{display:none}.pricing-table tr{padding:16px 18px;border-bottom:1px solid var(--line)}.pricing-table tr:last-child{border-bottom:0}.pricing-table td{padding:5px 0;border:0}.pricing-table td:before{content:attr(data-label);display:block;margin-bottom:1px;color:var(--muted);font:600 .67rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.12em}.footer{gap:20px;flex-direction:column}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+:root{color-scheme:dark;--bg:#090b0f;--panel:#11151b;--panel-strong:#151b24;--line:#242b35;--muted:#9aa6b5;--text:#f6f8fb;--accent:#d8ff63;--accent-ink:#182000;--paper:#f6f4ef;--blue:#81a7ff;--focus:#f4ff9d}*{box-sizing:border-box}html{scroll-behavior:smooth}body{min-height:100vh;margin:0;display:flex;flex-direction:column;overflow-x:hidden;background:radial-gradient(circle at 72% 12%,#19263e 0,transparent 30%),var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.6}main{flex:1}img,video{max-width:100%}a{color:inherit;text-decoration:none}a:focus-visible,button:focus-visible,[tabindex]:focus-visible{outline:3px solid var(--focus);outline-offset:3px}.shell{width:min(1120px,calc(100% - 40px));margin:auto}.nav{display:flex;align-items:center;gap:26px;min-height:76px;border-bottom:1px solid #ffffff12}.brand{margin-right:auto;font-weight:760;letter-spacing:-.035em;font-size:1.18rem}.brand-dot{color:var(--accent)}.nav-links{display:flex;align-items:center;gap:26px;color:var(--muted);font-size:.92rem}.nav-links a{padding:6px 0;border-bottom:1px solid transparent}.nav-links a:hover{color:var(--text)}.nav .button{flex:none}.button{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 19px;border:1px solid var(--line);border-radius:12px;font:680 .92rem/1.2 Inter,ui-sans-serif,system-ui,sans-serif;letter-spacing:-.01em;background:#141922;color:var(--text);cursor:pointer}.button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.hero{display:grid;grid-template-columns:1.02fr .98fr;gap:72px;align-items:center;padding:96px 0 112px}.eyebrow{font:600 .75rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.13em;color:var(--accent)}h1{font-size:clamp(3.4rem,6.25vw,6rem);line-height:.98;letter-spacing:-.05em;margin:26px 0 32px;max-width:760px;text-wrap:balance}.lede{font-size:1.18rem;line-height:1.7;color:var(--muted);max-width:650px;text-wrap:pretty}.actions{display:flex;gap:12px;margin-top:38px;flex-wrap:wrap}.micro{margin-top:19px;color:#778394;font-size:.82rem;line-height:1.6}.viewport{position:relative;border:1px solid #364150;border-radius:22px;background:#0d1117;box-shadow:0 35px 100px #0009;overflow:hidden;aspect-ratio:4/3}.viewport img{display:block;width:100%;height:100%;object-fit:cover}.section{padding:100px 0;border-top:1px solid #ffffff12}.section h2{font-size:clamp(2.2rem,4vw,4rem);line-height:1.08;letter-spacing:-.045em;margin:17px 0 26px;text-wrap:balance}.section-copy{color:var(--muted);line-height:1.7;max-width:650px;text-wrap:pretty}.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:48px}.step{border:1px solid var(--line);border-radius:18px;background:#10141a;padding:26px}.step b{font:600 .75rem/1.4 ui-monospace,monospace;color:var(--blue)}.step h3{margin:34px 0 10px;font-size:1.12rem;line-height:1.3}.step p,.price-card p{color:var(--muted);font-size:.9rem;line-height:1.65}.install-panel{max-width:900px;margin-top:42px;border:1px solid #465264;border-radius:20px;background:linear-gradient(145deg,#141a22,#0d1117);box-shadow:0 24px 70px #0006;overflow:hidden}.install-panel-head{display:flex;justify-content:space-between;gap:24px;padding:20px 22px;border-bottom:1px solid var(--line);color:var(--muted);font-size:.82rem}.install-panel-head strong{color:var(--text);font-weight:680}.install-prompt{margin:0;padding:26px 28px;white-space:pre-wrap;overflow-wrap:anywhere;color:#eef3fa;font:500 1rem/1.75 ui-monospace,SFMono-Regular,Menlo,monospace}.install-actions{display:flex;align-items:center;gap:12px;padding:0 22px 22px;flex-wrap:wrap}.install-status{min-height:1.4em;margin:0;color:var(--accent);font-size:.82rem}.install-facts,.free-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;max-width:900px;margin-top:28px;color:var(--muted);font-size:.86rem}.install-facts strong,.free-grid strong{display:block;margin-bottom:6px;color:var(--text);font-size:.95rem}.pricing-layout{display:grid;grid-template-columns:.55fr 1.45fr;gap:18px;align-items:start;margin-top:46px}.pricing-callout,.pricing-table-wrap,.price-card{border:1px solid var(--line);border-radius:18px;background:#10141a}.pricing-callout{padding:28px;background:linear-gradient(160deg,#151b24,#0f1319)}.pricing-callout .price-amount{font-size:3.5rem}.price-kicker{font:600 .75rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.12em;color:var(--muted)}.price-amount{font-size:3rem;line-height:1.05;letter-spacing:-.04em;margin:14px 0}.price-amount small{font-size:.85rem;letter-spacing:0;color:var(--muted)}.pricing-note{margin:24px 0 0;color:#c8d0da;font-size:.9rem;line-height:1.7}.pricing-table-wrap{overflow:hidden}.pricing-table{width:100%;border-collapse:collapse;font-size:.9rem}.pricing-table th,.pricing-table td{padding:16px 18px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle}.pricing-table th{color:var(--muted);font:600 .72rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.12em;background:#131821}.pricing-table tr:last-child td{border-bottom:0}.pricing-table strong{display:block;color:var(--text);font-size:1rem}.pricing-table small{display:block;color:var(--muted);line-height:1.5}.pricing-table .amount{font-weight:760;color:var(--text)}.pricing-table .button{white-space:nowrap}.checkout-cell{width:178px}.checkout-pending{display:inline-flex;align-items:center;min-height:36px;padding:0 12px;border:1px solid #39424f;border-radius:10px;color:#9aa6b5;background:#11151b;font-size:.78rem;font-weight:680}.configured-plans{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;margin-top:18px;max-width:820px}.price-card{padding:24px}.price-card.high{border-color:#a9cf42;box-shadow:inset 0 0 0 1px #a9cf4255}.price-card ul{padding:0;list-style:none;color:#c8d0da;font-size:.9rem;min-height:96px}.price-card li{margin:10px 0}.price-card li:before{content:"+";color:var(--accent);margin-right:9px}.price-card .button{width:100%}.footer{display:flex;justify-content:space-between;padding:36px 0 60px;color:#778394;font-size:.82rem}.legal,.docs{max-width:820px;padding:80px 0 120px}.legal h1,.docs h1{font-size:clamp(3rem,7vw,5.5rem)}.legal h2,.docs h2{margin-top:48px}.docs .install-panel{margin:42px 0 64px}.docs pre:not(.install-prompt){overflow:auto;padding:18px 20px;border:1px solid var(--line);border-radius:14px;background:#0d1117;color:#dce6f5;font:500 .88rem/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}.docs code{color:var(--accent)}@media(max-width:980px){.pricing-layout{grid-template-columns:1fr}.checkout-cell{width:auto}}@media(max-width:820px){.nav{flex-wrap:wrap;min-height:0;padding:14px 0 0;column-gap:16px;row-gap:2px}.nav .button{order:2;min-height:40px;padding:0 15px}.nav-links{order:3;flex-wrap:wrap;width:100%;justify-content:flex-start;gap:6px 18px;padding:10px 0 4px;font-size:.85rem}.nav-links a{white-space:nowrap}.hero{grid-template-columns:1fr;gap:58px;padding:68px 0 104px}.steps,.install-facts,.free-grid,.configured-plans{grid-template-columns:1fr}.viewport{max-width:620px}h1{font-size:clamp(3.05rem,13vw,3.75rem);line-height:1;letter-spacing:-.045em}.section{padding:88px 0}.install-panel-head{display:block}.install-panel-head span{display:block;margin-top:5px}.install-prompt{padding:22px;font-size:.9rem}.pricing-table,.pricing-table tbody,.pricing-table tr,.pricing-table td{display:block}.pricing-table thead{display:none}.pricing-table tr{padding:16px 18px;border-bottom:1px solid var(--line)}.pricing-table tr:last-child{border-bottom:0}.pricing-table td{padding:5px 0;border:0}.pricing-table td:before{content:attr(data-label);display:block;margin-bottom:1px;color:var(--muted);font:600 .67rem/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:uppercase;letter-spacing:.12em}.footer{gap:20px;flex-direction:column}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 "#;
 
 const SIGNUP_CSS: &str = r#"
@@ -23,13 +23,18 @@ const SIGNUP_CSS: &str = r#"
 
 const HOME_CSS: &str = r#"
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-.story-hero{display:grid;grid-template-columns:minmax(0,.88fr) minmax(520px,1.12fr);gap:64px;align-items:center;padding:82px 0 44px}.story-hero h1{font-size:clamp(3.5rem,6.2vw,6rem);margin:20px 0 24px}.hero-sub{max-width:570px;margin:0;color:#c5ced9;font-size:1.16rem;line-height:1.65}.hero-sub strong{color:var(--text)}.story-hero .actions{margin-top:30px}.button.play-link{gap:9px;background:transparent}.button.play-link svg{width:18px;height:18px;fill:currentColor}.hero-facts{display:flex;gap:26px;margin:32px 0 0;padding:24px 0 0;border-top:1px solid var(--line)}.hero-facts div{min-width:92px}.hero-facts dt{color:var(--accent);font-size:1.28rem;font-weight:780;letter-spacing:-.03em}.hero-facts dd{margin:2px 0 0;color:var(--muted);font-size:.78rem}.hero-art{position:relative;margin:0;border:1px solid #394553;border-radius:28px;overflow:hidden;background:#0d1117;box-shadow:0 38px 100px #000a;aspect-ratio:16/10}.hero-art img{display:block;width:100%;height:100%;object-fit:cover}.hero-media-tags{position:absolute;left:22px;bottom:20px;display:flex;gap:8px}.hero-media-tags span{display:inline-flex;align-items:center;gap:7px;padding:8px 11px;border:1px solid #ffffff24;border-radius:999px;background:#090b0fdd;backdrop-filter:blur(10px);color:#eef3fa;font:650 .72rem/1 ui-monospace,monospace}.hero-media-tags i{width:7px;height:7px;border-radius:50%;background:var(--accent)}
-.loop-shell{padding:32px 0 88px}.flow-strip{display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr auto 1fr;gap:12px;align-items:center;padding:20px;border:1px solid var(--line);border-radius:24px;background:#0d1117}.flow-node{min-width:0;text-align:center}.flow-icon{display:grid;place-items:center;width:64px;height:64px;margin:0 auto 12px;border:1px solid #34404e;border-radius:18px;background:#171d25;color:#dce5ef}.flow-node.request .flow-icon,.flow-node.decision .flow-icon{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}.flow-icon svg{width:30px;height:30px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.flow-node strong{display:block;font-size:.86rem}.flow-node small{display:block;margin-top:2px;color:var(--muted);font-size:.7rem}.flow-arrow{color:#657080}.flow-arrow svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-.visual-section{padding:96px 0;border-top:1px solid #ffffff12}.visual-head{display:flex;align-items:end;justify-content:space-between;gap:40px;margin-bottom:38px}.visual-head h2{max-width:760px;margin:12px 0 0;font-size:clamp(2.5rem,5vw,4.6rem);line-height:1.02;letter-spacing:-.05em}.visual-note{max-width:300px;margin:0;color:var(--muted);font-size:.9rem}.film-frame{position:relative;margin:0;border:1px solid #394553;border-radius:28px;overflow:hidden;background:#0d1117;box-shadow:0 28px 80px #0008}.product-film{display:block;width:100%;aspect-ratio:16/10;background:#0d1117}.film-key{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);background:#11151b}.film-key div{display:flex;align-items:center;gap:11px;padding:18px 22px;border-right:1px solid var(--line);color:#cbd3dc;font-size:.86rem}.film-key div:last-child{border:0}.film-key b{display:grid;place-items:center;width:25px;height:25px;border-radius:50%;background:#202833;color:var(--accent);font:700 .72rem/1 ui-monospace,monospace}
-.review-showcase{display:grid;grid-template-columns:minmax(300px,.64fr) minmax(0,1.36fr);gap:22px;align-items:stretch}.phone-card,.artifact-board{border:1px solid var(--line);border-radius:28px;background:#10141a;overflow:hidden}.phone-card{position:relative;display:grid;place-items:center;min-height:600px;padding:34px;background:radial-gradient(circle at 50% 20%,#233044,#10141a 62%)}.phone-card img{display:block;width:min(100%,350px);height:auto;border-radius:28px;box-shadow:0 28px 70px #000a}.phone-card figcaption{position:absolute;left:22px;bottom:20px;padding:8px 12px;border:1px solid #ffffff20;border-radius:999px;background:#090b0fdd;color:#dce5ef;font-size:.74rem}.artifact-board{padding:28px}.board-top{display:flex;align-items:center;justify-content:space-between;padding-bottom:22px;border-bottom:1px solid var(--line)}.board-brand{font-size:1.1rem;font-weight:760}.board-brand span{color:var(--accent)}.board-status{display:inline-flex;align-items:center;gap:8px;color:#cbd3dc;font-size:.76rem}.board-status i{width:8px;height:8px;border-radius:50%;background:#7bd88f}.artifact-grid{display:grid;grid-template-columns:1.2fr .8fr;grid-template-rows:1fr 1fr;gap:14px;margin-top:22px;min-height:342px}.artifact-tile{position:relative;overflow:hidden;border:1px solid #303a48;border-radius:20px;background:#181f29}.artifact-tile.image{grid-row:1/3;background:linear-gradient(145deg,#26303c,#12171e)}.artifact-tile.image .mock-screen{position:absolute;inset:34px;border-radius:15px;background:#edf0f3}.mock-screen:before{content:"";position:absolute;left:28px;top:34px;width:42%;height:14px;border-radius:8px;background:#aeb8c2;box-shadow:0 34px 0 #c3cad2,0 68px 0 #c3cad2}.mock-screen:after{content:"";position:absolute;left:28px;bottom:32px;width:35%;height:34px;border-radius:10px;background:#151b24}.annotation-pin{position:absolute;right:20%;top:42%;display:grid;place-items:center;width:40px;height:40px;border:3px solid #182000;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-weight:800}.artifact-tile.video{display:grid;place-items:center;background:linear-gradient(145deg,#1d2630,#11161d)}.play-mark{display:grid;place-items:center;width:70px;height:70px;border-radius:50%;background:var(--accent);color:var(--accent-ink)}.play-mark svg{width:27px;height:27px;fill:currentColor}.artifact-tile.diff{padding:32px 24px}.diff-line{height:9px;margin:12px 0;border-radius:8px;background:#7bd88f}.diff-line.remove{width:62%;background:#ff837a}.diff-line.short{width:74%}.tile-label{position:absolute;left:14px;bottom:12px;padding:6px 9px;border-radius:8px;background:#090b0fcc;color:#e9eef4;font:650 .7rem/1 ui-monospace,monospace}.feedback-bubble{display:flex;gap:13px;margin-top:14px;padding:17px 18px;border:1px solid #a9cf4245;border-radius:18px;background:#171d25}.feedback-pin{display:grid;place-items:center;flex:0 0 30px;height:30px;border-radius:50%;background:var(--accent);color:var(--accent-ink);font-weight:800}.feedback-bubble strong{display:block;font-size:.9rem}.feedback-bubble span{display:block;margin-top:3px;color:var(--muted);font-size:.78rem}
-.home-pricing{padding:96px 0;border-top:1px solid #ffffff12}.pricing-compact{display:grid;grid-template-columns:1fr repeat(3,.58fr);gap:14px;align-items:stretch;margin-top:36px}.pricing-intro{display:flex;flex-direction:column;justify-content:space-between;padding:28px;border:1px solid #3c4755;border-radius:22px;background:linear-gradient(145deg,#151b24,#0d1117)}.pricing-intro h2{margin:10px 0 18px;font-size:clamp(2.3rem,4vw,3.8rem);line-height:1.04;letter-spacing:-.05em}.pricing-intro p{margin:0;color:var(--muted);font-size:.88rem}.pricing-intro .button{align-self:flex-start;margin-top:28px}.mini-plan{padding:24px;border:1px solid var(--line);border-radius:22px;background:#10141a}.mini-plan.featured{border-color:#a9cf42;box-shadow:inset 0 0 0 1px #a9cf4244}.mini-plan h3{margin:0;font-size:.92rem}.mini-price{margin:28px 0 6px;font-size:2.7rem;line-height:1;letter-spacing:-.05em;font-weight:780}.mini-price small{font-size:.72rem;color:var(--muted);letter-spacing:0}.mini-plan p{margin:0;color:var(--muted);font-size:.8rem}.mini-plan .plan-dot{display:block;width:10px;height:10px;margin-top:34px;border-radius:50%;background:#3c4652}.mini-plan.featured .plan-dot{background:var(--accent)}
-@media(max-width:980px){.story-hero{grid-template-columns:1fr;gap:44px}.hero-art{max-width:760px}.pricing-compact{grid-template-columns:repeat(3,1fr)}.pricing-intro{grid-column:1/-1}.review-showcase{grid-template-columns:1fr}.phone-card{min-height:auto}.phone-card img{width:min(100%,320px)}}
-@media(max-width:720px){.story-hero{padding-top:56px}.story-hero h1{font-size:clamp(3.1rem,14vw,4.2rem)}.hero-facts{gap:18px}.hero-art{border-radius:20px}.hero-media-tags{left:12px;bottom:12px}.hero-media-tags span{padding:7px 9px}.loop-shell{padding-bottom:70px}.flow-strip{grid-template-columns:1fr;gap:6px}.flow-node{display:grid;grid-template-columns:48px 1fr;column-gap:12px;align-items:center;text-align:left;width:min(100%,260px);margin:auto}.flow-icon{grid-row:1/3;width:48px;height:48px;margin:0;border-radius:14px}.flow-icon svg{width:24px;height:24px}.flow-arrow{transform:rotate(90deg);text-align:center}.visual-section,.home-pricing{padding:76px 0}.visual-head{display:block}.visual-note{margin-top:16px}.film-frame{border-radius:20px}.film-key{grid-template-columns:1fr}.film-key div{border-right:0;border-bottom:1px solid var(--line);padding:14px 18px}.film-key div:last-child{border:0}.artifact-board{padding:18px}.artifact-grid{grid-template-columns:1fr;grid-template-rows:270px 170px 170px}.artifact-tile.image{grid-row:auto}.pricing-compact{grid-template-columns:1fr}.pricing-intro{grid-column:auto}.phone-card{padding:22px}.phone-card figcaption{position:static;margin-top:18px}.hero-facts dd{font-size:.7rem}}
+.story-hero{display:grid;grid-template-columns:minmax(0,1.06fr) minmax(0,.94fr);gap:72px;align-items:center;padding:88px 0 96px}.story-hero h1{font-size:clamp(3.2rem,5.6vw,5.4rem);margin:20px 0 22px}.hero-sub{max-width:520px;margin:0;color:#c5ced9;font-size:1.12rem;line-height:1.6}.hero-sub strong{color:var(--text)}.story-hero .actions{gap:24px;align-items:center;margin-top:34px}.story-hero .button.primary{min-height:52px;padding:0 26px;font-size:1rem}.jump-link{display:inline-flex;align-items:center;gap:9px;color:#c5ced9;font-size:.92rem;font-weight:620;border-bottom:1px solid #ffffff2e;padding-bottom:2px}.jump-link svg{width:15px;height:15px;fill:currentColor}.hero-facts{display:flex;flex-wrap:wrap;gap:14px;margin:34px 0 0;padding:0}.hero-facts div{display:flex;align-items:baseline;gap:8px;padding:9px 14px;border:1px solid var(--line);border-radius:999px;background:#10141a}.hero-facts dt{color:var(--accent);font-size:.92rem;font-weight:760;letter-spacing:-.02em}.hero-facts dd{margin:0;color:var(--muted);font-size:.8rem}
+.capture{display:flex;flex-direction:column;margin:0;border:1px solid var(--line);border-radius:20px;overflow:hidden;background:var(--paper);box-shadow:0 30px 90px #000a}.capture picture{order:2;display:contents}.capture img{order:2;display:block;width:100%;height:auto}.capture-tag{order:1;display:flex;align-items:center;gap:9px;padding:12px 17px;border-bottom:1px solid var(--line);background:#10141a;color:#cbd3dc;font:650 .68rem/1 ui-monospace,monospace;letter-spacing:.09em}.capture-tag i{flex:none;width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.hero-shot{justify-self:center;width:min(100%,360px);margin:0}.hero-device{position:relative;padding:13px;border:1px solid #333d4b;border-radius:34px;background:linear-gradient(160deg,#232b36,#12161d)}.hero-device .capture{border:0;border-radius:22px;box-shadow:0 26px 70px #000c}.hero-shot figcaption{display:flex;align-items:center;justify-content:center;gap:9px;margin-top:16px;color:var(--muted);font:650 .68rem/1 ui-monospace,monospace;letter-spacing:.09em}.hero-shot figcaption i{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.loop-shell{padding:74px 0;border-top:1px solid #ffffff12}.loop-head{display:flex;align-items:baseline;justify-content:space-between;gap:32px;margin-bottom:30px}.loop-head h2{margin:0;font-size:1.14rem;font-weight:700;letter-spacing:-.02em}.loop-head p{margin:0;color:var(--muted);font-size:.88rem}.flow-strip{display:grid;grid-template-columns:1fr auto 1fr auto 1fr auto 1fr auto 1fr;gap:10px;align-items:start;padding:26px 20px;border:1px solid var(--line);border-radius:24px;background:#0d1117}.flow-node{min-width:0;text-align:center}.flow-icon{display:grid;place-items:center;width:60px;height:60px;margin:0 auto 14px;border:1px solid #34404e;border-radius:18px;background:#171d25;color:#dce5ef}.flow-node.request .flow-icon,.flow-node.decision .flow-icon{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}.flow-icon svg{width:28px;height:28px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.flow-node strong{display:block;font-size:.86rem}.flow-node small{display:block;margin-top:2px;color:var(--muted);font-size:.72rem}.flow-arrow{padding-top:20px;color:#5c6675}.flow-arrow svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.visual-section{padding:88px 0;border-top:1px solid #ffffff12}.visual-head{display:flex;align-items:end;justify-content:space-between;gap:40px;margin-bottom:34px}.visual-head h2{max-width:640px;margin:12px 0 0;font-size:clamp(2.1rem,3.6vw,3.2rem);line-height:1.06;letter-spacing:-.045em}.visual-note{max-width:290px;margin:0;color:var(--muted);font-size:.88rem}
+.proof-stack{display:grid;gap:18px}.proof-main img{max-height:600px;object-fit:cover;object-position:top}.proof-legend{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:18px;margin-top:26px}.proof-legend p{max-width:420px;margin:0;color:var(--muted);font-size:.9rem;line-height:1.6}
+.marks{display:flex;flex-wrap:wrap;gap:10px;padding:0;list-style:none}.marks li{display:inline-flex;align-items:center;gap:9px;padding:9px 13px;border:1px solid var(--line);border-radius:999px;background:#10141a;color:#cbd3dc;font-size:.82rem}.marks svg{width:16px;height:16px;fill:none;stroke:var(--accent);stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.film-frame{position:relative;margin:0;border:1px solid #394553;border-radius:24px;overflow:hidden;background:#0d1117;box-shadow:0 28px 80px #0008}.product-film{display:block;width:100%;aspect-ratio:13/9;background:#0d1117}.film-key{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--line);background:#11151b}.film-key div{display:flex;align-items:center;gap:11px;padding:16px 20px;border-right:1px solid var(--line);color:#cbd3dc;font-size:.85rem}.film-key div:last-child{border:0}.film-key b{display:grid;place-items:center;flex:none;width:24px;height:24px;border-radius:50%;background:#202833;color:var(--accent);font:700 .7rem/1 ui-monospace,monospace}
+.resume-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:20px;align-items:start}.payload{margin:0;padding:22px 24px;overflow-x:auto;border:1px solid var(--line);border-radius:20px;background:#0d1117;color:#dce6f5;font:500 .82rem/1.75 ui-monospace,SFMono-Regular,Menlo,monospace}.payload b{color:var(--accent);font-weight:500}.payload-head{display:flex;align-items:center;gap:9px;margin-bottom:14px;color:var(--muted);font:650 .7rem/1 ui-monospace,monospace;letter-spacing:.1em;text-transform:uppercase}.payload-head i{width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.home-pricing{padding:88px 0 96px;border-top:1px solid #ffffff12}.pricing-compact{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:34px}.mini-plan{display:flex;flex-direction:column;padding:26px;border:1px solid var(--line);border-radius:22px;background:#10141a}.mini-plan.featured{border-color:#a9cf42;background:linear-gradient(165deg,#171d16,#10141a 58%)}.mini-plan h3{display:flex;align-items:center;gap:10px;margin:0;font-size:.95rem}.mini-plan .flag{padding:4px 8px;border-radius:999px;background:var(--accent);color:var(--accent-ink);font:700 .62rem/1.3 ui-monospace,monospace;letter-spacing:.06em}.mini-price{margin:22px 0 4px;font-size:2.6rem;line-height:1;letter-spacing:-.05em;font-weight:780}.mini-price small{font-size:.7rem;color:var(--muted);letter-spacing:0;font-weight:600}.mini-plan p{margin:0;color:#c8d0da;font-size:.86rem}.mini-plan .unit{margin-top:6px;color:var(--muted);font-size:.78rem}.mini-plan .button{width:100%;margin-top:22px}.pricing-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px;margin-top:22px;color:var(--muted);font-size:.85rem}.pricing-foot a{border-bottom:1px solid #ffffff2e;color:#c5ced9}
+@media(max-width:980px){.story-hero{grid-template-columns:1fr;gap:48px;padding:64px 0 76px}.hero-shot{justify-self:start}.resume-grid{grid-template-columns:1fr}.proof-main img{max-height:460px}}
+@media(max-width:720px){.story-hero{padding-top:48px}.story-hero h1{font-size:clamp(2.7rem,11vw,3.6rem)}.story-hero .actions{gap:18px}.story-hero .button.primary{width:100%}.hero-shot{width:100%}.hero-device{padding:10px;border-radius:26px}.loop-shell,.visual-section,.home-pricing{padding:64px 0}.loop-head{display:block}.loop-head p{margin-top:8px}.flow-strip{grid-template-columns:1fr;gap:4px;padding:18px}.flow-node{display:grid;grid-template-columns:46px 1fr;column-gap:14px;align-items:center;text-align:left;width:min(100%,250px);margin:auto}.flow-icon{grid-row:1/3;width:46px;height:46px;margin:0;border-radius:14px}.flow-icon svg{width:22px;height:22px}.flow-arrow{padding:0;transform:rotate(90deg);text-align:center}.visual-head{display:block}.visual-note{margin-top:14px}.film-frame{border-radius:18px}.film-key{grid-template-columns:1fr}.film-key div{border-right:0;border-bottom:1px solid var(--line);padding:13px 16px}.film-key div:last-child{border:0}.pricing-compact{grid-template-columns:1fr}.payload{font-size:.76rem}}
 @media(prefers-reduced-motion:reduce){.product-film{animation:none}}
 "#;
 
@@ -43,7 +48,7 @@ const SEO_JSON_LD: &str = r#"{
       "@id": "https://nibtool.com/#website",
       "url": "https://nibtool.com/",
       "name": "Nib",
-      "description": "The fastest way for humans to review AI-generated software."
+      "description": "The fastest way for humans to review images produced by AI software."
     },
     {
       "@type": "SoftwareApplication",
@@ -52,9 +57,9 @@ const SEO_JSON_LD: &str = r#"{
       "url": "https://nibtool.com/",
       "applicationCategory": "DeveloperApplication",
       "operatingSystem": "Any",
-      "description": "Create hosted human review requests for AI-generated software. Tests verify behavior. Nib verifies intent.",
+      "description": "Send an image for human review and return a structured decision to the agent. Tests verify behavior. Nib verifies intent.",
       "featureList": [
-        "Create hosted review requests from agents and developer tools",
+        "Review images from agents and developer tools",
         "Invite guest participants without paid seats",
         "Use repositories and self-hosted review flows for free"
       ],
@@ -71,14 +76,14 @@ const SEO_JSON_LD: &str = r#"{
           "name": "Starter",
           "price": "9",
           "priceCurrency": "USD",
-          "description": "100 hosted requests, $5 generation credit, then $0.05 per hosted request overage"
+          "description": "100 hosted requests, $5 optional UI generation credit, then $0.05 per extra hosted request"
         },
         {
           "@type": "Offer",
           "name": "Pro",
           "price": "24",
           "priceCurrency": "USD",
-          "description": "500 hosted requests, $20 generation credit, then $0.05 per hosted request overage"
+          "description": "500 hosted requests, $20 optional UI generation credit, then $0.05 per extra hosted request"
         }
       ]
     }
@@ -177,11 +182,13 @@ pub async fn export_site(output: &Path) -> std::result::Result<(), Box<dyn std::
     tokio::fs::create_dir_all(&assets).await?;
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     for asset in [
-        "generated-ui-hero.png",
-        "nib-decision-loop-hero.png",
-        "nib-mobile-review.png",
+        "nib-review-desktop.png",
+        "nib-review-decision.png",
+        "nib-review-sent.png",
+        "nib-review-mobile-evidence.png",
+        "nib-review-mobile-decision.png",
         "nib-product-tour.mp4",
-        "tour-01.png",
+        "nib-product-tour-poster.png",
     ] {
         tokio::fs::copy(source.join(asset), assets.join(asset)).await?;
     }
@@ -200,7 +207,7 @@ async fn home() -> Result {
     view! {
         page_document(
             title: "Human review for AI-generated software | Nib",
-            description: "Your agent did the work. Nib packages the evidence, gets a human decision, and returns it to the agent.",
+            description: "Your agent made an image. Nib gets the human decision and returns it to the agent.",
             canonical: "https://nibtool.com/",
             <main>
                 hero_story()
@@ -382,10 +389,11 @@ async fn site_nav() -> Result {
             <a class="brand" href="/">"nib" <span class="brand-dot">"."</span></a>
             <nav class="nav-links" aria-label="Primary navigation">
                 <a href="/#how">"How it works"</a>
-                <a href="/#pricing">"Pricing"</a>
-                <a href="/account">"Account"</a>
-                <a class="button" href="/signup">"Start free"</a>
+                <a href="/#reviewer">"The reviewer"</a>
+                <a href="/pricing">"Pricing"</a>
+                <a href="/docs">"Docs"</a>
             </nav>
+            <a class="button primary" href="/signup">"Start free"</a>
         </header>
     }
 }
@@ -395,26 +403,29 @@ async fn hero_story() -> Result {
     view! {
         <section class="shell story-hero">
             <div>
-                <div class="eyebrow">"Human review for AI software"</div>
+                <div class="eyebrow">"Image review for AI software"</div>
                 <h1>"Your agent did the work. You make the call."</h1>
-                <p class="hero-sub">"Nib turns " <strong>"code, images, and video"</strong> " into one decision your agent can use."</p>
+                <p class="hero-sub">"Your agent sends the image in one link. You " <strong>"approve, reject, or mark what needs to change"</strong> "—then the agent resumes."</p>
                 <div class="actions">
                     <a class="button primary" href="/signup">"Start free"</a>
-                    <a class="button play-link" href="#tour">
+                    <a class="jump-link" href="#tour">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
-                        "Watch 11-sec tour"
+                        "See the 11-second loop"
                     </a>
                 </div>
                 <dl class="hero-facts">
-                    <div><dt>"$0"</dt><dd>"for reviewers"</dd></div>
-                    <div><dt>"25"</dt><dd>"free requests"</dd></div>
-                    <div><dt>"1 link"</dt><dd>"to decide"</dd></div>
+                    <div><dt>"$0"</dt><dd>"to review"</dd></div>
+                    <div><dt>"25"</dt><dd>"free requests a month"</dd></div>
+                    <div><dt>"No account"</dt><dd>"for reviewers"</dd></div>
                 </dl>
             </div>
-            <figure class="hero-art">
-                <img src="/assets/nib-decision-loop-hero.png" alt="Code, image, video, and diff evidence flowing into a human approval and back to the agent." fetchpriority="high">
-                <div class="hero-media-tags" aria-hidden="true"><span><i></i>"IMAGE"</span><span><i></i>"VIDEO"</span><span><i></i>"DIFF"</span></div>
-                <figcaption class="sr-only">"Nib closes the loop between autonomous software and human judgment."</figcaption>
+            <figure class="hero-shot">
+                <div class="hero-device">
+                    <div class="capture">
+                        <img src="/assets/nib-review-mobile-evidence.png" width="1170" height="1437" alt="The Nib reviewer on a phone showing the pricing-page image an agent submitted for human review." fetchpriority="high">
+                    </div>
+                </div>
+                <figcaption><i></i>"THE IMAGE UNDER REVIEW"</figcaption>
             </figure>
         </section>
     }
@@ -424,7 +435,10 @@ async fn hero_story() -> Result {
 async fn how_it_works() -> Result {
     view! {
         <section class="shell loop-shell" id="how">
-            <h2 class="sr-only">"How Nib works"</h2>
+            <div class="loop-head">
+                <h2>"How it works"</h2>
+                <p>"Five steps. Nothing to install for the person reviewing."</p>
+            </div>
             <div class="flow-strip" role="img" aria-label="Agent creates a Nib Request, you review it, the decision returns, and the agent resumes.">
                 <div class="flow-node"><div class="flow-icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="m7 9 3 3-3 3M13 15h4"></path></svg></div><strong>"Agent"</strong><small>"creates work"</small></div>
                 <div class="flow-arrow" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg></div>
@@ -443,38 +457,62 @@ async fn how_it_works() -> Result {
 #[component]
 async fn agent_connection() -> Result {
     view! {
+        <section class="visual-section" id="reviewer"><div class="shell">
+            <div class="visual-head">
+                <div><div class="eyebrow">"The reviewer"</div><h2>"Every artifact, one page, four answers."</h2></div>
+                <p class="visual-note">"Unretouched captures of the Nib review page."</p>
+            </div>
+            <div class="proof-stack">
+                <figure class="capture proof-main">
+                    <picture>
+                        <source media="(max-width: 720px)" srcset="/assets/nib-review-mobile-evidence.png">
+                        <img src="/assets/nib-review-desktop.png" alt="The Nib review page showing a request title, description, and the screenshot the agent attached as evidence." loading="lazy">
+                    </picture>
+                    <figcaption class="capture-tag"><i></i>"EVIDENCE THE AGENT ATTACHED"</figcaption>
+                </figure>
+                <figure class="capture proof-band">
+                    <picture>
+                        <source media="(max-width: 720px)" srcset="/assets/nib-review-mobile-decision.png">
+                        <img src="/assets/nib-review-decision.png" alt="The Nib review page decision row: a reviewer note and Comment, Approve, Reject, and Request changes buttons." loading="lazy">
+                    </picture>
+                    <figcaption class="capture-tag"><i></i>"THE FOUR ANSWERS"</figcaption>
+                </figure>
+            </div>
+            <div class="proof-legend">
+                <p>"Whatever the agent attached renders in place, so the person deciding never has to go find it."</p>
+                <ul class="marks">
+                    <li><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 15 5-4 4 3 3-2 6 5"></path></svg>"Image"</li>
+                    <li><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m11 9 4 3-4 3z"></path></svg>"Video"</li>
+                    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"></path><path d="M9 13h6M12 10v6"></path></svg>"Diff"</li>
+                    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"></path><path d="M9 12h6M9 16h4"></path></svg>"File"</li>
+                    <li><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"></path><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"></path></svg>"URL"</li>
+                </ul>
+            </div>
+        </div></section>
         <section class="visual-section" id="tour"><div class="shell">
             <div class="visual-head">
-                <div><div class="eyebrow">"11 seconds. The whole loop."</div><h2>"Ask. Review. Decide. Continue."</h2></div>
-                <p class="visual-note">"No meeting. No runner waiting. No reviewer account required."</p>
+                <div><div class="eyebrow">"11 seconds, start to finish"</div><h2>"Ask. Review. Decide. Continue."</h2></div>
+                <p class="visual-note">"Screen recording of a real review, at real speed."</p>
             </div>
             <figure class="film-frame">
-                <video class="product-film" controls="controls" preload="metadata" playsinline="playsinline" poster="/assets/tour-01.png" aria-label="How a Nib request moves from agent to human and back">
+                <video class="product-film" controls="controls" preload="metadata" playsinline="playsinline" poster="/assets/nib-product-tour-poster.png" aria-label="A Nib review moving from attached evidence to a sent human decision">
                     <source src="/assets/nib-product-tour.mp4" type="video/mp4">
                     "Your browser does not support video. The flow is agent, Nib Request, human decision, and agent continuation."
                 </video>
-                <figcaption class="film-key"><div><b>"1"</b>"Agent packages evidence"</div><div><b>"2"</b>"Human reviews visually"</div><div><b>"3"</b>"Decision resumes work"</div></figcaption>
+                <figcaption class="film-key"><div><b>"1"</b>"Agent sends request"</div><div><b>"2"</b>"Human reviews evidence"</div><div><b>"3"</b>"Decision returns as data"</div></figcaption>
             </figure>
         </div></section>
-        <section class="visual-section" id="evidence"><div class="shell">
+        <section class="visual-section" id="resume"><div class="shell">
             <div class="visual-head">
-                <div><div class="eyebrow">"Review anywhere"</div><h2>"Everything they need. Nothing they don't."</h2></div>
-                <p class="visual-note">"Images, video, diffs, URLs, comments, and annotations travel together."</p>
+                <div><div class="eyebrow">"The agent resumes"</div><h2>"Your call comes back as data."</h2></div>
+                <p class="visual-note">"The waiting agent gets a structured decision, not a screenshot of a chat."</p>
             </div>
-            <div class="review-showcase">
-                <figure class="phone-card">
-                    <img src="/assets/nib-mobile-review.png" alt="Nib mobile notification for a deployment review with Approve, Reject, and Open actions." loading="lazy">
-                    <figcaption>"Approve from the notification"</figcaption>
+            <div class="resume-grid">
+                <figure class="capture">
+                    <img src="/assets/nib-review-sent.png" alt="The same Nib review page after approval, with the status pill reading Sent." loading="lazy">
+                    <figcaption class="capture-tag"><i></i>"SENT"</figcaption>
                 </figure>
-                <div class="artifact-board" aria-label="A Nib Request with image, video, diff, and annotation artifacts">
-                    <div class="board-top"><div class="board-brand">"nib" <span>"."</span></div><div class="board-status"><i></i>"Ready for Alice"</div></div>
-                    <div class="artifact-grid">
-                        <div class="artifact-tile image"><div class="mock-screen"></div><div class="annotation-pin">"1"</div><span class="tile-label">"IMAGE · 1440 x 900"</span></div>
-                        <div class="artifact-tile video"><div class="play-mark"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg></div><span class="tile-label">"VIDEO · 18 SEC"</span></div>
-                        <div class="artifact-tile diff"><div class="diff-line remove"></div><div class="diff-line"></div><div class="diff-line short"></div><span class="tile-label">"DIFF · 12 LINES"</span></div>
-                    </div>
-                    <div class="feedback-bubble"><div class="feedback-pin">"1"</div><div><strong>"Keep this payment selector."</strong><span>"Alice · annotation on checkout image"</span></div></div>
-                </div>
+                <pre class="payload"><div class="payload-head"><i></i>"What the agent receives"</div>"{\n  \"outcome\": " <b>"\"approved\""</b> ",\n  \"requestId\": \"req_checkout_review\",\n  \"requestRevision\": 1,\n  \"reviewer\": { \"type\": \"guest\" },\n  \"createdAt\": \"2026-08-09T15:04:11Z\"\n}"</pre>
             </div>
         </div></section>
     }
@@ -484,12 +522,36 @@ async fn agent_connection() -> Result {
 async fn home_pricing() -> Result {
     view! {
         <section class="home-pricing" id="pricing"><div class="shell">
-            <div class="eyebrow">"Simple pricing"</div>
+            <div class="visual-head">
+                <div><div class="eyebrow">"Pricing"</div><h2>"Reviewing is free. You pay to send."</h2></div>
+                <p class="visual-note">"Metered per hosted request. No seats, no per-reviewer fee, no card to start."</p>
+            </div>
             <div class="pricing-compact">
-                <div class="pricing-intro"><div><h2>"Reviewers are free."</h2><p>"Pay for hosted requests, not seats."</p></div><a class="button" href="/pricing">"Compare all plans"</a></div>
-                <article class="mini-plan"><h3>"Free"</h3><div class="mini-price">"$0"</div><p>"25 requests / month"</p><span class="plan-dot"></span></article>
-                <article class="mini-plan"><h3>"Starter"</h3><div class="mini-price">"$9" <small>"/ mo"</small></div><p>"100 requests / month"</p><span class="plan-dot"></span></article>
-                <article class="mini-plan featured"><h3>"Pro"</h3><div class="mini-price">"$24" <small>"/ mo"</small></div><p>"500 requests / month"</p><span class="plan-dot"></span></article>
+                <article class="mini-plan">
+                    <h3>"Free"</h3>
+                    <div class="mini-price">"$0"</div>
+                    <p>"25 hosted requests a month"</p>
+                    <div class="unit">"No card. No overage."</div>
+                    <a class="button" href="/signup">"Start free"</a>
+                </article>
+                <article class="mini-plan">
+                    <h3>"Starter"</h3>
+                    <div class="mini-price">"$9" <small>"/ month"</small></div>
+                    <p>"100 hosted requests + $5 for optional AI-generated UI previews"</p>
+                    <div class="unit">"Then $0.05 per extra hosted request"</div>
+                    <a class="button" href="/signup?plan=default">"Choose Starter"</a>
+                </article>
+                <article class="mini-plan featured">
+                    <h3>"Pro" <span class="flag">"BEST VALUE"</span></h3>
+                    <div class="mini-price">"$24" <small>"/ month"</small></div>
+                    <p>"500 hosted requests + $20 for optional AI-generated UI previews"</p>
+                    <div class="unit">"Then $0.05 per extra hosted request"</div>
+                    <a class="button primary" href="/signup?plan=high">"Choose Pro"</a>
+                </article>
+            </div>
+            <div class="pricing-foot">
+                <span>"Guests, repositories, and self-hosted use stay free on every plan."</span>
+                <a href="/pricing">"Team, Scale, and Enterprise"</a>
             </div>
         </div></section>
     }
@@ -518,18 +580,17 @@ async fn pricing() -> Result {
     view! {
         <section class="section" id="pricing"><div class="shell">
             <div class="eyebrow">"Hosted request pricing"</div><h2>"Pay for hosted volume, not for people reviewing."</h2>
-            <p class="section-copy">"Free includes 25 hosted requests and one Fast 1K trial. Paid plans add hosted request capacity and monthly generation credit; hosted overage is $0.05 per request where overage is available."</p>
+            <p class="section-copy">"One price per hosted request. Overage is $0.05 per extra request where available. Generation credit applies only to optional AI-generated UI previews."</p>
             <div class="free-grid" aria-label="Always free Nib usage">
-                <div><strong>"Reviewing is free"</strong>"Approvals, comments, and follow-up review decisions are not seat-billed."</div>
-                <div><strong>"Guests and repos are free"</strong>"External participants and connected repositories do not change the plan price."</div>
-                <div><strong>"Self-hosted stays free"</strong>"Use your own infrastructure when you do not need hosted request capacity."</div>
+                <div><strong>"Reviewing is free"</strong>"Approvals, comments, and follow-up decisions are never seat-billed."</div>
+                <div><strong>"Guests and repos are free"</strong>"External participants and connected repositories do not change the price."</div>
+                <div><strong>"Self-hosted stays free"</strong>"Run the open-source reviewer on your own infrastructure."</div>
             </div>
             <div class="pricing-layout">
                 <aside class="pricing-callout" aria-label="Free plan">
                     <div class="price-kicker">"Free"</div>
                     <div class="price-amount">"$0" <small>"/ month"</small></div>
-                    <p>"25 hosted requests, one Fast 1K trial, and no overage. Start here when the team is proving the review loop."</p>
-                    <p class="pricing-note">"Need configured checkout today? Starter uses the existing " <code>"default"</code> " plan and Pro uses the existing " <code>"high"</code> " plan."</p>
+                    <p>"25 hosted requests, one Fast 1K trial, no card, and no overage."</p>
                     <div class="actions"><a class="button primary" href="/signup">"Start free"</a></div>
                 </aside>
                 <div class="pricing-table-wrap">
@@ -547,7 +608,7 @@ async fn pricing() -> Result {
                     </table>
                 </div>
             </div>
-            <p class="micro">"Team, Scale, and Enterprise are published for planning, but checkout is not configured on this site yet. Enterprise starts at 25,000 hosted requests and can use BYOK or metered generation."</p>
+            <p class="micro">"Team, Scale, and Enterprise are published for planning; checkout for them is not configured yet. Enterprise starts at 25,000 hosted requests with BYOK or metered generation."</p>
         </div></section>
     }
 }
@@ -598,7 +659,7 @@ async fn plan_row_pending(
 
 #[component]
 async fn site_footer() -> Result {
-    view! { <footer class="shell footer"><span>"Nib - human review for AI-generated software."</span><span><a href="https://github.com/douglance/nib">"Apache-2.0 source"</a> "  /  " <a href="/privacy">"Privacy"</a> "  /  " <a href="/terms">"Terms"</a></span></footer> }
+    view! { <footer class="shell footer"><span>"Nib - human review for AI-generated software."</span><span><a href="/account">"Account"</a> "  /  " <a href="https://github.com/douglance/nib">"Apache-2.0 source"</a> "  /  " <a href="/privacy">"Privacy"</a> "  /  " <a href="/terms">"Terms"</a></span></footer> }
 }
 
 #[component]
@@ -645,23 +706,34 @@ mod tests {
     #[tokio::test]
     async fn homepage_explains_the_review_loop_with_visual_media() {
         let response = router()
-            .handle(
-                Request::builder()
-                    .uri("/")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .handle(Request::builder().uri("/").body(Body::empty()).unwrap())
             .await;
         let html = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let html = String::from_utf8(html.to_vec()).unwrap();
 
         assert!(html.contains("Your agent did the work. You make the call."));
-        assert!(html.contains("/assets/nib-decision-loop-hero.png"));
-        assert!(html.contains("/assets/nib-product-tour.mp4"));
-        assert!(html.contains("/assets/nib-mobile-review.png"));
+        for asset in [
+            "/assets/nib-review-desktop.png",
+            "/assets/nib-review-decision.png",
+            "/assets/nib-review-sent.png",
+            "/assets/nib-review-mobile-evidence.png",
+            "/assets/nib-review-mobile-decision.png",
+            "/assets/nib-product-tour.mp4",
+            "/assets/nib-product-tour-poster.png",
+        ] {
+            assert!(html.contains(asset), "{asset}");
+        }
         assert!(html.contains("Agent creates a Nib Request"));
-        assert!(html.contains("Everything they need. Nothing they don't."));
+        assert!(html.contains("Every artifact, one page, four answers."));
+        assert!(html.contains("Your call comes back as data."));
         assert_eq!(html.matches("<video").count(), 1);
+        // The persistent and hero actions stay primary, while pricing emphasizes Pro.
+        assert_eq!(html.matches("class=\"button primary\"").count(), 3);
+        assert_eq!(html.matches("Start free").count(), 3);
+        assert!(html.contains("class=\"button primary\" href=\"/signup?plan=high\">Choose Pro"));
+        assert!(html.contains("Agent sends request"));
+        assert!(html.contains("Decision returns as data"));
+        assert!(html.contains("req_checkout_review"));
         assert!(!html.contains("Turn agent output into a clear human decision."));
         assert!(!html.contains("Checkout not configured"));
     }
@@ -687,13 +759,16 @@ mod tests {
         assert!(html.contains("Starter"));
         assert!(html.contains("$9"));
         assert!(html.contains("Checkout configured as default"));
-        assert!(html.contains("$5 generation credit"));
+        assert!(html.contains("$5 optional UI generation credit"));
         assert!(html.contains("/signup?plan=default"));
         assert_eq!(html.matches("Choose Starter").count(), 1);
         assert!(html.contains("Pro"));
         assert!(html.contains("$24"));
         assert!(html.contains("Checkout configured as high"));
-        assert!(html.contains("$20 generation credit"));
+        assert!(html.contains("$20 optional UI generation credit"));
+        assert!(
+            html.contains("Generation credit applies only to optional AI-generated UI previews.")
+        );
         assert!(html.contains("/signup?plan=high"));
         assert_eq!(html.matches("Choose Pro").count(), 1);
         assert!(html.contains("Team"));
