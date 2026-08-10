@@ -17,6 +17,7 @@ dist/
 .env
 
 # Demo/test artifacts
+.visual/
 demo.png
 demo.*.png
 *.rendered.png
