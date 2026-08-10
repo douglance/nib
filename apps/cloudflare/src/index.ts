@@ -123,12 +123,24 @@ export default {
 };
 
 export class NibGlobalEntrypoint extends WorkerEntrypoint<Env> {
-  async fetchForTenant(request: Request, tenantId: string): Promise<Response> {
-    return handleWorkerRequest(request, this.env, trustedTenantId(tenantId));
+  async fetchForTenant(request: Request, tenantId: string, subject: string): Promise<Response> {
+    return handleWorkerRequest(request, this.env, trustedTenantId(tenantId), {
+      kind: "token",
+      subject,
+      name: subject,
+      platform: "service-binding",
+      scopes: ["*"],
+      tokenHash: ""
+    });
   }
 }
 
-async function handleWorkerRequest(request: Request, env: Env, tenant: string): Promise<Response> {
+async function handleWorkerRequest(
+  request: Request,
+  env: Env,
+  tenant: string,
+  trustedAuth?: AuthContext
+): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders() });
   if (url.pathname === "/api/health") {
@@ -152,7 +164,7 @@ async function handleWorkerRequest(request: Request, env: Env, tenant: string): 
       return stub.fetch(new Request(request, { headers }));
     }
 
-    const auth = await authenticate(request, env, stub);
+    const auth = trustedAuth ?? await authenticate(request, env, stub);
     if (url.pathname.startsWith("/attachments/") && request.method === "GET") {
       return attachmentResponse(url.pathname.split("/")[2] ?? "", request, env, Boolean(auth));
     }

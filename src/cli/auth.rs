@@ -1,12 +1,18 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::process::Command;
+use std::{
+    process::Command,
+    thread,
+    time::{Duration, Instant},
+};
 
 const KEYCHAIN_SERVICE: &str = "com.douglance.nib.auth";
 const LEGACY_DEFAULTS_DOMAIN: &str = "com.douglance.nib.macos";
 const LEGACY_DEFAULTS_KEY: &str = "nib.authToken";
-const DEFAULT_PORTAL_URL: &str = "https://nib-global.doug-lance.workers.dev";
+const DEFAULT_PORTAL_URL: &str = "https://app.nibtool.com";
+const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+const DEVICE_CLIENT_ID: &str = "nib-cli";
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -69,39 +75,34 @@ struct Credential {
     source: CredentialSource,
 }
 
+#[derive(Debug, Deserialize)]
+struct DeviceAuthorization {
+    device_code: String,
+    user_code: String,
+    verification_uri_complete: String,
+    expires_in: u64,
+    interval: u64,
+}
+
 pub fn login(portal: &str, name: Option<&str>) -> Result<AuthStatus, String> {
     let portal = normalize_portal(portal);
-    if let Some(mut credential) = current_credential(&portal, true) {
-        if credential.source != CredentialSource::LegacyDefaults {
-            match status_with_token(&portal, &credential.token, credential.source) {
-                Ok(status) if status.kind != "bootstrap" => return Ok(status),
-                Ok(_) => {}
-                Err(_) if credential.source == CredentialSource::Keychain => {
-                    delete_keychain_token(&portal);
-                    credential = legacy_token()
-                        .map(|token| Credential {
-                            token,
-                            source: CredentialSource::LegacyDefaults,
-                        })
-                        .ok_or_else(|| {
-                            "The stored Nib credential was invalid and has been removed. Set NIB_AUTH_TOKEN once or redeem a pairing code, then run `nib auth login` again.".to_string()
-                        })?;
-                }
-                Err(error) => return Err(error),
+    if let Some(credential) = current_credential(&portal, false) {
+        match status_with_token(&portal, &credential.token, credential.source) {
+            Ok(status) => return Ok(status),
+            Err(_) if credential.source == CredentialSource::Keychain => {
+                delete_keychain_token(&portal);
             }
+            Err(error) => return Err(error),
         }
-        let issued = exchange(&portal, &credential.token, name.unwrap_or("Nib CLI"), "cli")?;
-        let token = issued
-            .get("token")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "Nib auth exchange did not return a token".to_string())?;
-        store_keychain_token(&portal, token)?;
-        if credential.source == CredentialSource::LegacyDefaults {
-            delete_legacy_token();
-        }
-        return status_with_token(&portal, token, CredentialSource::Keychain);
     }
-    Err("Nib is not enrolled. Set NIB_AUTH_TOKEN once, then run `nib auth login`, or redeem a pairing code with `nib auth redeem`.".into())
+
+    let device = request_device_authorization(&portal, name.unwrap_or("Nib CLI"))?;
+    eprintln!("Open {}", device.verification_uri_complete);
+    eprintln!("Confirm code {}", device.user_code);
+    open_browser(&device.verification_uri_complete);
+    let token = poll_device_token(&portal, &device)?;
+    store_keychain_token(&portal, &token)?;
+    status_with_token(&portal, &token, CredentialSource::Keychain)
 }
 
 pub fn status(portal: &str) -> Result<AuthStatus, String> {
@@ -116,7 +117,7 @@ pub fn logout(portal: &str) -> Result<AuthLogout, String> {
         current_credential(&portal, false).ok_or_else(|| "Nib is not authenticated".to_string())?;
     let agent = agent();
     let request = agent
-        .post(&format!("{portal}/api/auth/logout"))
+        .post(&format!("{portal}/api/auth/sign-out"))
         .set("authorization", &format!("Bearer {}", credential.token));
     let cleared = if credential.source == CredentialSource::Environment {
         false
@@ -125,19 +126,15 @@ pub fn logout(portal: &str) -> Result<AuthLogout, String> {
         delete_legacy_token();
         true
     };
-    let response = call_json(request).map_err(|error| {
+    call_json(request).map_err(|error| {
         if cleared {
             format!("The local Nib credential was cleared, but remote revocation failed: {error}")
         } else {
             error
         }
     })?;
-    let revoked = response
-        .get("revoked")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
     Ok(AuthLogout {
-        revoked,
+        revoked: true,
         cleared,
         source: credential.source.label().into(),
     })
@@ -252,36 +249,94 @@ fn status_with_token(
     source: CredentialSource,
 ) -> Result<AuthStatus, String> {
     let response = agent()
-        .get(&format!("{portal}/api/auth/status"))
+        .get(&format!("{portal}/api/account"))
         .set("authorization", &format!("Bearer {token}"))
         .call()
         .map_err(http_error)?
         .into_json::<Value>()
         .map_err(|error| error.to_string())?;
     Ok(AuthStatus {
-        authenticated: response
-            .get("authenticated")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        kind: string_field(&response, "kind"),
-        subject: string_field(&response, "subject"),
-        name: string_field(&response, "name"),
-        platform: string_field(&response, "platform"),
-        scopes: response
-            .get("scopes")
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        authenticated: true,
+        kind: "user".into(),
+        subject: string_field(&response, "userId"),
+        name: string_field(&response, "email"),
+        platform: "cli".into(),
+        scopes: vec!["requests:read".into(), "requests:write".into()],
         portal: portal.into(),
         source: source.label().into(),
     })
 }
+
+fn request_device_authorization(portal: &str, name: &str) -> Result<DeviceAuthorization, String> {
+    let response = agent()
+        .post(&format!("{portal}/api/auth/device/code"))
+        .set("content-type", "application/json")
+        .send_json(json!({
+            "client_id": DEVICE_CLIENT_ID,
+            "scope": "requests:read requests:write",
+            "name": name
+        }))
+        .map_err(http_error)?
+        .into_json::<Value>()
+        .map_err(|error| error.to_string())?;
+    serde_json::from_value(response)
+        .map_err(|error| format!("Nib returned an invalid device authorization: {error}"))
+}
+
+fn poll_device_token(portal: &str, device: &DeviceAuthorization) -> Result<String, String> {
+    let deadline = Instant::now() + Duration::from_secs(device.expires_in);
+    let mut interval = Duration::from_secs(device.interval.max(1));
+    while Instant::now() < deadline {
+        thread::sleep(interval);
+        let response = agent()
+            .post(&format!("{portal}/api/auth/device/token"))
+            .set("content-type", "application/json")
+            .send_json(json!({
+                "grant_type": DEVICE_GRANT,
+                "device_code": device.device_code,
+                "client_id": DEVICE_CLIENT_ID
+            }));
+        match response {
+            Ok(response) => {
+                let payload = response
+                    .into_json::<Value>()
+                    .map_err(|error| error.to_string())?;
+                return payload
+                    .get("access_token")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        "Nib device authorization did not return an access token".into()
+                    });
+            }
+            Err(ureq::Error::Status(_, response)) => {
+                let payload = response.into_json::<Value>().unwrap_or_default();
+                match payload.get("error").and_then(Value::as_str) {
+                    Some("authorization_pending") => continue,
+                    Some("slow_down") => {
+                        interval += Duration::from_secs(5);
+                        continue;
+                    }
+                    Some("access_denied") => {
+                        return Err("Nib device authorization was denied".into())
+                    }
+                    Some("expired_token") => return Err("Nib device authorization expired".into()),
+                    _ => return Err(format!("Nib device authorization failed: {payload}")),
+                }
+            }
+            Err(error) => return Err(http_error(error)),
+        }
+    }
+    Err("Nib device authorization expired".into())
+}
+
+#[cfg(target_os = "macos")]
+fn open_browser(url: &str) {
+    let _ = Command::new("/usr/bin/open").arg(url).status();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_browser(_url: &str) {}
 
 fn current_credential(portal: &str, include_legacy: bool) -> Option<Credential> {
     if let Ok(token) = std::env::var("NIB_AUTH_TOKEN") {
@@ -476,5 +531,24 @@ mod tests {
             "nib-global.example.test"
         );
         assert_eq!(keychain_account("http://127.0.0.1:8787"), "127.0.0.1:8787");
+    }
+
+    #[test]
+    fn cloud_login_defaults_to_the_nib_app_domain() {
+        assert_eq!(DEFAULT_PORTAL_URL, "https://app.nibtool.com");
+    }
+
+    #[test]
+    fn parses_standard_device_authorization_responses() {
+        let device: DeviceAuthorization = serde_json::from_value(json!({
+            "device_code": "device-secret",
+            "user_code": "ABCD-1234",
+            "verification_uri_complete": "https://app.nibtool.com/device?user_code=ABCD1234",
+            "expires_in": 600,
+            "interval": 5
+        }))
+        .unwrap();
+        assert_eq!(device.user_code, "ABCD-1234");
+        assert_eq!(device.expires_in, 600);
     }
 }

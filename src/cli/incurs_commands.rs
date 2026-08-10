@@ -1190,14 +1190,7 @@ fn request_decision_command(
 }
 
 fn typed_auth_group() -> Cli {
-    let login = CommandDef::typed::<
-        (),
-        AuthLoginOptions,
-        (),
-        super::auth::AuthStatus,
-        _,
-        _,
-    >(
+    let login = CommandDef::typed::<(), AuthLoginOptions, (), super::auth::AuthStatus, _, _>(
         "login",
         |ctx: TypedContext<(), AuthLoginOptions, ()>| async move {
             let portal = ctx
@@ -1219,14 +1212,12 @@ fn typed_auth_group() -> Cli {
                     TypedResult::ok_with_cta(status, cta)
                 }
                 Ok(Err(auth_error)) => TypedResult::error("AUTH_LOGIN_FAILED", auth_error),
-                Err(join_error) => {
-                    TypedResult::error("AUTH_LOGIN_FAILED", join_error.to_string())
-                }
+                Err(join_error) => TypedResult::error("AUTH_LOGIN_FAILED", join_error.to_string()),
             }
         },
     )
-    .description("Exchange a one-time bootstrap credential for a scoped Keychain credential")
-    .hint("NIB_AUTH_TOKEN is an automation override and one-time enrollment path, not normal client storage.")
+    .description("Sign in through app.nibtool.com and store the scoped credential in Keychain")
+    .hint("Use browser device login for people; reserve NIB_AUTH_TOKEN for unattended automation.")
     .mcp(mcp_options(Policy {
         mcp_name: Some("auth_login"),
         ..EXTERNAL_EFFECT

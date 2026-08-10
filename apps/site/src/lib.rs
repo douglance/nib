@@ -253,16 +253,9 @@ async fn account() -> Result {
                 <h1>"Manage Nib."</h1>
                 <p class="lede">"Use the billing portal to change or cancel your plan. If you just completed checkout, hosted request capacity becomes active after Stripe confirms the subscription."</p>
                 <div class="actions">
-                    <form method="post" action="/billing/portal">
-                        <button class="button primary" type="submit">"Open billing portal"</button>
-                    </form>
+                    <a class="button primary" href="https://app.nibtool.com/account">"Open billing portal"</a>
                     <a class="button" href="/docs">"Read the quick start"</a>
-                    <form method="post" action="/auth/credentials/rotate">
-                        <button class="button" type="submit">"Rotate access token"</button>
-                    </form>
-                    <form method="post" action="/auth/logout">
-                        <button class="button" type="submit">"Sign out"</button>
-                    </form>
+                    <a class="button" href="https://app.nibtool.com/account">"Open account portal"</a>
                 </div>
             </main>
         )
@@ -274,41 +267,15 @@ async fn signup() -> Result {
     view! {
         page_document(
             title: "Create a Nib account",
-            description: "Create a free Nib account, save your revocable access token, and start reviewing AI-generated software.",
+            description: "Create a free Nib account and start reviewing AI-generated software from any device.",
             canonical: "https://nibtool.com/signup",
             <main class="shell signup">
                 <section data-signup-panel="">
                     <div class="eyebrow">"Free hosted reviews"</div>
-                    <h1>"Create your Nib access token."</h1>
-                    <p class="lede">"Start without an email or card. Nib creates a private browser session and a revocable token for your CLI or agent."</p>
-                    <form method="post" action="/auth/signup">
-                        <button class="button primary" type="submit">"Create free account"</button>
-                    </form>
-                    <p class="micro">"Your token is shown once. Save it in your password manager before leaving this page."</p>
-                </section>
-                <section class="credential-panel" data-token-panel="" hidden="">
-                    <div class="eyebrow">"Account ready"</div>
-                    <h2>"Save your access token now."</h2>
-                    <p class="credential-note">"Nib stores only its hash and cannot show this token again. Rotating it revokes the old value."</p>
-                    <code class="token-value" data-token-value="" tabindex="0"></code>
-                    <div class="credential-actions">
-                        <button class="button primary" type="button" data-copy-token="">"Copy token"</button>
-                        <a class="button" href="/docs">"Connect an agent"</a>
-                        <a class="button" href="/account">"Open account"</a>
-                    </div>
-                    <p class="credential-status" data-token-status="" aria-live="polite"></p>
-                    <h2>"Need more hosted request volume?"</h2>
-                    <div class="credential-plans">
-                        <form method="post" action="/billing/checkout">
-                            <input type="hidden" name="plan" value="default">
-                            <button class="button" type="submit">"Subscribe to Starter - $9/mo"</button>
-                        </form>
-                        <form method="post" action="/billing/checkout">
-                            <input type="hidden" name="plan" value="high">
-                            <button class="button primary" type="submit">"Subscribe to Pro - $24/mo"</button>
-                        </form>
-                    </div>
-                    <p class="micro">"Starter and Pro checkout are configured now. Other tiers are listed on pricing until checkout is configured."</p>
+                    <h1>"Your Nib account, everywhere."</h1>
+                    <p class="lede">"Sign in by email or passkey. Your personal workspace follows you across browsers, computers, and locations."</p>
+                    <a class="button primary" href="https://app.nibtool.com/signin">"Create free account"</a>
+                    <p class="micro">"Review links still work without an account. Creators sign in when they need to send or automate requests."</p>
                 </section>
             </main>
         )
@@ -327,9 +294,9 @@ async fn docs() -> Result {
                 <h1>"Give your agent a human review path."</h1>
                 <p class="lede">"Use Nib when generated software needs a person to judge whether the change matches intent. The UI image tool remains available for visual artifacts, and hosted review requests are metered separately from free reviewing."</p>
                 install_prompt()
-                <h2 id="authentication">"Authenticate on the first image"</h2>
-                <p>"Create a free account, save the access token shown once, and export it for the CLI or local MCP server. Nib stores only a SHA-256 hash, and rotating the credential from your account revokes the prior token."</p>
-                <pre>"export NIB_ACCESS_TOKEN=\"nib_live_...\""</pre>
+                <h2 id="authentication">"Sign in once"</h2>
+                <p>"Run the login command. Nib opens the account portal, asks you to approve this device, and stores the resulting credential in your system Keychain."</p>
+                <pre>"nib auth login"</pre>
                 <h2>"CLI"</h2>
                 <pre>"nib generate \"A compact dark analytics dashboard for a fleet operator\" \\\n  --quality fast --resolution 1K --aspect 16:9 \\\n  --image-format png --output dashboard.png"</pre>
                 <h2 id="mcp">"MCP"</h2>
@@ -393,7 +360,7 @@ async fn site_nav() -> Result {
                 <a href="/pricing">"Pricing"</a>
                 <a href="/docs">"Docs"</a>
             </nav>
-            <a class="button primary" href="/signup">"Start free"</a>
+            <a class="button primary" href="https://app.nibtool.com/signin">"Start free"</a>
         </header>
     }
 }
@@ -407,7 +374,7 @@ async fn hero_story() -> Result {
                 <h1>"Your agent did the work. You make the call."</h1>
                 <p class="hero-sub">"Your agent sends the image in one link. You " <strong>"approve, reject, or mark what needs to change"</strong> "—then the agent resumes."</p>
                 <div class="actions">
-                    <a class="button primary" href="/signup">"Start free"</a>
+                    <a class="button primary" href="https://app.nibtool.com/signin">"Start free"</a>
                     <a class="jump-link" href="#tour">
                         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
                         "See the 11-second loop"
@@ -532,21 +499,21 @@ async fn home_pricing() -> Result {
                     <div class="mini-price">"$0"</div>
                     <p>"25 hosted requests a month"</p>
                     <div class="unit">"No card. No overage."</div>
-                    <a class="button" href="/signup">"Start free"</a>
+                    <a class="button" href="https://app.nibtool.com/signin">"Start free"</a>
                 </article>
                 <article class="mini-plan">
                     <h3>"Starter"</h3>
                     <div class="mini-price">"$9" <small>"/ month"</small></div>
                     <p>"100 hosted requests + $5 for optional AI-generated UI previews"</p>
                     <div class="unit">"Then $0.05 per extra hosted request"</div>
-                    <a class="button" href="/signup?plan=default">"Choose Starter"</a>
+                    <a class="button" href="https://app.nibtool.com/signin?callbackURL=%2Faccount">"Choose Starter"</a>
                 </article>
                 <article class="mini-plan featured">
                     <h3>"Pro" <span class="flag">"BEST VALUE"</span></h3>
                     <div class="mini-price">"$24" <small>"/ month"</small></div>
                     <p>"500 hosted requests + $20 for optional AI-generated UI previews"</p>
                     <div class="unit">"Then $0.05 per extra hosted request"</div>
-                    <a class="button primary" href="/signup?plan=high">"Choose Pro"</a>
+                    <a class="button primary" href="https://app.nibtool.com/signin?callbackURL=%2Faccount">"Choose Pro"</a>
                 </article>
             </div>
             <div class="pricing-foot">
@@ -591,7 +558,7 @@ async fn pricing() -> Result {
                     <div class="price-kicker">"Free"</div>
                     <div class="price-amount">"$0" <small>"/ month"</small></div>
                     <p>"25 hosted requests, one Fast 1K trial, no card, and no overage."</p>
-                    <div class="actions"><a class="button primary" href="/signup">"Start free"</a></div>
+                    <div class="actions"><a class="button primary" href="https://app.nibtool.com/signin">"Start free"</a></div>
                 </aside>
                 <div class="pricing-table-wrap">
                     <table class="pricing-table">
@@ -659,7 +626,7 @@ async fn plan_row_pending(
 
 #[component]
 async fn site_footer() -> Result {
-    view! { <footer class="shell footer"><span>"Nib - human review for AI-generated software."</span><span><a href="/account">"Account"</a> "  /  " <a href="https://github.com/douglance/nib">"Apache-2.0 source"</a> "  /  " <a href="/privacy">"Privacy"</a> "  /  " <a href="/terms">"Terms"</a></span></footer> }
+    view! { <footer class="shell footer"><span>"Nib - human review for AI-generated software."</span><span><a href="https://app.nibtool.com/account">"Account"</a> "  /  " <a href="https://github.com/douglance/nib">"Apache-2.0 source"</a> "  /  " <a href="/privacy">"Privacy"</a> "  /  " <a href="/terms">"Terms"</a></span></footer> }
 }
 
 #[component]

@@ -33,13 +33,15 @@ The rich image mapping is declared with JSON Pointers `/image/data` and `/image/
 
 ## End-user authentication
 
-Create an account at `/signup`, copy the access token shown once, and export it for the Nib CLI and local stdio MCP server:
+Sign in through the account portal. The CLI opens a browser approval page and stores the resulting credential in the system Keychain:
 
-```sh
-export NIB_ACCESS_TOKEN="nib_live_..."
+```bash
+nib auth login
 ```
 
-The standalone CLI sends the token as an `Authorization: Bearer` credential. The public Streamable HTTP MCP route accepts unauthenticated discovery, then verifies the same bearer token on `tools/call`. Nib stores only a SHA-256 token hash. Rotating the credential from the account page revokes the prior token. Cloudflare Access service tokens remain available only for private headless operators.
+Use `NIB_AUTH_TOKEN` only for unattended automation where interactive browser approval is unavailable.
+
+The standalone CLI and local stdio MCP server read the Keychain credential and send it as an `Authorization: Bearer` credential. The public Streamable HTTP MCP route accepts unauthenticated discovery, then verifies a bearer credential on `tools/call`. Cloudflare Access service tokens remain available only for private headless operators.
 
 ## Request
 

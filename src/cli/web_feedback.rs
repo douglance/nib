@@ -13,7 +13,7 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const DEFAULT_PORTAL_URL: &str = "https://nib-global.doug-lance.workers.dev";
+const DEFAULT_PORTAL_URL: &str = "https://app.nibtool.com";
 
 #[derive(Debug)]
 pub struct WebFeedbackError {
