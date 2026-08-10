@@ -697,7 +697,10 @@ mod tests {
         // The persistent and hero actions stay primary, while pricing emphasizes Pro.
         assert_eq!(html.matches("class=\"button primary\"").count(), 3);
         assert_eq!(html.matches("Start free").count(), 3);
-        assert!(html.contains("class=\"button primary\" href=\"/signup?plan=high\">Choose Pro"));
+        assert!(html.contains(
+            "class=\"button primary\" href=\"https://app.nibtool.com/signin?callbackURL=%2Faccount\">Choose Pro"
+        ));
+        assert!(!html.contains("href=\"/signup"));
         assert!(html.contains("Agent sends request"));
         assert!(html.contains("Decision returns as data"));
         assert!(html.contains("req_checkout_review"));
