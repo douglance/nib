@@ -128,6 +128,15 @@ The 2026-08-11 deployment produced this compatible version set:
 
 Live checks passed for `/health`, `/`, `/docs`, and `/pricing`; all three rendered pages returned `x-nib-renderer: topcoat-wasm-worker`. Unauthenticated MCP `initialize` and `tools/list` succeeded, and unauthenticated `tools/call` returned `401`. The public `nib-global` network endpoint remains service-authenticated and returns `401` without a credential. After the durable Stripe key rotation, Worker version `4474d34a-9103-4ad5-b01d-dc0a3a8abc6e` returned `{"ok":true,"service":"nib"}` from production `/health`. Direct Stripe canaries reached parameter validation for each required write API, while unrelated Charges and Customers reads were denied with `403 more_permissions_required`.
 
+The 2026-08-11 Apple distribution run produced these App Store Connect records:
+
+| Surface | App Store ID | Bundle ID | Version (build) | Build or upload ID | State |
+| --- | --- | --- | --- | --- | --- |
+| iOS, iPadOS, watchOS, and visionOS | `6800460103` | `com.douglance.nib` | `0.3.1` (`1`) | `3f3def30-1271-477f-ab51-b283aca18d07` | `VALID`; attached to App Store version `7487bbe2-03c7-43a0-ad3e-49ef1b87dd2c` |
+| macOS | `6800460284` | `com.douglance.nib.macos` | `0.3.1` (`1`) | `000b9cb7-1c71-4337-9d19-d1cf29cc9c33` | `VALID`; attached to App Store version `3a854a4e-7417-433b-ad8f-d1178e5e58ee` |
+
+Both listings use the Developer Tools category, the production marketing, support, and privacy URLs, and the product-backed age-rating and content-rights declarations. Before submission, a human must provide the App Review contact phone number, select initial territories, approve and upload real app screenshots, publish App Privacy answers, and explicitly submit each version for review. Do not invent these values or substitute web screenshots for native-app evidence.
+
 Code Mode has a real review-only portal credential with `reviews:read,reviews:write`; its production `/health` returned `200` with `portalAuth: "expert-token"`. The Cloudflare custom rule `8d783b50423a485fab289d93a2ad67f2` is active for `app.nibtool.com` and rejects declared request bodies over 28 MiB before Worker execution. Because `http.request.body.size` requires WAF Advanced, the current Free-plan rule compares `Content-Length` and does not cover chunked requests that omit that header. Customer authentication, token revocation, paid generation, checkout, portal, usage metering, and plan-change canaries remain required before onboarding customers.
 
 The last verified pre-launch renderer/public pair remains `182e5669-4fb5-428b-a378-19cf19f0c783` and `3f9d10ef-6600-4b78-acfd-d82c7b9af77f`. No Nib Container application exists.

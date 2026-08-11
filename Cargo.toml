@@ -230,3 +230,4 @@ ocr = ["dep:ocrs", "dep:rten"]
 [profile.release]
 lto = "thin"
 codegen-units = 1
+debug = 1

@@ -197,6 +197,7 @@ targets:
       - path: Sources/NibModels.swift
       - path: Sources/NibClient.swift
       - path: MacSources
+      - path: MacResources
     info:
       path: NibMac-Info.plist
       properties:
@@ -209,12 +210,18 @@ targets:
             CFBundleURLSchemes:
               - nib
         LSUIElement: true
+        LSApplicationCategoryType: public.app-category.developer-tools
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.macos
         PRODUCT_NAME: Nib
+    entitlements:
+      path: NibMac.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
     postCompileScripts:
       - name: Bundle native Rust reviewer
         basedOnDependencyAnalysis: false
@@ -232,8 +239,14 @@ targets:
           /bin/cp "$reviewer" "$destination"
           /bin/chmod 0755 "$destination"
           if [[ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" && "${EXPANDED_CODE_SIGN_IDENTITY}" != "-" ]]; then
-            /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$destination"
+            /usr/bin/codesign \
+              --force \
+              --options runtime \
+              --entitlements "$SRCROOT/NibMacHelper.entitlements" \
+              --sign "$EXPANDED_CODE_SIGN_IDENTITY" \
+              "$destination"
           fi
+          /usr/bin/dsymutil "$destination" -o "$DWARF_DSYM_FOLDER_PATH/nib-reviewer.dSYM"
   NibMacTests:
     type: bundle.unit-test
     platform: macOS

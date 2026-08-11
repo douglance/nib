@@ -27,6 +27,7 @@
 		8E9478F05C959AB8BAD64249 /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
 		948568B6919ED3EF0303B227 /* NibNotificationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 578F4267F678DABF1661C763 /* NibNotificationActions.swift */; };
 		9FA97C68F9BCC2B7B73ED084 /* NativeVisualReviewWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8488F2721352FEA04DDCE390 /* NativeVisualReviewWorkspace.swift */; };
+		ABB8A1F8A75F3A83230C1EC6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 15C618E4FDABD3A6AFAE9961 /* Assets.xcassets */; };
 		B47B174C4B432F24B10ABB65 /* NibMacRequestStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70DAF7B2B93FC8B5083D403 /* NibMacRequestStoreTests.swift */; };
 		B9A1216E1D1590D2BDC74AFC /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
 		BC8E3AC859F0D1DE4AE82B2F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A32ED7F52A841E03AD0C92F7 /* Assets.xcassets */; };
@@ -100,6 +101,7 @@
 		07765833BEFC7FA59A4738B2 /* NibClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibClient.swift; sourceTree = "<group>"; };
 		12D93FA771085054F032B9CC /* NibMacRequestStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacRequestStore.swift; sourceTree = "<group>"; };
 		1461BAB1131EA851E89E5D76 /* NibModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibModels.swift; sourceTree = "<group>"; };
+		15C618E4FDABD3A6AFAE9961 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		21E4996C82093A975BA19860 /* NibVision.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NibVision.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibNotificationService.swift; sourceTree = "<group>"; };
 		336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = NibNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -193,6 +195,7 @@
 			isa = PBXGroup;
 			children = (
 				07D17B1BE5BD3A34F7ABF80F /* ContentResources */,
+				F3CC87FB6E0066193F27EA42 /* MacResources */,
 				D154E0C85A3CE5C4A863D249 /* MacSources */,
 				1B27CDE8C934A7685A8EDDA3 /* MacTests */,
 				0BB864B483F075986AD130F9 /* Resources */,
@@ -228,6 +231,14 @@
 				6AA7F3EC6BD5CF0A33160A50 /* NibNativeReviewLauncher.swift */,
 			);
 			path = MacSources;
+			sourceTree = "<group>";
+		};
+		F3CC87FB6E0066193F27EA42 /* MacResources */ = {
+			isa = PBXGroup;
+			children = (
+				15C618E4FDABD3A6AFAE9961 /* Assets.xcassets */,
+			);
+			path = MacResources;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -293,6 +304,7 @@
 			buildPhases = (
 				47B88AC6F2BA43C907AEA2E6 /* Sources */,
 				2C421873707F0CB400193E09 /* Bundle native Rust reviewer */,
+				3CD6E59F8D444D37A3E99B7E /* Resources */,
 			);
 			buildRules = (
 			);
@@ -438,6 +450,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		3CD6E59F8D444D37A3E99B7E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ABB8A1F8A75F3A83230C1EC6 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		95B50A4918B8149A86F1760B /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -474,7 +494,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\nreviewer=\"${NIB_REVIEWER_BINARY:-$SRCROOT/../../../../target/release/nib}\"\nif [[ ! -x \"$reviewer\" ]]; then\n  echo \"error: native reviewer is missing or not executable: $reviewer\" >&2\n  echo \"error: run cargo build --release --all-features --bin nib first\" >&2\n  exit 1\nfi\nhelpers=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\"\ndestination=\"$helpers/nib-reviewer\"\n/bin/mkdir -p \"$helpers\"\n/bin/cp \"$reviewer\" \"$destination\"\n/bin/chmod 0755 \"$destination\"\nif [[ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" && \"${EXPANDED_CODE_SIGN_IDENTITY}\" != \"-\" ]]; then\n  /usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$destination\"\nfi\n";
+			shellScript = "set -euo pipefail\nreviewer=\"${NIB_REVIEWER_BINARY:-$SRCROOT/../../../../target/release/nib}\"\nif [[ ! -x \"$reviewer\" ]]; then\n  echo \"error: native reviewer is missing or not executable: $reviewer\" >&2\n  echo \"error: run cargo build --release --all-features --bin nib first\" >&2\n  exit 1\nfi\nhelpers=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\"\ndestination=\"$helpers/nib-reviewer\"\n/bin/mkdir -p \"$helpers\"\n/bin/cp \"$reviewer\" \"$destination\"\n/bin/chmod 0755 \"$destination\"\nif [[ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" && \"${EXPANDED_CODE_SIGN_IDENTITY}\" != \"-\" ]]; then\n  /usr/bin/codesign \\\n    --force \\\n    --options runtime \\\n    --entitlements \"$SRCROOT/NibMacHelper.entitlements\" \\\n    --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \\\n    \"$destination\"\nfi\n/usr/bin/dsymutil \"$destination\" -o \"$DWARF_DSYM_FOLDER_PATH/nib-reviewer.dSYM\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -769,6 +789,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = NibMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				INFOPLIST_FILE = "NibMac-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -818,6 +839,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = NibMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
 				INFOPLIST_FILE = "NibMac-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
