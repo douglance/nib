@@ -2,12 +2,17 @@ import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 import { HostedRequestCoreService, type KeyValueStore } from "./hosted-request-core";
 import { R2MediaStore } from "./r2-media-store";
 import { reviewPageHeaders, reviewPageHtml } from "./review-page";
+import { isLegacyAuthRoute } from "./legacy-auth-policy";
 import { publicTenantId, stubForTenant, trustedTenantId } from "./tenant-routing";
+import {
+  tenantReviewRoute,
+  tenantScopedReviewApiResponse,
+  tenantScopedReviewResponse,
+} from "./tenant-review-routing";
 
 interface Env {
   REQUESTS: DurableObjectNamespace<NibRequestHub>;
   MEDIA: R2Bucket;
-  NIB_AUTH_TOKEN?: string;
   NIB_TENANT_ID?: string;
   NIB_CONTINUATION_HMAC_SECRET?: string;
 }
@@ -39,36 +44,8 @@ interface RequestResponse {
   createdAt: string;
 }
 
-interface AuthTokenRecord {
-  id: string;
-  name: string;
-  platform: string;
-  scopes: string[];
-  createdAt: string;
-  lastUsedAt: string;
-  revokedAt: string | null;
-}
-
-interface PairingRecord {
-  id: string;
-  createdBy: string;
-  createdAt: string;
-  expiresAt: string;
-  redeemedAt: string | null;
-}
-
-interface RateLimitRecord {
-  windowStartedAt: number;
-  attempts: number;
-}
-
 interface AuthContext {
-  kind: "bootstrap" | "token";
   subject: string;
-  name: string;
-  platform: string;
-  scopes: string[];
-  tokenHash?: string;
 }
 
 interface DeviceRecord {
@@ -124,14 +101,11 @@ export default {
 
 export class NibGlobalEntrypoint extends WorkerEntrypoint<Env> {
   async fetchForTenant(request: Request, tenantId: string, subject: string): Promise<Response> {
-    return handleWorkerRequest(request, this.env, trustedTenantId(tenantId), {
-      kind: "token",
+    const tenant = trustedTenantId(tenantId);
+    const response = await handleWorkerRequest(request, this.env, tenant, {
       subject,
-      name: subject,
-      platform: "service-binding",
-      scopes: ["*"],
-      tokenHash: ""
     });
+    return tenantScopedReviewResponse(response, tenant);
   }
 }
 
@@ -146,62 +120,43 @@ async function handleWorkerRequest(
   if (url.pathname === "/api/health") {
     return json({ ok: true, service: "nib-global", durable: true, media: "r2" });
   }
+  const scopedReview = tenantReviewRoute(url.pathname);
+  if (scopedReview?.kind === "page" && request.method === "GET") {
+    trustedTenantId(scopedReview.tenantId);
+    return requestPage(scopedReview.requestId, url.origin, scopedReview.apiPrefix);
+  }
+  if (scopedReview?.kind === "api") {
+    const tenantId = trustedTenantId(scopedReview.tenantId);
+    const innerUrl = new URL(request.url);
+    innerUrl.pathname = scopedReview.apiPath;
+    const headers = new Headers(request.headers);
+    headers.delete("x-nib-auth-subject");
+    const response = await stubForTenant(env, tenantId).fetch(
+      new Request(innerUrl, { method: request.method, headers, body: request.body }),
+    );
+    return tenantScopedReviewApiResponse(response, scopedReview.apiPrefix, url.protocol === "https:");
+  }
   if (url.pathname === "/.well-known/apple-app-site-association" || url.pathname === "/apple-app-site-association") {
     return json({ applinks: { apps: [], details: [{ appID: "2AS3V73632.com.douglance.nib", paths: ["/r/*"] }] } });
   }
   if (url.pathname.startsWith("/r/") && request.method === "GET") {
     return requestPage(url.pathname.split("/")[2] ?? "", url.origin);
   }
+  if (!trustedAuth && isLegacyAuthRoute(url.pathname)) {
+    return json({
+      error: "Legacy authentication has been retired",
+      code: "AUTH_MIGRATION_REQUIRED",
+      login: "https://app.nibtool.com/signin",
+    }, 410);
+  }
   const stub = stubForTenant(env, tenant);
-
-    if (url.pathname === "/api/auth/exchange" && request.method === "POST") {
-      if (!bootstrapAuthorized(request, env)) return unauthorized();
-      return stub.fetch(request);
-    }
-    if (url.pathname === "/api/auth/pairings/redeem" && request.method === "POST") {
-      const headers = new Headers(request.headers);
-      headers.set("x-nib-client-key", await sha256(request.headers.get("cf-connecting-ip") || "unknown"));
-      return stub.fetch(new Request(request, { headers }));
-    }
-
-    const auth = trustedAuth ?? await authenticate(request, env, stub);
-    if (url.pathname.startsWith("/attachments/") && request.method === "GET") {
-      return attachmentResponse(url.pathname.split("/")[2] ?? "", request, env, Boolean(auth));
-    }
-    if (url.pathname.startsWith("/v1/")) {
-      const headers = new Headers(request.headers);
-      if (auth) headers.set("x-nib-auth-subject", auth.subject);
-      return stub.fetch(new Request(request, { headers }));
-    }
-    if (!auth) return unauthorized();
-    const requiredScope = scopeFor(request.method, url.pathname);
-    if (requiredScope && !hasScope(auth, requiredScope)) return forbidden(requiredScope);
-
-    if (url.pathname === "/api/auth/status" && request.method === "GET") {
-      return json({
-        authenticated: true,
-        kind: auth.kind,
-        subject: auth.subject,
-        name: auth.name,
-        platform: auth.platform,
-        scopes: auth.scopes
-      });
-    }
-    if (url.pathname === "/api/auth/logout" && request.method === "POST") {
-      if (auth.kind === "bootstrap" || !auth.tokenHash) return json({ revoked: false, bootstrap: true });
-      return stub.fetch(new Request(new URL("/internal/auth/revoke", request.url), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tokenHash: auth.tokenHash })
-      }));
-    }
-    if (url.pathname === "/api/auth/pairings" && request.method === "POST") {
-      const headers = new Headers(request.headers);
-      headers.set("x-nib-auth-subject", auth.subject);
-      return stub.fetch(new Request(request, { headers }));
-    }
-    const headers = new Headers(request.headers);
-    headers.set("x-nib-auth-subject", auth.subject);
+  const auth = trustedAuth ?? null;
+  if (url.pathname.startsWith("/attachments/") && request.method === "GET") {
+    return attachmentResponse(url.pathname.split("/")[2] ?? "", request, env, Boolean(auth));
+  }
+  if (!auth) return unauthorized();
+  const headers = new Headers(request.headers);
+  headers.set("x-nib-auth-subject", auth.subject);
   return stub.fetch(new Request(request, { headers }));
 }
 
@@ -215,21 +170,6 @@ export class NibRequestHub extends DurableObject<Env> {
         subject: request.headers.get("x-nib-auth-subject"),
         origin: url.origin
       });
-    }
-    if (url.pathname === "/internal/auth/verify" && request.method === "POST") {
-      return this.verifyToken(await request.json<JsonObject>());
-    }
-    if (url.pathname === "/internal/auth/revoke" && request.method === "POST") {
-      return this.revokeToken(await request.json<JsonObject>());
-    }
-    if (url.pathname === "/api/auth/exchange" && request.method === "POST") {
-      return this.issueToken(await request.json<JsonObject>());
-    }
-    if (url.pathname === "/api/auth/pairings" && request.method === "POST") {
-      return this.createPairing(request.headers.get("x-nib-auth-subject") || "bootstrap");
-    }
-    if (url.pathname === "/api/auth/pairings/redeem" && request.method === "POST") {
-      return this.redeemPairing(await request.json<JsonObject>(), request.headers.get("x-nib-client-key") || "unknown");
     }
     if (url.pathname === "/api/projects" && request.method === "GET") {
       return json({ projects: [] });
@@ -310,123 +250,6 @@ export class NibRequestHub extends DurableObject<Env> {
 
   private async put(item: RequestRecord): Promise<void> {
     await this.ctx.storage.put(`request:${item.id}`, item);
-  }
-
-  private async issueToken(input: JsonObject): Promise<Response> {
-    const name = text(input.name).slice(0, 120) || "Nib client";
-    const platform = normalizedPlatform(input.platform);
-    const requestedScopes = normalizedScopes(input.scopes);
-    const issued = await this.createToken(name, platform, requestedScopes);
-    await this.revokeMatchingTokens(name, platform, issued.id as string);
-    return json(issued, 201);
-  }
-
-  private async createToken(name: string, platform: string, scopes: string[]): Promise<JsonObject> {
-    const token = randomToken("nib");
-    const tokenHash = await sha256(token);
-    const now = new Date().toISOString();
-    const record: AuthTokenRecord = {
-      id: crypto.randomUUID(),
-      name,
-      platform,
-      scopes,
-      createdAt: now,
-      lastUsedAt: now,
-      revokedAt: null
-    };
-    await this.ctx.storage.put(`auth:token:${tokenHash}`, record);
-    return { token, tokenType: "Bearer", ...record };
-  }
-
-  private async verifyToken(input: JsonObject): Promise<Response> {
-    const tokenHash = text(input.tokenHash);
-    if (!/^[0-9a-f]{64}$/.test(tokenHash)) return json({ authenticated: false }, 401);
-    const record = await this.ctx.storage.get<AuthTokenRecord>(`auth:token:${tokenHash}`);
-    if (!record || record.revokedAt) return json({ authenticated: false }, 401);
-    const now = new Date();
-    if (now.getTime() - new Date(record.lastUsedAt).getTime() >= 60 * 60 * 1000) {
-      record.lastUsedAt = now.toISOString();
-      await this.ctx.storage.put(`auth:token:${tokenHash}`, record);
-    }
-    return json({ authenticated: true, tokenHash, ...record });
-  }
-
-  private async revokeToken(input: JsonObject): Promise<Response> {
-    const tokenHash = text(input.tokenHash);
-    const key = `auth:token:${tokenHash}`;
-    const record = await this.ctx.storage.get<AuthTokenRecord>(key);
-    if (!record) return json({ revoked: true });
-    record.revokedAt ??= new Date().toISOString();
-    await this.ctx.storage.put(key, record);
-    return json({ revoked: true, id: record.id });
-  }
-
-  private async createPairing(createdBy: string): Promise<Response> {
-    const code = randomToken("pair");
-    const codeHash = await sha256(code);
-    const createdAt = new Date();
-    const pairing: PairingRecord = {
-      id: crypto.randomUUID(),
-      createdBy,
-      createdAt: createdAt.toISOString(),
-      expiresAt: new Date(createdAt.getTime() + 10 * 60 * 1000).toISOString(),
-      redeemedAt: null
-    };
-    await this.ctx.storage.put(`auth:pairing:${codeHash}`, pairing);
-    return json({
-      code,
-      expiresAt: pairing.expiresAt,
-      url: `nib://auth/pair?server=${encodeURIComponent("https://nib-global.doug-lance.workers.dev")}&code=${encodeURIComponent(code)}`
-    }, 201);
-  }
-
-  private async redeemPairing(input: JsonObject, clientKey: string): Promise<Response> {
-    if (!await this.allowPairingAttempt(clientKey)) {
-      return json({ error: "Too many pairing attempts" }, 429, { "retry-after": "300" });
-    }
-    const code = text(input.code);
-    if (!/^pair_[A-Za-z0-9_-]{40,80}$/.test(code)) return json({ error: "Invalid or expired pairing code" }, 401);
-    const key = `auth:pairing:${await sha256(code)}`;
-    const pairing = await this.ctx.storage.get<PairingRecord>(key);
-    if (!pairing || pairing.redeemedAt || new Date(pairing.expiresAt).getTime() <= Date.now()) {
-      return json({ error: "Invalid or expired pairing code" }, 401);
-    }
-    pairing.redeemedAt = new Date().toISOString();
-    await this.ctx.storage.put(key, pairing);
-    const platform = normalizedPlatform(input.platform);
-    const scopes = platform === "cloudflare-codemode"
-      ? ["requests:read", "requests:write"]
-      : DEFAULT_SCOPES;
-    const name = text(input.name).slice(0, 120) || "Nib device";
-    const issued = await this.createToken(
-      name,
-      platform,
-      scopes
-    );
-    await this.revokeMatchingTokens(name, platform, issued.id as string);
-    return json(issued, 201);
-  }
-
-  private async revokeMatchingTokens(name: string, platform: string, exceptID: string): Promise<void> {
-    const stored = await this.ctx.storage.list<AuthTokenRecord>({ prefix: "auth:token:" });
-    const updates: Promise<void>[] = [];
-    for (const [key, record] of stored) {
-      if (record.id === exceptID || record.revokedAt || record.name !== name || record.platform !== platform) continue;
-      record.revokedAt = new Date().toISOString();
-      updates.push(this.ctx.storage.put(key, record));
-    }
-    await Promise.all(updates);
-  }
-
-  private async allowPairingAttempt(clientKey: string): Promise<boolean> {
-    const key = `auth:rate:${clientKey}`;
-    const now = Date.now();
-    const current = await this.ctx.storage.get<RateLimitRecord>(key);
-    const record = !current || now - current.windowStartedAt >= 5 * 60 * 1000
-      ? { windowStartedAt: now, attempts: 1 }
-      : { ...current, attempts: current.attempts + 1 };
-    await this.ctx.storage.put(key, record);
-    return record.attempts <= 10;
   }
 
   private async itemResponse(id: string): Promise<Response> {
@@ -722,60 +545,8 @@ async function attachmentResponse(id: string, request: Request, env: Env, author
   return new Response(object.body, { headers });
 }
 
-function bootstrapAuthorized(request: Request, env: Env): boolean {
-  if (!env.NIB_AUTH_TOKEN) return ["localhost", "127.0.0.1", "::1"].includes(new URL(request.url).hostname);
-  const supplied = bearerToken(request);
-  return constantTimeEqual(supplied, env.NIB_AUTH_TOKEN);
-}
-
-async function authenticate(
-  request: Request,
-  env: Env,
-  stub: DurableObjectStub<NibRequestHub>
-): Promise<AuthContext | null> {
-  const supplied = bearerToken(request);
-  if (!supplied) return null;
-  if (env.NIB_AUTH_TOKEN && constantTimeEqual(supplied, env.NIB_AUTH_TOKEN)) {
-    return { kind: "bootstrap", subject: "bootstrap", name: "Bootstrap administrator", platform: "worker", scopes: ["*"] };
-  }
-  const tokenHash = await sha256(supplied);
-  const response = await stub.fetch(new Request(new URL("/internal/auth/verify", request.url), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tokenHash })
-  }));
-  if (!response.ok) return null;
-  const record = await response.json<AuthTokenRecord & { authenticated: boolean }>();
-  if (!record.authenticated) return null;
-  return {
-    kind: "token",
-    subject: record.id,
-    name: record.name,
-    platform: record.platform,
-    scopes: record.scopes,
-    tokenHash
-  };
-}
-
-function bearerToken(request: Request): string {
-  return request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || "";
-}
-
 function unauthorized(): Response {
   return json({ error: "Unauthorized" }, 401, { "www-authenticate": "Bearer realm=\"nib-global\"" });
-}
-
-function forbidden(scope: string): Response {
-  return json({ error: "Forbidden", requiredScope: scope }, 403);
-}
-
-const DEFAULT_SCOPES = ["requests:read", "requests:write", "auth:pair"];
-
-function normalizedScopes(value: unknown): string[] {
-  if (!Array.isArray(value)) return [...DEFAULT_SCOPES];
-  const allowed = new Set(["requests:read", "requests:write", "auth:pair"]);
-  const scopes = value.map(text).filter((scope) => allowed.has(scope));
-  return scopes.length ? [...new Set(scopes)] : [...DEFAULT_SCOPES];
 }
 
 function normalizedPlatform(value: unknown): string {
@@ -783,17 +554,6 @@ function normalizedPlatform(value: unknown): string {
   return ["cli", "macos", "ios", "visionos", "watchos", "cloudflare-codemode"].includes(platform)
     ? platform
     : "unknown";
-}
-
-function scopeFor(method: string, path: string): string | null {
-  if (path === "/api/auth/pairings") return "auth:pair";
-  if (path.startsWith("/api/auth/")) return null;
-  if (path.startsWith("/api/requests")) return method === "GET" ? "requests:read" : "requests:write";
-  return method === "GET" ? "requests:read" : "requests:write";
-}
-
-function hasScope(auth: AuthContext, scope: string): boolean {
-  return auth.scopes.includes("*") || auth.scopes.includes(scope);
 }
 
 function randomToken(prefix: string): string {
@@ -827,8 +587,8 @@ function constantTimeEqual(left: string, right: string): boolean {
   return difference === 0;
 }
 
-function requestPage(id: string, origin: string): Response {
-  return new Response(reviewPageHtml(id, origin), { headers: reviewPageHeaders() });
+function requestPage(id: string, origin: string, apiPrefix = "/v1"): Response {
+  return new Response(reviewPageHtml(id, origin, apiPrefix), { headers: reviewPageHeaders() });
 }
 
 function json(value: unknown, status = 200, extra: Record<string, string> = {}): Response {

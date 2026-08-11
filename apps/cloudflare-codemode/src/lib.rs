@@ -203,21 +203,25 @@ async fn code_mode_health(env: &Env) -> Result<Response> {
         base_url: env
             .var("NIB_PORTAL_URL")
             .map(|value| value.to_string())
-            .unwrap_or_else(|_| "https://nib-global.doug-lance.workers.dev".into()),
+            .unwrap_or_else(|_| "https://app.nibtool.com".into()),
         token: env.secret("NIB_AUTH_TOKEN")?.to_string(),
         service: env.service("NIB_PORTAL")?,
     };
-    match portal.call(Method::Get, "/api/auth/status", None).await {
+    match portal.call(Method::Get, "/api/account", None).await {
         Ok(status)
             if status.get("authenticated").and_then(Value::as_bool) == Some(true)
-                && status.get("kind").and_then(Value::as_str) == Some("token")
-                && status.get("platform").and_then(Value::as_str)
-                    == Some("cloudflare-codemode") =>
+                && status.get("credentialKind").and_then(Value::as_str)
+                    == Some("expert-token")
+                && status.get("scopes").and_then(Value::as_array).is_some_and(|scopes| {
+                    ["reviews:read", "reviews:write"].iter().all(|required| {
+                        scopes.iter().any(|scope| scope.as_str() == Some(required))
+                    })
+                }) =>
         {
             Response::from_json(&json!({
                 "ok": true,
                 "service": "nib-codemode-global",
-                "portalAuth": "scoped-token"
+                "portalAuth": "expert-token"
             }))
         }
         Ok(_) => Response::from_json(&json!({
@@ -386,7 +390,7 @@ impl NibCodeMode {
                 .env
                 .var("NIB_PORTAL_URL")
                 .map(|value| value.to_string())
-                .unwrap_or_else(|_| "https://nib-global.doug-lance.workers.dev".into()),
+                .unwrap_or_else(|_| "https://app.nibtool.com".into()),
             token: self.env.secret("NIB_AUTH_TOKEN")?.to_string(),
             service: self.env.service("NIB_PORTAL")?,
         };

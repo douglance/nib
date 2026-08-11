@@ -15,7 +15,7 @@ members = [
 # The marketing site is a standalone package with its own lockfile, built via
 # --manifest-path. It requires Rust 1.95; keeping it out of the workspace stops
 # that floor from propagating to everything else.
-exclude = ["apps/site"]
+exclude = ["apps/web/site"]
 
 [workspace.package]
 edition = "2021"

@@ -165,14 +165,6 @@ struct WatchRequestListView: View {
                         name: WKInterfaceDevice.current().name,
                         platform: "watchos"
                     )
-                    if let pairingCode = launchArgument("nib.pairingCode") {
-                        _ = try await client.redeemPairing(
-                            code: pairingCode,
-                            name: WKInterfaceDevice.current().name,
-                            platform: "watchos"
-                        )
-                        notice = "Watch paired."
-                    }
                 } catch {
                     self.error = error.localizedDescription
                 }
@@ -306,31 +298,6 @@ struct WatchRequestListView: View {
 
     private func open(url: URL) {
         guard url.scheme == "nib" else { return }
-        if url.host == "auth" {
-            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            if let server = components?.queryItems?.first(where: { $0.name == "server" })?.value {
-                baseURLString = server
-                client.configure(baseURLString: server)
-            }
-            guard let code = components?.queryItems?.first(where: { $0.name == "code" })?.value else {
-                notice = "Pairing link is not valid."
-                return
-            }
-            Task {
-                do {
-                    _ = try await client.redeemPairing(
-                        code: code,
-                        name: WKInterfaceDevice.current().name,
-                        platform: "watchos"
-                    )
-                    notice = "Watch paired."
-                    await load()
-                } catch {
-                    self.error = error.localizedDescription
-                }
-            }
-            return
-        }
         if let requestId = requestId(from: url) {
             Task { await openRequest(id: requestId) }
             return
@@ -1213,12 +1180,12 @@ struct WatchDangerButtonStyle: ButtonStyle {
 
 struct WatchSettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @EnvironmentObject private var client: NibClient
     @Binding var baseURLString: String
-    @State private var pairingCode = ""
     @State private var authState = "Checking"
     @State private var authError: String?
-    @State private var pairing = false
+    @State private var signingIn = false
 
     var body: some View {
         NavigationStack {
@@ -1227,12 +1194,10 @@ struct WatchSettingsView: View {
                     .textInputAutocapitalization(.never)
                 Text(authState)
                     .foregroundStyle(.secondary)
-                TextField("Pairing code", text: $pairingCode)
-                    .textInputAutocapitalization(.never)
-                Button(pairing ? "Pairing..." : "Pair") {
-                    Task { await redeemPairing() }
+                Button(signingIn ? "Waiting for browser..." : "Sign in") {
+                    Task { await login() }
                 }
-                .disabled(pairing || pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(signingIn)
                 if let authError {
                     Text(authError)
                         .font(.caption2)
@@ -1253,27 +1218,26 @@ struct WatchSettingsView: View {
         client.configure(baseURLString: baseURLString)
         do {
             let status = try await client.authStatus()
-            authState = status.authenticated ? "Paired" : "Not paired"
+            authState = status.authenticated ? "Signed in" : "Signed out"
         } catch {
-            authState = "Not paired"
+            authState = "Signed out"
         }
     }
 
-    private func redeemPairing() async {
-        pairing = true
-        defer { pairing = false }
+    private func login() async {
+        signingIn = true
+        defer { signingIn = false }
         client.configure(baseURLString: baseURLString)
         do {
-            let status = try await client.redeemPairing(
-                code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines),
+            let status = try await client.login(
                 name: WKInterfaceDevice.current().name,
-                platform: "watchos"
+                platform: "watchos",
+                open: { openURL($0) }
             )
-            authState = status.authenticated ? "Paired" : "Not paired"
-            pairingCode = ""
+            authState = status.authenticated ? "Signed in" : "Signed out"
             authError = nil
         } catch {
-            authState = "Not paired"
+            authState = "Signed out"
             authError = error.localizedDescription
         }
     }

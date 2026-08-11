@@ -8,8 +8,6 @@ use std::{
 };
 
 const KEYCHAIN_SERVICE: &str = "com.douglance.nib.auth";
-const LEGACY_DEFAULTS_DOMAIN: &str = "com.douglance.nib.macos";
-const LEGACY_DEFAULTS_KEY: &str = "nib.authToken";
 const DEFAULT_PORTAL_URL: &str = "https://app.nibtool.com";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 const DEVICE_CLIENT_ID: &str = "nib-cli";
@@ -29,14 +27,6 @@ pub struct AuthStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthPairing {
-    pub code: String,
-    pub url: String,
-    pub expires_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct AuthLogout {
     pub revoked: bool,
     pub cleared: bool,
@@ -45,19 +35,44 @@ pub struct AuthLogout {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct AuthIssuedCredential {
+pub struct AuthExpertToken {
+    pub id: String,
     pub token: String,
-    pub token_type: String,
     pub name: String,
-    pub platform: String,
     pub scopes: Vec<String>,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthExpertTokenSummary {
+    pub id: String,
+    pub name: String,
+    pub scopes: Vec<String>,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthExpertTokenList {
+    pub tokens: Vec<AuthExpertTokenSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthTokenRevocation {
+    pub id: String,
+    pub revoked: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CredentialSource {
     Environment,
     Keychain,
-    LegacyDefaults,
 }
 
 impl CredentialSource {
@@ -65,7 +80,6 @@ impl CredentialSource {
         match self {
             Self::Environment => "environment",
             Self::Keychain => "keychain",
-            Self::LegacyDefaults => "legacy-defaults",
         }
     }
 }
@@ -86,7 +100,7 @@ struct DeviceAuthorization {
 
 pub fn login(portal: &str, name: Option<&str>) -> Result<AuthStatus, String> {
     let portal = normalize_portal(portal);
-    if let Some(credential) = current_credential(&portal, false) {
+    if let Some(credential) = current_credential(&portal) {
         match status_with_token(&portal, &credential.token, credential.source) {
             Ok(status) => return Ok(status),
             Err(_) if credential.source == CredentialSource::Keychain => {
@@ -114,7 +128,10 @@ pub fn status(portal: &str) -> Result<AuthStatus, String> {
 pub fn logout(portal: &str) -> Result<AuthLogout, String> {
     let portal = normalize_portal(portal);
     let credential =
-        current_credential(&portal, false).ok_or_else(|| "Nib is not authenticated".to_string())?;
+        current_credential(&portal).ok_or_else(|| "Nib is not authenticated".to_string())?;
+    if credential.token.starts_with("nib_pat_") {
+        return Err("Expert tokens must be revoked with `nib auth token revoke <id>`".into());
+    }
     let agent = agent();
     let request = agent
         .post(&format!("{portal}/api/auth/sign-out"))
@@ -123,7 +140,6 @@ pub fn logout(portal: &str) -> Result<AuthLogout, String> {
         false
     } else {
         delete_keychain_token(&portal);
-        delete_legacy_token();
         true
     };
     call_json(request).map_err(|error| {
@@ -140,62 +156,55 @@ pub fn logout(portal: &str) -> Result<AuthLogout, String> {
     })
 }
 
-pub fn pair(portal: &str) -> Result<AuthPairing, String> {
+pub fn create_expert_token(
+    portal: &str,
+    name: &str,
+    scopes: &[String],
+    expires_in_days: u16,
+) -> Result<AuthExpertToken, String> {
+    let portal = normalize_portal(portal);
+    let credential = resolved_credential(&portal)?;
+    let response = agent()
+        .post(&format!("{portal}/api/account/tokens"))
+        .set("authorization", &format!("Bearer {}", credential.token))
+        .set("content-type", "application/json")
+        .send_json(json!({
+            "name": name,
+            "scopes": scopes,
+            "expiresInDays": expires_in_days
+        }))
+        .map_err(http_error)?
+        .into_json::<Value>()
+        .map_err(|error| error.to_string())?;
+    serde_json::from_value(response).map_err(|error| format!("Invalid expert token response: {error}"))
+}
+
+pub fn list_expert_tokens(portal: &str) -> Result<AuthExpertTokenList, String> {
     let portal = normalize_portal(portal);
     let credential = resolved_credential(&portal)?;
     let response = call_json(
         agent()
-            .post(&format!("{portal}/api/auth/pairings"))
+            .get(&format!("{portal}/api/account/tokens"))
             .set("authorization", &format!("Bearer {}", credential.token)),
     )?;
-    serde_json::from_value(response).map_err(|error| format!("Invalid pairing response: {error}"))
+    serde_json::from_value(response).map_err(|error| format!("Invalid expert token list: {error}"))
 }
 
-pub fn redeem(
+pub fn revoke_expert_token(
     portal: &str,
-    code: &str,
-    name: Option<&str>,
-    platform: Option<&str>,
-) -> Result<AuthStatus, String> {
+    id: &str,
+) -> Result<AuthTokenRevocation, String> {
     let portal = normalize_portal(portal);
-    let issued = agent()
-        .post(&format!("{portal}/api/auth/pairings/redeem"))
-        .set("content-type", "application/json")
-        .send_json(json!({
-            "code": code,
-            "name": name.unwrap_or("Nib CLI"),
-            "platform": platform.unwrap_or("cli")
-        }))
-        .map_err(http_error)?
-        .into_json::<Value>()
-        .map_err(|error| error.to_string())?;
-    let token = issued
-        .get("token")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "Nib pairing response did not return a token".to_string())?;
-    store_keychain_token(&portal, token)?;
-    status_with_token(&portal, token, CredentialSource::Keychain)
-}
-
-pub fn issue_service_token(
-    portal: &str,
-    name: Option<&str>,
-    platform: Option<&str>,
-) -> Result<AuthIssuedCredential, String> {
-    let portal = normalize_portal(portal);
-    let pairing = pair(&portal)?;
-    let issued = agent()
-        .post(&format!("{portal}/api/auth/pairings/redeem"))
-        .set("content-type", "application/json")
-        .send_json(json!({
-            "code": pairing.code,
-            "name": name.unwrap_or("Nib Code Mode"),
-            "platform": platform.unwrap_or("cloudflare-codemode")
-        }))
-        .map_err(http_error)?
-        .into_json::<Value>()
-        .map_err(|error| error.to_string())?;
-    serde_json::from_value(issued).map_err(|error| format!("Invalid issued credential: {error}"))
+    let credential = resolved_credential(&portal)?;
+    agent()
+        .delete(&format!("{portal}/api/account/tokens/{id}"))
+        .set("authorization", &format!("Bearer {}", credential.token))
+        .call()
+        .map_err(http_error)?;
+    Ok(AuthTokenRevocation {
+        id: id.into(),
+        revoked: true,
+    })
 }
 
 pub fn resolved_access_token(portal: &str) -> Result<String, String> {
@@ -210,37 +219,10 @@ pub fn default_portal() -> String {
 }
 
 fn resolved_credential(portal: &str) -> Result<Credential, String> {
-    let credential = current_credential(portal, true).ok_or_else(|| {
+    current_credential(portal).ok_or_else(|| {
         "Nib is not authenticated. Run `nib auth login` or set NIB_AUTH_TOKEN for automation."
             .to_string()
-    })?;
-    if credential.source != CredentialSource::LegacyDefaults {
-        return Ok(credential);
-    }
-    let issued = exchange(portal, &credential.token, "Nib CLI", "cli")?;
-    let token = issued
-        .get("token")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "Nib auth migration did not return a token".to_string())?
-        .to_string();
-    store_keychain_token(portal, &token)?;
-    delete_legacy_token();
-    Ok(Credential {
-        token,
-        source: CredentialSource::Keychain,
     })
-}
-
-fn exchange(portal: &str, bootstrap: &str, name: &str, platform: &str) -> Result<Value, String> {
-    let response = agent()
-        .post(&format!("{portal}/api/auth/exchange"))
-        .set("authorization", &format!("Bearer {bootstrap}"))
-        .set("content-type", "application/json")
-        .send_json(json!({ "name": name, "platform": platform }))
-        .map_err(http_error)?;
-    response
-        .into_json::<Value>()
-        .map_err(|error| error.to_string())
 }
 
 fn status_with_token(
@@ -257,11 +239,21 @@ fn status_with_token(
         .map_err(|error| error.to_string())?;
     Ok(AuthStatus {
         authenticated: true,
-        kind: "user".into(),
+        kind: string_field(&response, "credentialKind"),
         subject: string_field(&response, "userId"),
         name: string_field(&response, "email"),
         platform: "cli".into(),
-        scopes: vec!["requests:read".into(), "requests:write".into()],
+        scopes: response
+            .get("scopes")
+            .and_then(Value::as_array)
+            .map(|scopes| {
+                scopes
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_else(|| vec!["reviews:read".into(), "reviews:write".into()]),
         portal: portal.into(),
         source: source.label().into(),
     })
@@ -338,7 +330,7 @@ fn open_browser(url: &str) {
 #[cfg(not(target_os = "macos"))]
 fn open_browser(_url: &str) {}
 
-fn current_credential(portal: &str, include_legacy: bool) -> Option<Credential> {
+fn current_credential(portal: &str) -> Option<Credential> {
     if let Ok(token) = std::env::var("NIB_AUTH_TOKEN") {
         let token = token.trim().to_string();
         if !token.is_empty() {
@@ -353,14 +345,6 @@ fn current_credential(portal: &str, include_legacy: bool) -> Option<Credential> 
             token,
             source: CredentialSource::Keychain,
         });
-    }
-    if include_legacy {
-        if let Some(token) = legacy_token() {
-            return Some(Credential {
-                token,
-                source: CredentialSource::LegacyDefaults,
-            });
-        }
     }
     None
 }
@@ -449,34 +433,6 @@ fn delete_keychain_token(portal: &str) -> bool {
 fn delete_keychain_token(_portal: &str) -> bool {
     false
 }
-
-#[cfg(target_os = "macos")]
-fn legacy_token() -> Option<String> {
-    let output = Command::new("defaults")
-        .args(["read", LEGACY_DEFAULTS_DOMAIN, LEGACY_DEFAULTS_KEY])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let token = String::from_utf8(output.stdout).ok()?.trim().to_string();
-    (!token.is_empty()).then_some(token)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn legacy_token() -> Option<String> {
-    None
-}
-
-#[cfg(target_os = "macos")]
-fn delete_legacy_token() {
-    let _ = Command::new("defaults")
-        .args(["delete", LEGACY_DEFAULTS_DOMAIN, LEGACY_DEFAULTS_KEY])
-        .output();
-}
-
-#[cfg(not(target_os = "macos"))]
-fn delete_legacy_token() {}
 
 fn normalize_portal(portal: &str) -> String {
     portal.trim().trim_end_matches('/').to_string()

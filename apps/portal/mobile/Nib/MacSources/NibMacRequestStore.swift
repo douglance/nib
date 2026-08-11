@@ -63,11 +63,11 @@ final class NibMacRequestStore: ObservableObject {
         try await client.authStatus()
     }
 
-    func redeemPairing(code: String) async throws -> NibAuthStatus {
-        try await client.redeemPairing(
-            code: code,
+    func login(open: (URL) -> Void) async throws -> NibAuthStatus {
+        try await client.login(
             name: Host.current().localizedName ?? "Nib Mac",
-            platform: "macos"
+            platform: "macos",
+            open: open
         )
     }
 

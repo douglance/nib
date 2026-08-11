@@ -713,7 +713,8 @@ describe("hosted request core", () => {
     expect(html).toContain('"/session"');
     expect(html).toContain('"x-nib-capability": token');
     expect(html).toContain('credentials: "same-origin"');
-    expect(html).toContain('"/v1/requests/" + encodeURIComponent(requestId)');
+    expect(html).toContain('const apiPrefix = "/v1"');
+    expect(html).toContain('apiPrefix + "/requests/" + encodeURIComponent(requestId)');
     expect(html).toContain('"/artifacts"');
     expect(html).toContain("mergeArtifacts");
     expect(html).toContain("safeArtifactUrl");

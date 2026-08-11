@@ -225,9 +225,6 @@ struct RequestInboxView: View {
                         name: UIDevice.current.name,
                         platform: authPlatform
                     )
-                    if let pairingCode = launchArgument("nib.pairingCode") {
-                        try await enroll(pairingCode: pairingCode)
-                    }
                 } catch {
                     self.error = error.localizedDescription
                 }
@@ -554,24 +551,6 @@ struct RequestInboxView: View {
             baseURLString = server
             client.configure(baseURLString: server)
         }
-        if scheme == "nib", url.host == "auth" {
-            guard let pairingCode = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?
-                .first(where: { $0.name == "code" })?
-                .value else {
-                notice = "Pairing link is not valid."
-                return
-            }
-            Task {
-                do {
-                    try await enroll(pairingCode: pairingCode)
-                    await load()
-                } catch {
-                    self.error = error.localizedDescription
-                }
-            }
-            return
-        }
         if scheme == "http" || scheme == "https" {
             guard url.host == client.baseURL.host() else { return }
         }
@@ -598,15 +577,6 @@ struct RequestInboxView: View {
         #else
         "ios"
         #endif
-    }
-
-    private func enroll(pairingCode: String) async throws {
-        _ = try await client.redeemPairing(
-            code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines),
-            name: UIDevice.current.name,
-            platform: authPlatform
-        )
-        notice = "This device is paired."
     }
 
     private func openProject(id: String) async {
@@ -2654,6 +2624,7 @@ struct NativeImageViewer: View {
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @EnvironmentObject private var client: NibClient
     @Binding var baseURLString: String
     var notificationStatus: NibNotificationStatus?
@@ -2663,10 +2634,9 @@ struct SettingsView: View {
     var registerNotifications: () -> Void
     var sendTestNotification: () -> Void
     @AppStorage("nib.darkMode") private var darkMode = false
-    @State private var pairingCode = ""
     @State private var authState = "Checking"
     @State private var authError: String?
-    @State private var pairing = false
+    @State private var signingIn = false
     @State private var diagnosticsExpanded = false
 
     var body: some View {
@@ -2688,22 +2658,19 @@ struct SettingsView: View {
 
             Section {
                 LabeledContent("Status", value: authState)
-                TextField("One-time pairing code", text: $pairingCode)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
                 Button {
-                    Task { await redeemPairing() }
+                    Task { await login() }
                 } label: {
-                    if pairing {
+                    if signingIn {
                         HStack {
                             ProgressView()
-                            Text("Pairing")
+                            Text("Waiting for browser")
                         }
                     } else {
-                        Text("Pair device")
+                        Text("Sign in to Nib")
                     }
                 }
-                .disabled(pairing || pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(signingIn)
                 if let authError {
                     Text(authError)
                         .font(.caption)
@@ -2712,7 +2679,7 @@ struct SettingsView: View {
             } header: {
                 Text("Authentication")
             } footer: {
-                Text("Create a code with `nib auth pair`. It expires after 10 minutes and works once.")
+                Text("Nib opens app.nibtool.com so you can approve this device with your account.")
             }
 
             Section("Advanced") {
@@ -2764,16 +2731,16 @@ struct SettingsView: View {
         client.configure(baseURLString: baseURLString)
         do {
             let status = try await client.authStatus()
-            authState = status.authenticated ? "Paired" : "Not paired"
+            authState = status.authenticated ? "Signed in" : "Signed out"
             authError = nil
         } catch {
-            authState = "Not paired"
+            authState = "Signed out"
         }
     }
 
-    private func redeemPairing() async {
-        pairing = true
-        defer { pairing = false }
+    private func login() async {
+        signingIn = true
+        defer { signingIn = false }
         do {
             let platform: String
             #if os(visionOS)
@@ -2781,17 +2748,16 @@ struct SettingsView: View {
             #else
             platform = "ios"
             #endif
-            let status = try await client.redeemPairing(
-                code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines),
+            let status = try await client.login(
                 name: UIDevice.current.name,
-                platform: platform
+                platform: platform,
+                open: { openURL($0) }
             )
-            authState = status.authenticated ? "Paired" : "Not paired"
-            pairingCode = ""
+            authState = status.authenticated ? "Signed in" : "Signed out"
             authError = nil
         } catch {
             authError = error.localizedDescription
-            authState = "Not paired"
+            authState = "Signed out"
         }
     }
 

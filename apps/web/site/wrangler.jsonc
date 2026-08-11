@@ -1,0 +1,11 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "nib-site",
+  "main": "build/worker/shim.mjs",
+  "compatibility_date": "2026-08-02",
+  "workers_dev": false,
+  "observability": { "enabled": true },
+  "build": {
+    "command": "cargo install -q worker-build --version 0.8.5 --locked && cd site && worker-build --release --no-panic-recovery"
+  }
+}

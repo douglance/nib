@@ -37,19 +37,6 @@ final class NibMacAppDelegate: NSObject, NSApplicationDelegate {
 
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
-            if url.scheme == "nib", url.host == "auth" {
-                let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-                if let server = components?.queryItems?.first(where: { $0.name == "server" })?.value {
-                    store.start(baseURLString: server)
-                }
-                if let code = components?.queryItems?.first(where: { $0.name == "code" })?.value {
-                    Task {
-                        _ = try? await store.redeemPairing(code: code)
-                        store.start(baseURLString: store.baseURLString)
-                    }
-                }
-                continue
-            }
             guard url.scheme == "nib",
                   url.host == "request",
                   let requestID = url.pathComponents.dropFirst().first,
@@ -318,28 +305,25 @@ private struct NibMacRequestRow: View {
 private struct NibMacSettingsView: View {
     @ObservedObject var store: NibMacRequestStore
     @AppStorage("nib.baseURL") private var baseURLString = NibDefaults.defaultBaseURLString
-    @State private var pairingCode = ""
     @State private var authState = "Checking"
     @State private var authError: String?
-    @State private var pairing = false
+    @State private var signingIn = false
 
     var body: some View {
         Form {
             TextField("Portal URL", text: $baseURLString)
                 .textFieldStyle(.roundedBorder)
             LabeledContent("Authentication", value: authState)
-            TextField("One-time pairing code", text: $pairingCode)
-                .textFieldStyle(.roundedBorder)
             if let authError {
                 Text(authError)
                     .font(.caption)
                     .foregroundStyle(.red)
             }
             HStack {
-                Button(pairing ? "Pairing..." : "Pair") {
-                    Task { await redeemPairing() }
+                Button(signingIn ? "Waiting for browser..." : "Sign in") {
+                    Task { await login() }
                 }
-                .disabled(pairing || pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(signingIn)
                 Spacer()
                 Button("Apply") {
                     store.start(baseURLString: baseURLString)
@@ -357,26 +341,23 @@ private struct NibMacSettingsView: View {
         store.start(baseURLString: baseURLString)
         do {
             let status = try await store.authStatus()
-            authState = status.authenticated ? "Paired" : "Not paired"
+            authState = status.authenticated ? "Signed in" : "Signed out"
             authError = nil
         } catch {
-            authState = "Not paired"
+            authState = "Signed out"
         }
     }
 
-    private func redeemPairing() async {
-        pairing = true
-        defer { pairing = false }
+    private func login() async {
+        signingIn = true
+        defer { signingIn = false }
         store.start(baseURLString: baseURLString)
         do {
-            let status = try await store.redeemPairing(
-                code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
-            )
-            authState = status.authenticated ? "Paired" : "Not paired"
-            pairingCode = ""
+            let status = try await store.login { NSWorkspace.shared.open($0) }
+            authState = status.authenticated ? "Signed in" : "Signed out"
             authError = nil
         } catch {
-            authState = "Not paired"
+            authState = "Signed out"
             authError = error.localizedDescription
         }
     }

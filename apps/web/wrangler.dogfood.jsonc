@@ -1,0 +1,82 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "nib-dogfood",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-08-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./site/dist",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "auto-trailing-slash"
+  },
+  "ai": { "binding": "AI", "remote": true },
+  "vars": {
+    "AI_GATEWAY_ID": "default",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_POLICY_AUD": "",
+    "ENVIRONMENT": "development",
+    "PUBLIC_ORIGIN": "http://127.0.0.1:8790",
+    "DEFAULT_PRICE_ID": "dogfood_default",
+    "HIGH_PRICE_ID": "dogfood_high",
+    "USAGE_PRICE_ID": "dogfood_usage",
+    "BILLING_PORTAL_CONFIGURATION_ID": "dogfood_portal"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nib",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "worker/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARTIFACTS",
+      "bucket_name": "nib-artifacts-dogfood"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "METERING_QUEUE", "queue": "nib-metering-dogfood" }
+    ],
+    "consumers": [
+      {
+        "queue": "nib-metering-dogfood",
+        "max_batch_size": 25,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "nib-metering-dogfood-dlq"
+      }
+    ]
+  },
+  "workflows": [
+    {
+      "name": "nib-generation-dogfood",
+      "binding": "GENERATE_WORKFLOW",
+      "class_name": "GenerationWorkflow"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "TENANT_GATE", "class_name": "TenantGate" },
+      { "name": "SCHEDULER", "class_name": "GenerationScheduler" },
+      { "name": "TRIAL_GATE", "class_name": "TrialGate" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "dogfood-v1",
+      "new_sqlite_classes": ["TenantGate"]
+    },
+    {
+      "tag": "dogfood-v2",
+      "new_sqlite_classes": ["VisualizeContainer", "TopcoatContainer", "GenerationScheduler"]
+    },
+    {
+      "tag": "dogfood-v3-workers-only",
+      "new_sqlite_classes": ["TrialGate"],
+      "deleted_classes": ["VisualizeContainer", "TopcoatContainer"]
+    }
+  ]
+}

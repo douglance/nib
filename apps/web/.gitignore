@@ -1,0 +1,15 @@
+/.wrangler/
+/node_modules/
+/target/
+/site/target/
+/site/dist/
+/site/.topcoat/
+/build/
+/test-results/
+/playwright-report/
+/blob-report/
+/nib-ui-*.png
+/nib-ui-*.jpg
+.env
+.dev.vars
+worker/.dev.vars

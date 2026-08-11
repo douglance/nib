@@ -1,0 +1,6 @@
+CREATE TABLE auth_rate_limit (
+  id TEXT PRIMARY KEY NOT NULL,
+  key TEXT NOT NULL UNIQUE,
+  count INTEGER NOT NULL,
+  lastRequest INTEGER NOT NULL
+);

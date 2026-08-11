@@ -6,7 +6,7 @@
 	<string>development</string>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>applinks:nib-global.doug-lance.workers.dev</string>
+		<string>applinks:app.nibtool.com</string>
 	</array>
 </dict>
 </plist>

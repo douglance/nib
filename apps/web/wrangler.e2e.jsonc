@@ -1,0 +1,51 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "nib-e2e",
+  "main": "worker/src/index.ts",
+  "compatibility_date": "2026-08-02",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./site/dist/assets",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "auto-trailing-slash"
+  },
+  "services": [
+    {
+      "binding": "NIB_SERVICE",
+      "service": "nib-global-e2e",
+      "entrypoint": "NibGlobalEntrypoint"
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "e2e",
+    "PUBLIC_ORIGIN": "http://localhost:8789",
+    "BETTER_AUTH_URL": "http://localhost:8789",
+    "BETTER_AUTH_SECRET": "nib-e2e-only-secret-that-is-at-least-thirty-two-characters",
+    "E2E_TEST_SECRET": "nib-e2e-local-only",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_POLICY_AUD": "",
+    "TRIAL_NETWORK_SECRET": "nib-e2e-trial-network-secret",
+    "TRIAL_NETWORK_IDENTITIES_30D": "3",
+    "TRIAL_GLOBAL_DAILY_LIMIT": "50",
+    "AI_GATEWAY_ID": "e2e",
+    "DEFAULT_PRICE_ID": "price_e2e_default",
+    "HIGH_PRICE_ID": "price_e2e_high",
+    "USAGE_PRICE_ID": "price_e2e_usage",
+    "BILLING_PORTAL_CONFIGURATION_ID": "bpc_e2e"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nib-e2e",
+      "database_id": "00000000-0000-0000-0000-000000000006",
+      "migrations_dir": "worker/migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "E2E_MAGIC_LINKS",
+      "id": "00000000000000000000000000000006"
+    }
+  ]
+}

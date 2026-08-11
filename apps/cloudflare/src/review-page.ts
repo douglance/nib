@@ -18,8 +18,9 @@ export function reviewPageHeaders(): Record<string, string> {
   };
 }
 
-export function reviewPageHtml(id: string, origin: string): string {
+export function reviewPageHtml(id: string, origin: string, apiPrefix = "/v1"): string {
   const encodedId = JSON.stringify(id);
+  const encodedApiPrefix = JSON.stringify(apiPrefix.replace(/\/$/, ""));
   const native = `nib://request/${encodeURIComponent(id)}?server=${encodeURIComponent(origin)}`;
   return `<!doctype html>
 <html lang="en">
@@ -93,10 +94,11 @@ export function reviewPageHtml(id: string, origin: string): string {
 </main>
 <script>
 const requestId = ${encodedId};
+const apiPrefix = ${encodedApiPrefix};
 const state = document.getElementById("state");
 const review = document.getElementById("review");
 let token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
-function requestBase() { return "/v1/requests/" + encodeURIComponent(requestId); }
+function requestBase() { return apiPrefix + "/requests/" + encodeURIComponent(requestId); }
 function text(id, value) { document.getElementById(id).textContent = value || ""; }
 function setState(message, className) { state.textContent = message; state.className = "status " + (className || "muted"); }
 async function exchangeSession() {

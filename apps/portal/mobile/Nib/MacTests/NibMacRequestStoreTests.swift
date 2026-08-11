@@ -3,6 +3,10 @@ import XCTest
 
 @MainActor
 final class NibMacRequestStoreTests: XCTestCase {
+    func testProductionPortalUsesTheAccountGateway() {
+        XCTAssertEqual(NibDefaults.defaultBaseURLString, "https://app.nibtool.com")
+    }
+
     func testApplySortsRequestsAndKeepsOnlyActiveItemsInMenu() throws {
         let older = try request(id: "older", status: "open", updatedAt: "2026-07-23T10:00:00.000Z")
         let newer = try request(id: "newer", status: "answered", updatedAt: "2026-07-23T11:00:00.000Z")

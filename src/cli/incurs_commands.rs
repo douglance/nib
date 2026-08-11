@@ -38,9 +38,9 @@ struct PosterMediaHandler;
 struct TranscribeMediaHandler;
 
 #[derive(Debug, Deserialize, incurs::Args)]
-struct AuthRedeemArgs {
-    /// One-time pairing code.
-    code: String,
+struct AuthTokenArgs {
+    /// Expert token ID.
+    token_id: String,
 }
 
 #[derive(Debug, Deserialize, incurs::Options)]
@@ -58,23 +58,15 @@ struct AuthLoginOptions {
 }
 
 #[derive(Debug, Deserialize, incurs::Options)]
-struct AuthRedeemOptions {
+struct AuthTokenCreateOptions {
     /// Nib service URL; defaults to NIB_PORTAL_URL or the global service.
     portal: Option<String>,
-    /// Human-readable name for this credential.
-    name: Option<String>,
-    /// Client platform recorded by the service.
-    platform: Option<String>,
-}
-
-#[derive(Debug, Deserialize, incurs::Options)]
-struct AuthIssueOptions {
-    /// Nib service URL; defaults to NIB_PORTAL_URL or the global service.
-    portal: Option<String>,
-    /// Human-readable name for the service credential.
-    name: Option<String>,
-    /// Service platform; defaults to cloudflare-codemode.
-    platform: Option<String>,
+    /// Human-readable token name.
+    name: String,
+    /// Comma-separated allowlisted scopes.
+    scopes: Option<String>,
+    /// Token lifetime in days, from 1 through 365.
+    expires_in_days: Option<u16>,
 }
 
 struct CompatHandler {
@@ -100,7 +92,7 @@ pub(crate) struct NibEnv {
     /// Portal connection timeout in milliseconds.
     #[incurs(env = "NIB_PORTAL_CONNECT_TIMEOUT_MS")]
     pub portal_connect_timeout_ms: Option<u64>,
-    /// Bootstrap or automation bearer token; normal credentials use Keychain.
+    /// Expert or device bearer token for unattended automation; interactive login uses Keychain.
     #[incurs(env = "NIB_AUTH_TOKEN")]
     pub auth_token: Option<String>,
     /// Image generator command override.
@@ -1270,108 +1262,147 @@ fn typed_auth_group() -> Cli {
     }))
     .done();
 
-    let pair = CommandDef::typed::<(), AuthPortalOptions, (), super::auth::AuthPairing, _, _>(
-        "pair",
-        |ctx: TypedContext<(), AuthPortalOptions, ()>| async move {
-            let portal = ctx
-                .options
-                .portal
-                .unwrap_or_else(super::auth::default_portal);
-            match tokio::task::spawn_blocking(move || super::auth::pair(&portal)).await {
-                Ok(Ok(pairing)) => {
-                    let cta = CtaBlock {
-                        commands: vec![CtaEntry::Detailed {
-                            command: format!("auth redeem {}", pairing.code),
-                            description: Some("Redeem on the device being enrolled".into()),
-                        }],
-                        description: Some("This code expires and works once:".into()),
-                    };
-                    TypedResult::ok_with_cta(pairing, cta)
-                }
-                Ok(Err(auth_error)) => TypedResult::error("AUTH_PAIR_FAILED", auth_error),
-                Err(join_error) => TypedResult::error("AUTH_PAIR_FAILED", join_error.to_string()),
-            }
-        },
-    )
-    .description("Create a short-lived, one-time code for another Nib client")
-    .mcp(mcp_options(Policy {
-        mcp_name: Some("auth_pair"),
-        ..EXTERNAL_EFFECT
-    }))
-    .done();
-
-    let redeem =
-        CommandDef::typed::<AuthRedeemArgs, AuthRedeemOptions, (), super::auth::AuthStatus, _, _>(
-            "redeem",
-            |ctx: TypedContext<AuthRedeemArgs, AuthRedeemOptions, ()>| async move {
-                let portal = ctx
-                    .options
-                    .portal
-                    .unwrap_or_else(super::auth::default_portal);
-                let code = ctx.args.code;
-                let name = ctx.options.name;
-                let platform = ctx.options.platform;
-                match tokio::task::spawn_blocking(move || {
-                    super::auth::redeem(&portal, &code, name.as_deref(), platform.as_deref())
-                })
-                .await
-                {
-                    Ok(Ok(status)) => TypedResult::ok(status),
-                    Ok(Err(auth_error)) => TypedResult::error("AUTH_REDEEM_FAILED", auth_error),
-                    Err(join_error) => {
-                        TypedResult::error("AUTH_REDEEM_FAILED", join_error.to_string())
-                    }
-                }
-            },
-        )
-        .description("Redeem a one-time pairing code and store the scoped credential in Keychain")
-        .mcp(mcp_options(Policy {
-            mcp_name: Some("auth_redeem"),
-            ..EXTERNAL_EFFECT
-        }))
-        .done();
-
-    let issue = CommandDef::typed::<
+    let token_create = CommandDef::typed::<
         (),
-        AuthIssueOptions,
+        AuthTokenCreateOptions,
         (),
-        super::auth::AuthIssuedCredential,
+        super::auth::AuthExpertToken,
         _,
         _,
     >(
-        "issue",
-        |ctx: TypedContext<(), AuthIssueOptions, ()>| async move {
+        "create",
+        |ctx: TypedContext<(), AuthTokenCreateOptions, ()>| async move {
             let portal = ctx
                 .options
                 .portal
                 .unwrap_or_else(super::auth::default_portal);
             let name = ctx.options.name;
-            let platform = ctx.options.platform;
+            let scopes = ctx
+                .options
+                .scopes
+                .unwrap_or_else(|| "reviews:read".into())
+                .split(',')
+                .map(str::trim)
+                .filter(|scope| !scope.is_empty())
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let expires_in_days = ctx.options.expires_in_days.unwrap_or(90);
             match tokio::task::spawn_blocking(move || {
-                super::auth::issue_service_token(&portal, name.as_deref(), platform.as_deref())
+                super::auth::create_expert_token(
+                    &portal,
+                    &name,
+                    &scopes,
+                    expires_in_days,
+                )
             })
             .await
             {
-                Ok(Ok(credential)) => TypedResult::ok(credential),
-                Ok(Err(auth_error)) => TypedResult::error("AUTH_ISSUE_FAILED", auth_error),
+                Ok(Ok(token)) => {
+                    let cta = CtaBlock {
+                        commands: vec![CtaEntry::Detailed {
+                            command: "auth token list".into(),
+                            description: Some("List active expert tokens".into()),
+                        }],
+                        description: Some("Copy the token now; it will not be shown again:".into()),
+                    };
+                    TypedResult::ok_with_cta(token, cta)
+                }
+                Ok(Err(auth_error)) => TypedResult::error("AUTH_TOKEN_CREATE_FAILED", auth_error),
                 Err(join_error) => {
-                    TypedResult::error("AUTH_ISSUE_FAILED", join_error.to_string())
+                    TypedResult::error("AUTH_TOKEN_CREATE_FAILED", join_error.to_string())
                 }
             }
         },
     )
-    .description("Issue a least-privilege service token without replacing the CLI credential")
-    .hint("The token is shown once. Pipe JSON output directly into the target secret store and do not save it in source control.")
+    .description("Create a scoped, expiring expert token; the secret is returned once")
+    .hint("Use comma-separated generate:read, generate:write, reviews:read, or reviews:write scopes.")
+    .mcp(mcp_options(Policy {
+        mcp_name: Some("auth_token_create"),
+        ..EXTERNAL_EFFECT
+    }))
     .done();
 
+    let token_list = CommandDef::typed::<
+        (),
+        AuthPortalOptions,
+        (),
+        super::auth::AuthExpertTokenList,
+        _,
+        _,
+    >(
+        "list",
+        |ctx: TypedContext<(), AuthPortalOptions, ()>| async move {
+            let portal = ctx
+                .options
+                .portal
+                .unwrap_or_else(super::auth::default_portal);
+            match tokio::task::spawn_blocking(move || super::auth::list_expert_tokens(&portal)).await {
+                Ok(Ok(tokens)) => TypedResult::ok(tokens),
+                Ok(Err(auth_error)) => TypedResult::error("AUTH_TOKEN_LIST_FAILED", auth_error),
+                Err(join_error) => {
+                    TypedResult::error("AUTH_TOKEN_LIST_FAILED", join_error.to_string())
+                }
+            }
+        },
+    )
+    .description("List active expert tokens without exposing their secrets")
+    .mcp(mcp_options(Policy {
+        read_only: true,
+        idempotent: true,
+        open_world: true,
+        mcp_name: Some("auth_token_list"),
+        ..EXTERNAL_EFFECT
+    }))
+    .done();
+
+    let token_revoke = CommandDef::typed::<
+        AuthTokenArgs,
+        AuthPortalOptions,
+        (),
+        super::auth::AuthTokenRevocation,
+        _,
+        _,
+    >(
+        "revoke",
+        |ctx: TypedContext<AuthTokenArgs, AuthPortalOptions, ()>| async move {
+            let portal = ctx
+                .options
+                .portal
+                .unwrap_or_else(super::auth::default_portal);
+            let token_id = ctx.args.token_id;
+            match tokio::task::spawn_blocking(move || {
+                super::auth::revoke_expert_token(&portal, &token_id)
+            })
+            .await
+            {
+                Ok(Ok(result)) => TypedResult::ok(result),
+                Ok(Err(auth_error)) => TypedResult::error("AUTH_TOKEN_REVOKE_FAILED", auth_error),
+                Err(join_error) => {
+                    TypedResult::error("AUTH_TOKEN_REVOKE_FAILED", join_error.to_string())
+                }
+            }
+        },
+    )
+    .description("Revoke one expert token by ID")
+    .mcp(mcp_options(Policy {
+        destructive: true,
+        mcp_name: Some("auth_token_revoke"),
+        ..EXTERNAL_EFFECT
+    }))
+    .done();
+
+    let tokens = Cli::create("token")
+        .description("Manage scoped expert tokens for automation")
+        .command("create", token_create)
+        .command("list", token_list)
+        .command("revoke", token_revoke);
+
     Cli::create("auth")
-        .description("Enroll clients and manage scoped Nib credentials")
+        .description("Sign in devices and manage scoped Nib credentials")
         .command("login", login)
         .command("status", status)
         .command("logout", logout)
-        .command("pair", pair)
-        .command("redeem", redeem)
-        .command("issue", issue)
+        .group(tokens)
 }
 
 fn typed_record_group() -> Cli {
@@ -3174,8 +3205,9 @@ mod tests {
             "auth_login",
             "auth_status",
             "auth_logout",
-            "auth_pair",
-            "auth_redeem",
+            "auth_token_create",
+            "auth_token_list",
+            "auth_token_revoke",
             "add_annotation",
             "read_annotations",
             "remove_annotation",
@@ -3184,6 +3216,9 @@ mod tests {
             "judge_pair",
         ] {
             assert!(catalog.get(name).is_some(), "missing tool {name}");
+        }
+        for legacy in ["auth_pair", "auth_redeem", "auth_issue"] {
+            assert!(catalog.get(legacy).is_none(), "legacy auth tool remains: {legacy}");
         }
 
         let recording = catalog.get("start_recording").unwrap();

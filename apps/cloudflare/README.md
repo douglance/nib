@@ -23,13 +23,12 @@ not read back and assemble all parts in Worker memory to recompute the full hash
 ```sh
 npm install
 npx wrangler r2 bucket create nib-global-media
-npx wrangler secret put NIB_AUTH_TOKEN
 npm run deploy
 ```
 
-`NIB_AUTH_TOKEN` is the Worker bootstrap secret. Do not copy it into an app,
-Code Mode Worker, configuration file, or shell profile. Nib Cloud reaches this
-Worker through a private service binding instead.
+The public Worker does not accept bearer credentials. Account sessions, device
+credentials, and expert tokens terminate at `app.nibtool.com`; that account
+gateway reaches this Worker through a private tenant-scoped service binding.
 
 People enroll the CLI through the hosted account portal:
 

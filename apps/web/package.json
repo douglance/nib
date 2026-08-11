@@ -1,0 +1,37 @@
+{
+  "name": "nib-cloud",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "dogfood:mcp": "node scripts/dogfood-mcp.mjs",
+    "site:build": "cargo run --manifest-path site/Cargo.toml -- --export site/dist",
+    "site:app:build": "esbuild site/src/account.ts --bundle --format=iife --target=es2022 --minify --outfile=site/dist/assets/account.js",
+    "site:worker:build": "cd site && worker-build --release --no-panic-recovery",
+    "deploy:site": "wrangler deploy --config site/wrangler.jsonc",
+    "e2e:serve": "npm run site:app:build && wrangler d1 migrations apply nib-e2e --local --config wrangler.e2e.jsonc --persist-to .wrangler/e2e && wrangler dev --config wrangler.e2e.jsonc --port 8789 --local --persist-to .wrangler/e2e",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test": "vitest run",
+    "types": "wrangler types worker/worker-configuration.d.ts",
+    "dev": "wrangler dev",
+    "deploy": "npm run site:build && npm run site:app:build && npm run deploy:site && wrangler deploy"
+  },
+  "dependencies": {
+    "@better-auth/passkey": "1.6.26",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "agents": "^0.20.1",
+    "better-auth": "1.6.26",
+    "jose": "6.2.7",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.21.0",
+    "@cloudflare/workers-types": "^5.20260811.1",
+    "@playwright/test": "1.59.1",
+    "esbuild": "0.28.1",
+    "typescript": "5.9.2",
+    "vitest": "4.1.10",
+    "wrangler": "^4.120.1"
+  }
+}

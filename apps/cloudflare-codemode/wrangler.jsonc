@@ -5,10 +5,10 @@
   "compatibility_date": "2026-07-31",
   "compatibility_flags": ["nodejs_compat"],
   "vars": {
-    "NIB_PORTAL_URL": "https://nib-global.doug-lance.workers.dev"
+    "NIB_PORTAL_URL": "https://app.nibtool.com"
   },
   "services": [
-    { "binding": "NIB_PORTAL", "service": "nib-global" }
+    { "binding": "NIB_PORTAL", "service": "nib" }
   ],
   "durable_objects": {
     "bindings": [

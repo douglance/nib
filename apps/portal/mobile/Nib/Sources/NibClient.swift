@@ -2,7 +2,7 @@ import Foundation
 import Security
 
 enum NibDefaults {
-    static let defaultBaseURLString = "https://nib-global.doug-lance.workers.dev"
+    static let defaultBaseURLString = "https://app.nibtool.com"
     static let registeredDeviceIDKey = "nib.registeredDeviceID"
     static let authTokenKey = "nib.authToken"
     static let bootstrapAuthTokenKey = "nib.bootstrapAuthToken"
@@ -132,15 +132,32 @@ final class NibClient: ObservableObject {
     }
 
     func authStatus() async throws -> NibAuthStatus {
-        try await get("/api/auth/status")
+        try await get("/api/account")
     }
 
-    func redeemPairing(code: String, name: String, platform: String) async throws -> NibAuthStatus {
-        let issued: NibIssuedCredential = try await postUnauthenticated(
-            "/api/auth/pairings/redeem",
-            body: PairingBody(code: code, name: name, platform: platform)
+    func login(
+        name: String,
+        platform: String,
+        open: (URL) -> Void
+    ) async throws -> NibAuthStatus {
+        let authorization: NibDeviceAuthorization = try await postUnauthenticated(
+            "/api/auth/device/code",
+            body: DeviceAuthorizationBody(
+                clientID: "nib-apple",
+                scope: "reviews:read reviews:write",
+                name: "\(name) (\(platform))"
+            )
         )
-        try NibCredentialStore.store(issued.token, for: baseURL)
+        guard let verificationURL = URL(string: authorization.verificationURIComplete) else {
+            throw NSError(
+                domain: "NibClient",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Nib returned an invalid sign-in URL."]
+            )
+        }
+        open(verificationURL)
+        let token = try await pollDeviceAuthorization(authorization)
+        try NibCredentialStore.store(token, for: baseURL)
         return try await authStatus()
     }
 
@@ -152,17 +169,8 @@ final class NibClient: ObservableObject {
     func migrateLegacyCredentialIfNeeded(name: String, platform: String) async throws {
         guard NibCredentialStore.token(for: baseURL) == nil else { return }
         let defaults = UserDefaults.standard
-        let legacy = [NibDefaults.authTokenKey, NibDefaults.bootstrapAuthTokenKey]
-            .compactMap { defaults.string(forKey: $0) }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty }
-        guard let legacy else { return }
-        let issued: NibIssuedCredential = try await postUnauthenticated(
-            "/api/auth/exchange",
-            body: AuthExchangeBody(name: name, platform: platform),
-            bearer: legacy
-        )
-        try NibCredentialStore.store(issued.token, for: baseURL)
+        _ = name
+        _ = platform
         defaults.removeObject(forKey: NibDefaults.authTokenKey)
         defaults.removeObject(forKey: NibDefaults.bootstrapAuthTokenKey)
     }
@@ -438,6 +446,44 @@ final class NibClient: ObservableObject {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    private func pollDeviceAuthorization(_ authorization: NibDeviceAuthorization) async throws -> String {
+        let deadline = Date().addingTimeInterval(TimeInterval(authorization.expiresIn))
+        var interval = max(authorization.interval, 1)
+        while Date() < deadline {
+            try await Task.sleep(nanoseconds: UInt64(interval) * 1_000_000_000)
+            var request = URLRequest(url: url("/api/auth/device/token"))
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "content-type")
+            request.httpBody = try JSONEncoder().encode(DeviceTokenBody(
+                grantType: "urn:ietf:params:oauth:grant-type:device_code",
+                deviceCode: authorization.deviceCode,
+                clientID: "nib-apple"
+            ))
+            let (data, response) = try await session.data(for: request)
+            if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
+                return try JSONDecoder().decode(DeviceTokenResponse.self, from: data).accessToken
+            }
+            let error = try? JSONDecoder().decode(DeviceAuthorizationError.self, from: data)
+            switch error?.error {
+            case "authorization_pending":
+                continue
+            case "slow_down":
+                interval += 5
+            case "access_denied":
+                throw deviceAuthorizationError("Nib sign-in was denied.")
+            case "expired_token":
+                throw deviceAuthorizationError("Nib sign-in expired.")
+            default:
+                try validate(response: response, data: data)
+            }
+        }
+        throw deviceAuthorizationError("Nib sign-in expired.")
+    }
+
+    private func deviceAuthorizationError(_ message: String) -> NSError {
+        NSError(domain: "NibClient", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
     private func patch<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
         var request = URLRequest(url: url(path))
         request.httpMethod = "PATCH"
@@ -542,17 +588,52 @@ private struct RouteBody: Encodable {
 
 private struct EmptyBody: Encodable {}
 
-private struct PairingBody: Encodable {
-    var code: String
+private struct DeviceAuthorizationBody: Encodable {
+    var clientID: String
+    var scope: String
     var name: String
-    var platform: String
+
+    enum CodingKeys: String, CodingKey {
+        case clientID = "client_id"
+        case scope
+        case name
+    }
 }
 
-private struct AuthExchangeBody: Encodable {
-    var name: String
-    var platform: String
+private struct NibDeviceAuthorization: Decodable {
+    var deviceCode: String
+    var verificationURIComplete: String
+    var expiresIn: Int
+    var interval: Int
+
+    enum CodingKeys: String, CodingKey {
+        case deviceCode = "device_code"
+        case verificationURIComplete = "verification_uri_complete"
+        case expiresIn = "expires_in"
+        case interval
+    }
 }
 
-private struct NibIssuedCredential: Decodable {
-    var token: String
+private struct DeviceTokenBody: Encodable {
+    var grantType: String
+    var deviceCode: String
+    var clientID: String
+
+    enum CodingKeys: String, CodingKey {
+        case grantType = "grant_type"
+        case deviceCode = "device_code"
+        case clientID = "client_id"
+    }
+}
+
+private struct DeviceTokenResponse: Decodable {
+    var accessToken: String
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken = "access_token"
+    }
+}
+
+private struct DeviceAuthorizationError: Decodable {
+    var error: String
 }
