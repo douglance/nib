@@ -7,7 +7,7 @@ The production Worker targets `https://app.nibtool.com` in the `doug-lance.worke
 | Owner/admin authentication | Better Auth account sessions and device authorization are implemented; optional Cloudflare Access remains available for dogfood. | Verify email delivery, passkeys, device approval, and logout on the production origin. |
 | Expert automation | Scoped, expiring, revocable expert tokens are stored as hashes in D1. | Canary create, reveal-once, read/write scope denial, revoke, and post-revoke rejection. |
 | Stripe API key | A temporary Stripe CLI live key, expiring 2026-11-01, is deployed; the live products, prices, meter, portal, webhook, and webhook secret are configured. | Replace `STRIPE_SECRET_KEY` with a durable live restricted key before accepting customers. Grant write only for Billing Meter Events, Customer Portal, Subscriptions, and Checkout Sessions. |
-| WAF request-body rule | Application-level body, prompt, reference, and upload limits are enforced; the current Wrangler grant cannot write zone rulesets. | Add the matching Cloudflare WAF rule from the dashboard or with a zone Rulesets Write token before accepting untrusted traffic at scale. |
+| WAF request-body rule | The active `Reject oversized Nib request bodies` rule blocks mutating requests whose `Content-Length` exceeds 28 MiB; a 29,360,129-byte production canary returned Cloudflare `403`. | Upgrade to WAF Advanced if edge enforcement must also cover chunked requests without `Content-Length`; the Free plan does not expose `http.request.body.size`. |
 | Billable Usage API | Optional: restricted alpha; current Wrangler OAuth grant has no billing permission. | Add a read-only API token only when Cloudflare grants account access. Customer billing does not depend on it. |
 
 Do not onboard customers or run a live checkout until the authentication canaries and durable Stripe key have the required result.
@@ -124,11 +124,11 @@ The 2026-08-11 deployment produced this compatible version set:
 | `nib-global` | `82a6416d-074b-402e-bf26-a680e7b6e678` |
 | `nib-site` | `ef7b6c5d-0446-4176-b9a8-ca6686c62d5b` |
 | `nib` | `9f9855ef-b0c7-4696-b3a8-8c4ac371a352` |
-| `nib-codemode-global` | `2329ebaf-83af-4e14-a782-a95023d24a12` |
+| `nib-codemode-global` | `0e591f25-3ee1-4ee6-99f3-ecd6b81b916d` |
 
 Live checks passed for `/health`, `/`, `/docs`, and `/pricing`; all three rendered pages returned `x-nib-renderer: topcoat-wasm-worker`. Unauthenticated MCP `initialize` and `tools/list` succeeded, and unauthenticated `tools/call` returned `401`. The public `nib-global` network endpoint remains service-authenticated and returns `401` without a credential.
 
-Code Mode is deployed but its `/health` returns `503` until a real Nib account issues the scoped portal credential. Authenticate the release CLI, then run the documented `nib auth token create --name "Global Code Mode" --scopes reviews:read,reviews:write --format json | jq -r .token | npx wrangler secret put NIB_AUTH_TOKEN` pipeline from `apps/cloudflare-codemode` and redeploy that Worker. Customer authentication, token revocation, paid generation, checkout, portal, usage metering, and plan-change canaries remain required before onboarding customers.
+Code Mode has a real review-only portal credential with `reviews:read,reviews:write`; its production `/health` returned `200` with `portalAuth: "expert-token"`. The Cloudflare custom rule `8d783b50423a485fab289d93a2ad67f2` is active for `app.nibtool.com` and rejects declared request bodies over 28 MiB before Worker execution. Because `http.request.body.size` requires WAF Advanced, the current Free-plan rule compares `Content-Length` and does not cover chunked requests that omit that header. Customer authentication, token revocation, paid generation, checkout, portal, usage metering, and plan-change canaries remain required before onboarding customers.
 
 The last verified pre-launch renderer/public pair remains `182e5669-4fb5-428b-a378-19cf19f0c783` and `3f9d10ef-6600-4b78-acfd-d82c7b9af77f`. No Nib Container application exists.
 

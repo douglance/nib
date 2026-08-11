@@ -46,4 +46,4 @@ Every AI call skips AI Gateway cache and requests no AI Gateway log collection. 
 - Same-origin enforcement for cookie-backed expert-token creation and revocation.
 - Cloudflare Access JWT signature, issuer, audience, expiry, and stable-claim validation for owner dogfood.
 
-Before launch, add a Cloudflare WAF request-body rule aligned with these application limits so oversized requests are rejected before Worker execution.
+Cloudflare custom rule `8d783b50423a485fab289d93a2ad67f2` rejects mutating requests to `app.nibtool.com` when the declared `Content-Length` exceeds 28 MiB. A 29,360,129-byte production canary returned Cloudflare `403`. This is the strongest available Free-plan rule: complete edge enforcement for chunked requests without `Content-Length` requires WAF Advanced and its `http.request.body.size` field. Application-level limits remain authoritative for every request transport.
