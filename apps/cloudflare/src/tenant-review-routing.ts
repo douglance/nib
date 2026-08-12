@@ -12,7 +12,16 @@ export interface TenantReviewApiRoute {
   apiPrefix: string;
 }
 
-export type TenantReviewRoute = TenantReviewPageRoute | TenantReviewApiRoute;
+export interface TenantReviewAttachmentRoute {
+  kind: "attachment";
+  tenantId: string;
+  attachmentId: string;
+}
+
+export type TenantReviewRoute =
+  | TenantReviewPageRoute
+  | TenantReviewApiRoute
+  | TenantReviewAttachmentRoute;
 
 export function tenantScopedReviewLink(tenantId: string, link: string): string {
   if (!link.startsWith("/r/")) return link;
@@ -40,6 +49,10 @@ export function tenantReviewRoute(pathname: string): TenantReviewRoute | undefin
   }
   if (suffix === "/v1" || suffix.startsWith("/v1/")) {
     return { kind: "api", tenantId, apiPath: suffix, apiPrefix };
+  }
+  const attachment = suffix.match(/^\/attachments\/([0-9a-f-]{36})$/i);
+  if (attachment) {
+    return { kind: "attachment", tenantId, attachmentId: attachment[1]! };
   }
   return undefined;
 }

@@ -375,7 +375,7 @@ pub(crate) fn create_feedback_request(
     let canonical = std::fs::read(&nib_path).map_err(|error| {
         WebFeedbackError::after_publish(format!("Failed to read {}: {error}", nib_path.display()))
     })?;
-    upload_attachment(
+    let review_link = upload_attachment(
         &agent,
         &base_url,
         &request.id,
@@ -402,7 +402,7 @@ pub(crate) fn create_feedback_request(
     .map_err(WebFeedbackError::before_publish)?;
 
     Ok(PublishedFeedback {
-        url: request_url(&base_url, &request.id),
+        url: published_request_url(&base_url, &request.id, review_link.as_deref()),
         request_id: request.id,
         file: nib_path,
         status: "open",
@@ -484,10 +484,11 @@ fn create_video_review_request(
         &json!({"metadata":{"subject":subject}}),
     )
     .map_err(WebFeedbackError::before_publish)?;
-    publish_request(&agent, &base_url, &request.id).map_err(WebFeedbackError::before_publish)?;
+    let review_link = publish_request(&agent, &base_url, &request.id)
+        .map_err(WebFeedbackError::before_publish)?;
 
     Ok(PublishedFeedback {
-        url: request_url(&base_url, &request.id),
+        url: published_request_url(&base_url, &request.id, review_link.as_deref()),
         request_id: request.id,
         file: file.to_path_buf(),
         status: "open",
@@ -617,11 +618,22 @@ fn upload_file(
         .map_err(|error| format!("Invalid portal attachment response: {error}"))
 }
 
-fn publish_request(agent: &ureq::Agent, base_url: &str, request_id: &str) -> Result<(), String> {
+fn publish_request(
+    agent: &ureq::Agent,
+    base_url: &str,
+    request_id: &str,
+) -> Result<Option<String>, String> {
     authorize(agent.post(&format!("{base_url}/api/requests/{request_id}/publish")))
         .call()
-        .map(|_| ())
-        .map_err(http_error)
+        .map_err(http_error)?
+        .into_json::<Value>()
+        .map_err(|error| format!("Invalid portal publish response: {error}"))
+        .map(|response| {
+            response
+                .get("reviewLink")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
 }
 
 pub(crate) async fn wait_for_request(
@@ -905,6 +917,22 @@ fn request_url(base_url: &str, request_id: &str) -> String {
     format!("{base_url}/r/{request_id}")
 }
 
+fn published_request_url(
+    base_url: &str,
+    request_id: &str,
+    review_link: Option<&str>,
+) -> String {
+    match review_link {
+        Some(link) if link.starts_with("https://") || link.starts_with("http://") => {
+            link.to_owned()
+        }
+        Some(link) if link.starts_with('/') => {
+            format!("{}{link}", base_url.trim_end_matches('/'))
+        }
+        _ => request_url(base_url, request_id),
+    }
+}
+
 fn get_request(
     agent: &ureq::Agent,
     base_url: &str,
@@ -1161,6 +1189,22 @@ mod tests {
         assert!(is_retryable_status(503));
         assert!(!is_retryable_status(400));
         assert!(!is_retryable_status(404));
+    }
+
+    #[test]
+    fn published_request_url_prefers_the_server_scoped_link() {
+        assert_eq!(
+            published_request_url(
+                "https://app.nibtool.com",
+                "req_456",
+                Some("/t/wsp_123/r/req_456#token=secret"),
+            ),
+            "https://app.nibtool.com/t/wsp_123/r/req_456#token=secret"
+        );
+        assert_eq!(
+            published_request_url("https://app.nibtool.com", "req_456", None),
+            "https://app.nibtool.com/r/req_456"
+        );
     }
 
     #[test]

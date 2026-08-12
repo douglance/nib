@@ -23,6 +23,15 @@ describe("tenant-scoped guest review routing", () => {
       apiPath: "/v1/requests/req_456/session",
       apiPrefix: "/t/wsp_123/v1",
     });
+    expect(
+      tenantReviewRoute(
+        "/t/wsp_123/attachments/35f219fd-f45c-41ea-a1cd-29e62edb4fa5",
+      ),
+    ).toEqual({
+      kind: "attachment",
+      tenantId: "wsp_123",
+      attachmentId: "35f219fd-f45c-41ea-a1cd-29e62edb4fa5",
+    });
   });
 
   it("rewrites only JSON review links", async () => {

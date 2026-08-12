@@ -132,7 +132,21 @@ final class NibClient: ObservableObject {
     }
 
     func authStatus() async throws -> NibAuthStatus {
-        try await get("/api/account")
+        var request = URLRequest(url: url("/api/account"))
+        authorize(&request)
+        let (data, response) = try await session.data(for: request)
+        if let http = response as? HTTPURLResponse, http.statusCode == 401 {
+            return NibAuthStatus(
+                authenticated: false,
+                kind: "anonymous",
+                subject: "",
+                name: "",
+                platform: "",
+                scopes: []
+            )
+        }
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(NibAuthStatus.self, from: data)
     }
 
     func login(

@@ -16,6 +16,79 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
 }
 
 describe("hosted request core", () => {
+  it("mints guest review capabilities for legacy request records", async () => {
+    const store = new MemoryKeyValueStore();
+    const core = new HostedRequestCoreService(store, new MemoryMediaStore());
+    const timestamp = "2026-08-12T01:00:00.000Z";
+    await store.put("request:legacy-review", {
+      id: "legacy-review",
+      kind: "visual-review",
+      title: "Legacy review",
+      prompt: "Review this image",
+      status: "open",
+      publishedAt: timestamp,
+      updatedAt: timestamp,
+      attachments: [],
+      responses: [],
+      metadata: {},
+    });
+
+    const capability = await readJson(await core.createCapability(
+      "legacy-review",
+      {
+        scopes: ["view", "comment", "decide"],
+        expiresAt: "2026-08-26T01:00:00.000Z",
+        name: "Default review link",
+      },
+      { idempotencyKey: "legacy-publish-review-link:legacy-review", subject: "owner" },
+    ));
+
+    expect(capability.link).toMatch(
+      /^\/r\/legacy-review#token=nib_review_/,
+    );
+    const session = await core.createReviewSession(
+      "legacy-review",
+      capability.token as string,
+    );
+    expect(session.status).toBe(204);
+    expect(session.headers.get("set-cookie")).toContain(REVIEW_SESSION_COOKIE);
+  });
+
+  it("bridges guest decisions into legacy responses for CLI and native waiters", async () => {
+    const store = new MemoryKeyValueStore();
+    const core = new HostedRequestCoreService(store, new MemoryMediaStore());
+    await store.put("request:legacy-decision", {
+      id: "legacy-decision",
+      kind: "visual-review",
+      title: "Legacy review",
+      prompt: "Review this image",
+      status: "open",
+      publishedAt: "2026-08-12T01:00:00.000Z",
+      updatedAt: "2026-08-12T01:00:00.000Z",
+      attachments: [],
+      responses: [],
+      metadata: {},
+    });
+
+    const response = await core.createDecision(
+      "legacy-decision",
+      { outcome: "approved", comment: "Production browser verification", terminal: true },
+      { idempotencyKey: "legacy-browser-decision", subject: "guest-review" },
+    );
+    expect(response.status).toBe(201);
+    expect(await store.get("request:legacy-decision")).toMatchObject({
+      status: "answered",
+      responses: [{
+        choice: "approved",
+        data: {
+          contract: "nib.review-response/v1",
+          decision: "approved",
+          comment: "Production browser verification",
+        },
+      }],
+    });
+  });
+
   it("creates requests idempotently and records replayable request events", async () => {
     const core = createHostedRequestCoreForTest();
 

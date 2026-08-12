@@ -112,10 +112,10 @@ async function exchangeSession() {
   history.replaceState(null, "", location.pathname);
   return response.ok;
 }
-function mergeArtifacts(canonical, uploaded) {
+function mergeArtifacts(...collections) {
   const merged = [];
   const seen = new Set();
-  for (const artifact of [...(canonical || []), ...(uploaded || [])]) {
+  for (const artifact of collections.flatMap((collection) => collection || [])) {
     if (!artifact || seen.has(artifact.id)) continue;
     seen.add(artifact.id);
     merged.push(artifact);
@@ -130,6 +130,15 @@ function safeArtifactUrl(artifact) {
       if (url.protocol === "https:") return url.href;
       if (url.protocol === "http:" && url.origin === location.origin) return url.href;
       return "";
+    } catch {
+      return "";
+    }
+  }
+  if (artifact.url) {
+    try {
+      const prefix = apiPrefix.endsWith("/v1") ? apiPrefix.slice(0, -3) : "";
+      const url = new URL(prefix + artifact.url, location.href);
+      return url.origin === location.origin ? url.href : "";
     } catch {
       return "";
     }
@@ -164,7 +173,7 @@ async function load() {
   const hosted = artifactsResponse.ok ? await artifactsResponse.json() : { artifacts: [] };
   text("title", snapshot.request.title);
   text("description", snapshot.request.description || snapshot.request.prompt || "");
-  for (const artifact of mergeArtifacts(snapshot.request.artifacts, hosted.artifacts)) renderArtifact(artifact);
+  for (const artifact of mergeArtifacts(snapshot.request.artifacts, hosted.artifacts, snapshot.request.attachments)) renderArtifact(artifact);
   review.hidden = false;
   setState("Ready", "ok");
 }

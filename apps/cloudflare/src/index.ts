@@ -9,8 +9,10 @@ import {
   tenantScopedReviewApiResponse,
   tenantScopedReviewResponse,
 } from "./tenant-review-routing";
+import { compareRecordsByRecency, isTopLevelRequestStorageKey } from "./record-order";
+import { ApnsClient, type ApnsEnv, type ApnsMessage } from "./apns";
 
-interface Env {
+interface Env extends ApnsEnv {
   REQUESTS: DurableObjectNamespace<NibRequestHub>;
   MEDIA: R2Bucket;
   NIB_TENANT_ID?: string;
@@ -136,6 +138,10 @@ async function handleWorkerRequest(
     );
     return tenantScopedReviewApiResponse(response, scopedReview.apiPrefix, url.protocol === "https:");
   }
+  if (scopedReview?.kind === "attachment" && request.method === "GET") {
+    trustedTenantId(scopedReview.tenantId);
+    return attachmentResponse(scopedReview.attachmentId, request, env, false);
+  }
   if (url.pathname === "/.well-known/apple-app-site-association" || url.pathname === "/apple-app-site-association") {
     return json({ applinks: { apps: [], details: [{ appID: "2AS3V73632.com.douglance.nib", paths: ["/r/*"] }] } });
   }
@@ -162,6 +168,7 @@ async function handleWorkerRequest(
 
 export class NibRequestHub extends DurableObject<Env> {
   private sockets = new Set<WebSocket>();
+  private apns: ApnsClient | null = null;
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -191,26 +198,42 @@ export class NibRequestHub extends DurableObject<Env> {
     }
     if (url.pathname === "/api/notifications/status" && request.method === "GET") {
       const devices = await this.listDevices();
+      const apns = this.apnsClient().configuration();
+      const apnsDevices = devices.filter((device) => device.pushKind === "apns");
+      const apnsLastError = apnsDevices.find((device) => device.lastError)?.lastError || null;
+      const topics = [...new Set(apnsDevices.map((device) => device.apnsTopic).filter(Boolean))];
       return json({
         subscriptionCount: 0,
         deviceCount: devices.length,
         webPushDeviceCount: 0,
-        apnsDeviceCount: devices.filter((device) => device.pushKind === "apns").length,
-        apnsHealthyDeviceCount: devices.filter((device) => device.pushKind === "apns" && !device.lastError).length,
-        apnsLastError: null,
-        apnsConfigured: false,
-        apnsEnvironment: null,
-        apnsTopic: null,
-        apnsKeyConfigured: false,
-        apnsKeyReadable: false,
-        apnsMissing: ["APNs delivery is not configured on nib-global"],
-        apnsIssues: [],
+        apnsDeviceCount: apnsDevices.length,
+        apnsHealthyDeviceCount: apnsDevices.filter((device) => !device.lastError).length,
+        apnsLastError,
+        apnsConfigured: apns.configured,
+        apnsEnvironment: apns.environment,
+        apnsTopic: topics.length === 1 ? topics[0] : null,
+        apnsKeyConfigured: apns.keyConfigured,
+        apnsKeyReadable: apns.keyReadable,
+        apnsMissing: apns.missing,
+        apnsIssues: apnsLastError ? [apnsLastError] : [],
         webReady: false,
-        nativeReady: false
+        nativeReady: apns.configured && apnsDevices.length > 0 && !apnsLastError
       });
     }
     if (url.pathname === "/api/notifications/test" && request.method === "POST") {
-      return json({ sent: 0, requestId: null, feedbackId: null, type: "test" });
+      const results = await this.deliverApns({
+        title: "Nib notifications are ready",
+        body: "This device can receive Nib Cloud requests.",
+        category: "NIB_OPEN",
+      });
+      return json({
+        sent: results.filter((result) => result.ok).length,
+        attempted: results.length,
+        errors: results.filter((result) => !result.ok).map((result) => result.error),
+        requestId: null,
+        feedbackId: null,
+        type: "test"
+      });
     }
     if (/^\/api\/feedback\/[^/]+\/notification-click$/.test(url.pathname) && request.method === "POST") {
       return json({ recorded: true });
@@ -226,7 +249,9 @@ export class NibRequestHub extends DurableObject<Env> {
     const action = match[2];
     if (!action && request.method === "GET") return this.itemResponse(id);
     if (!action && request.method === "PATCH") return this.patch(id, await request.json<JsonObject>());
-    if (action === "publish" && request.method === "POST") return this.publish(id);
+    if (action === "publish" && request.method === "POST") {
+      return this.publish(id, request.headers.get("x-nib-auth-subject") || "legacy-publisher");
+    }
     if (action === "respond" && request.method === "POST") return this.respond(id, await request.json<JsonObject>());
     if ((action === "attachments" || action === "response-attachments") && request.method === "POST") {
       return this.attach(id, request, action === "response-attachments");
@@ -239,9 +264,11 @@ export class NibRequestHub extends DurableObject<Env> {
 
   private async list(): Promise<RequestRecord[]> {
     const stored = await this.ctx.storage.list<RequestRecord>({ prefix: "request:" });
-    return [...stored.values()]
+    return [...stored.entries()]
+      .filter(([key]) => isTopLevelRequestStorageKey(key))
+      .map(([, item]) => item)
       .filter((item) => item.kind !== "visual-review" || item.publishedAt)
-      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+      .sort(compareRecordsByRecency);
   }
 
   private async get(id: string): Promise<RequestRecord | undefined> {
@@ -259,7 +286,7 @@ export class NibRequestHub extends DurableObject<Env> {
 
   private async listDevices(): Promise<DeviceRecord[]> {
     const stored = await this.ctx.storage.list<DeviceRecord>({ prefix: "device:" });
-    return [...stored.values()].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    return [...stored.values()].sort(compareRecordsByRecency);
   }
 
   private async registerDevice(input: JsonObject, authSubject: string): Promise<Response> {
@@ -324,7 +351,10 @@ export class NibRequestHub extends DurableObject<Env> {
       metadata: object(input.metadata)
     };
     await this.put(item);
-    if (item.publishedAt) this.broadcast("created", item);
+    if (item.publishedAt) {
+      this.broadcast("created", item);
+      await this.notifyRequest(item);
+    }
     return item;
   }
 
@@ -401,10 +431,12 @@ export class NibRequestHub extends DurableObject<Env> {
     return json(attachment, 201);
   }
 
-  private async publish(id: string): Promise<Response> {
+  private async publish(id: string, subject: string): Promise<Response> {
     const item = await this.get(id);
     if (!item) return json({ error: "Request not found" }, 404);
-    if (item.publishedAt) return json(item);
+    if (item.publishedAt) {
+      return json({ ...item, reviewLink: await this.legacyReviewLink(item, subject) });
+    }
     if (item.kind !== "visual-review") return json({ error: "Only visual reviews require publishing" }, 400);
     const contract = text(item.metadata.contract);
     if (contract === "nib.visual-review/v1") {
@@ -423,7 +455,30 @@ export class NibRequestHub extends DurableObject<Env> {
     item.updatedAt = item.publishedAt;
     await this.put(item);
     this.broadcast("published", item);
-    return json(item);
+    await this.notifyRequest(item);
+    return json({ ...item, reviewLink: await this.legacyReviewLink(item, subject) });
+  }
+
+  private async legacyReviewLink(item: RequestRecord, subject: string): Promise<string> {
+    const id = item.id;
+    const expiresAt = new Date(
+      new Date(item.publishedAt || item.updatedAt).getTime() + 14 * 24 * 60 * 60 * 1000
+    ).toISOString();
+    const response = await this.hostedCore().createCapability(
+      id,
+      {
+        scopes: ["view", "comment", "decide"],
+        expiresAt,
+        name: "Default review link"
+      },
+      {
+        idempotencyKey: `legacy-publish-review-link:${id}`,
+        subject
+      }
+    );
+    if (!response.ok) return `/r/${encodeURIComponent(id)}`;
+    const body = await response.json<{ link?: string }>();
+    return body.link || `/r/${encodeURIComponent(id)}`;
   }
 
   private async respond(id: string, input: JsonObject): Promise<Response> {
@@ -485,6 +540,38 @@ export class NibRequestHub extends DurableObject<Env> {
         this.sockets.delete(socket);
       }
     }
+  }
+
+  private apnsClient(): ApnsClient {
+    this.apns ??= new ApnsClient(this.env);
+    return this.apns;
+  }
+
+  private async notifyRequest(item: RequestRecord): Promise<void> {
+    const results = await this.deliverApns({
+      title: item.title,
+      body: item.prompt,
+      category: notificationCategory(item),
+      requestId: item.id,
+    });
+    if (results.some((result) => result.ok)) {
+      item.notifiedAt = new Date().toISOString();
+      item.updatedAt = item.notifiedAt;
+      await this.put(item);
+    }
+  }
+
+  private async deliverApns(message: ApnsMessage): Promise<Array<{ ok: boolean; error: string | null }>> {
+    const devices = (await this.listDevices()).filter((device) => device.pushKind === "apns");
+    const results = await Promise.all(devices.map(async (device) => {
+      const result = await this.apnsClient().send(device, message);
+      device.lastSuccessAt = result.ok ? new Date().toISOString() : device.lastSuccessAt;
+      device.lastError = result.error;
+      device.updatedAt = new Date().toISOString();
+      await this.ctx.storage.put(`device:${await sha256(`${device.platform}:${device.token}`)}`, device);
+      return { ok: result.ok, error: result.error };
+    }));
+    return results;
   }
 
   private hostedCore(): HostedRequestCoreService {
@@ -630,6 +717,23 @@ function attachmentType(contentType: string): RequestAttachment["type"] {
   if (contentType.startsWith("audio/")) return "audio";
   if (contentType === "application/pdf" || contentType.startsWith("text/")) return "document";
   return "file";
+}
+
+function notificationCategory(item: RequestRecord): string {
+  const choices = item.choices.map((choice) => choice.toLowerCase());
+  const key = choices.join("|");
+  const known: Record<string, string> = {
+    "ship|hold|revise": "NIB_SHIP_HOLD_REVISE",
+    "approve|hold": "NIB_APPROVE_HOLD",
+    "approve|reject": "NIB_APPROVE_REJECT",
+    "allow|deny": "NIB_ALLOW_DENY",
+    "yes|no": "NIB_YES_NO",
+    "ship|hold": "NIB_SHIP_HOLD",
+    "use it|revise": "NIB_USE_REVISE",
+  };
+  if (known[key]) return known[key];
+  if (item.choices.length) return "NIB_CHOICE";
+  return item.allowText ? "NIB_TEXT" : "NIB_OPEN";
 }
 
 function decodeBase64(value: string): ArrayBuffer {

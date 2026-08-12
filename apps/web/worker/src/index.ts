@@ -27,6 +27,8 @@ import {
   isPublicMcpDiscoveryRequest,
   isPublicPage,
   isSiteAsset,
+  publicReviewTenantId,
+  withoutTrustedGuestContext,
 } from "./routes";
 import { searchDiscoveryResponse } from "./search-discovery";
 import { agentApiResponse } from "./agent-api";
@@ -88,6 +90,15 @@ export default {
       return siteResponse(request, env, true);
     if (request.method === "GET" && isPublicDiscovery(url.pathname))
       return new Response("Not found", { status: 404 });
+
+    const guestReviewTenantId = publicReviewTenantId(url.pathname);
+    if (guestReviewTenantId) {
+      return env.NIB_SERVICE.fetchForTenant(
+        withoutTrustedGuestContext(request),
+        guestReviewTenantId,
+        "guest-review",
+      );
+    }
 
     if (url.pathname === "/mcp") {
       const principal = await verifiedPrincipal(request, env);

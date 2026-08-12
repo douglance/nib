@@ -169,9 +169,7 @@ struct WatchRequestListView: View {
                     self.error = error.localizedDescription
                 }
                 await load()
-                if NibEntitlements.hasAPSEnvironment {
-                    await registerForNotifications()
-                }
+                await restoreNotificationRegistrationIfAuthorized()
                 if let requestId = launchArgument("nib.openRequest") {
                     await openRequest(id: requestId)
                 } else if let projectId = launchArgument("nib.openProject") {
@@ -243,6 +241,13 @@ struct WatchRequestListView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func restoreNotificationRegistrationIfAuthorized() async {
+        guard NibEntitlements.hasAPSEnvironment else { return }
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard [.authorized, .provisional].contains(settings.authorizationStatus) else { return }
+        await registerForNotifications()
     }
 
     private func registerDevice(token: String) async {

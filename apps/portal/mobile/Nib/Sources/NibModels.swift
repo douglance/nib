@@ -92,6 +92,65 @@ struct NibRequest: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
+enum NibSampleData {
+    static let requests: [NibRequest] = [
+        NibRequest(
+            id: "sample-navigation",
+            kind: "choice",
+            title: "Choose the profile navigation",
+            prompt: "Which layout should the agent build for the account settings screen?",
+            body: "The mobile layout needs a clear path between profile, billing, and notification settings.",
+            context: "Atlas Mobile · Settings refresh",
+            choices: ["Sidebar", "Top tabs", "Single page"],
+            allowText: true,
+            target: .init(projectId: "sample-atlas", projectName: "Atlas Mobile", appPath: nil, url: nil),
+            status: "open",
+            priority: "high",
+            source: "Sample agent",
+            createdAt: "2026-08-12T10:18:00Z",
+            updatedAt: "2026-08-12T10:18:00Z",
+            attachments: [],
+            responses: []
+        ),
+        NibRequest(
+            id: "sample-release",
+            kind: "confirmation",
+            title: "Approve the release candidate",
+            prompt: "The checkout and notification checks passed. Should the agent prepare the release?",
+            body: nil,
+            context: "Nib Cloud · Production readiness",
+            choices: ["Approve", "Request changes"],
+            allowText: true,
+            target: .init(projectId: "sample-nib", projectName: "Nib Cloud", appPath: nil, url: nil),
+            status: "open",
+            priority: "normal",
+            source: "Sample agent",
+            createdAt: "2026-08-12T09:42:00Z",
+            updatedAt: "2026-08-12T09:42:00Z",
+            attachments: [],
+            responses: []
+        ),
+        NibRequest(
+            id: "sample-copy",
+            kind: "question",
+            title: "Review the empty-state copy",
+            prompt: "What should the product say when every request has been handled?",
+            body: nil,
+            context: "Orchid Web · Inbox polish",
+            choices: [],
+            allowText: true,
+            target: .init(projectId: "sample-orchid", projectName: "Orchid Web", appPath: nil, url: nil),
+            status: "open",
+            priority: "normal",
+            source: "Sample agent",
+            createdAt: "2026-08-12T08:55:00Z",
+            updatedAt: "2026-08-12T08:55:00Z",
+            attachments: [],
+            responses: []
+        )
+    ]
+}
+
 struct NibRequestSocketEvent: Decodable, Sendable {
     var type: String
     var action: String?

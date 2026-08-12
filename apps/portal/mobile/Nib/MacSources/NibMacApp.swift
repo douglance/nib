@@ -16,6 +16,7 @@ struct NibMacApp: App {
         Settings {
             NibMacSettingsView(store: appDelegate.store)
         }
+
     }
 
 }
@@ -68,6 +69,7 @@ private struct NibMenuBarRequestsView: View {
     @ObservedObject var store: NibMacRequestStore
     @ObservedObject private var launcher = NibNativeReviewLauncher.shared
     @Environment(\.openSettings) private var openSettings
+    @State private var selectedSample: NibRequest?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,29 +81,37 @@ private struct NibMenuBarRequestsView: View {
         }
         .frame(width: 380)
         .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(item: $selectedSample) { request in
+            NibMacSampleReviewView(request: request) {
+                store.completeSampleRequest(id: request.id)
+                selectedSample = nil
+            }
+        }
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             Image(systemName: "pencil.tip.crop.circle")
                 .font(.title3)
-            Text("Requests")
+            Text(store.connectionState == .sample ? "Sample workspace" : "Requests")
                 .font(.headline)
             Spacer()
             Circle()
-                .fill(store.connectionState == .live ? NibMacTheme.blue : .secondary)
+                .fill([.live, .sample].contains(store.connectionState) ? NibMacTheme.blue : .secondary)
                 .frame(width: 8, height: 8)
             Text(connectionLabel)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            Button {
-                Task { await store.reload() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
+            if store.connectionState != .sample {
+                Button {
+                    Task { await store.reload() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(.borderless)
+                .help("Refresh Requests")
+                .keyboardShortcut("r", modifiers: .command)
             }
-            .buttonStyle(.borderless)
-            .help("Refresh Requests")
-            .keyboardShortcut("r", modifiers: .command)
         }
         .padding(.horizontal, 14)
         .frame(height: 54)
@@ -109,13 +119,35 @@ private struct NibMenuBarRequestsView: View {
 
     @ViewBuilder
     private var content: some View {
-        if store.connectionState == .reconnecting {
+        if store.connectionState == .signedOut {
+            signedOutState
+        } else if store.connectionState == .reconnecting {
             reconnectingState
         } else if store.activeRequests.isEmpty {
             emptyState
         } else {
             requestList
         }
+    }
+
+    private var signedOutState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "pencil.tip.crop.circle")
+                .font(.system(size: 36, weight: .regular))
+                .foregroundStyle(NibMacTheme.blue)
+            Text("Review with Nib")
+                .font(.headline)
+            Text("Sign in to your private Nib Cloud workspace, or explore a local sample without an account.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Sign in to Nib Cloud") { openSettings() }
+                .buttonStyle(.borderedProminent)
+            Button("Explore sample workspace") { store.enterSampleMode() }
+                .buttonStyle(.bordered)
+        }
+        .padding(24)
+        .frame(height: 290)
     }
 
     private var requestList: some View {
@@ -197,11 +229,17 @@ private struct NibMenuBarRequestsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             HStack {
-                Button("Open Nib") {
-                    NSWorkspace.shared.open(store.baseURL)
+                if store.connectionState == .sample {
+                    Button("Exit Sample") { store.exitSampleMode() }
+                        .buttonStyle(.borderless)
+                        .keyboardShortcut("o", modifiers: .command)
+                } else {
+                    Button("Open Nib") {
+                        NSWorkspace.shared.open(store.baseURL)
+                    }
+                    .buttonStyle(.borderless)
+                    .keyboardShortcut("o", modifiers: .command)
                 }
-                .buttonStyle(.borderless)
-                .keyboardShortcut("o", modifiers: .command)
                 Spacer()
                 Button {
                     openSettings()
@@ -226,17 +264,54 @@ private struct NibMenuBarRequestsView: View {
             return "Live"
         case .reconnecting:
             return "Reconnecting..."
+        case .signedOut:
+            return "Signed out"
+        case .sample:
+            return "Sample"
         }
     }
 
     private func open(_ request: NibRequest) {
-        launcher.open(requestID: request.id, portalURL: store.baseURL)
+        if store.connectionState == .sample {
+            selectedSample = request
+        } else {
+            launcher.open(requestID: request.id, portalURL: store.baseURL)
+        }
     }
 
     private func copyLink(for request: NibRequest) {
         guard let url = store.reviewURL(for: request) else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(url.absoluteString, forType: .string)
+    }
+}
+
+private struct NibMacSampleReviewView: View {
+    let request: NibRequest
+    let complete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label("Sample workspace", systemImage: "sparkles")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(NibMacTheme.blue)
+            Text(request.title)
+                .font(.title2.weight(.semibold))
+            Text(request.prompt)
+                .font(.body)
+                .foregroundStyle(.secondary)
+            Divider()
+            Text("This synthetic request stays on this Mac and does not write to Nib Cloud.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button("Mark as reviewed", action: complete)
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(24)
+        .frame(width: 440)
     }
 }
 

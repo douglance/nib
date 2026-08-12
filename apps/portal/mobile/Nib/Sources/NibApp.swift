@@ -87,6 +87,8 @@ struct RequestInboxView: View {
     @State private var sidebarDestination: NibSidebarDestination?
     @State private var loading = false
     @State private var sendingTestNotification = false
+    @State private var requiresAuthentication = false
+    @State private var sampleMode = false
     @State private var selectedRequest: NibRequest?
     @State private var selectedProject: NibProject?
     @State private var safariRoute: SafariRoute?
@@ -133,7 +135,13 @@ struct RequestInboxView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 18)
 
-                    if activeRequests.isEmpty {
+                    if requiresAuthentication && !sampleMode {
+                        NibSignedOutView(
+                            signIn: { showingSettings = true },
+                            exploreSample: enterSampleMode
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if activeRequests.isEmpty {
                         ContentUnavailableView {
                             Label("Nothing to review", systemImage: "checkmark.circle")
                         } description: {
@@ -144,6 +152,21 @@ struct RequestInboxView: View {
                     } else {
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 0) {
+                                if sampleMode {
+                                    HStack(spacing: 10) {
+                                        Label("Sample workspace", systemImage: "sparkles")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(NibTheme.blue)
+                                        Spacer()
+                                        Button("Exit", action: exitSampleMode)
+                                            .font(.subheadline.weight(.semibold))
+                                    }
+                                    .padding(14)
+                                    .background(NibTheme.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NibTheme.blue.opacity(0.22)))
+                                    .padding(.bottom, 18)
+                                }
+
                                 Text("Ready for review")
                                     .font(.largeTitle.weight(.bold))
                                     .foregroundStyle(NibTheme.text)
@@ -229,9 +252,7 @@ struct RequestInboxView: View {
                     self.error = error.localizedDescription
                 }
                 await load()
-                if NibEntitlements.hasAPSEnvironment {
-                    await registerForNotifications()
-                }
+                await restoreNotificationRegistrationIfAuthorized()
                 if let requestId = launchArgument("nib.openRequest") {
                     await openRequest(id: requestId)
                 } else if let projectId = launchArgument("nib.openProject") {
@@ -240,11 +261,14 @@ struct RequestInboxView: View {
                     await consumePendingNotificationRoute()
                 }
             }
-            .task(id: baseURLString) {
+            .task(id: "\(baseURLString)|\(requiresAuthentication)|\(sampleMode)") {
+                guard !requiresAuthentication, !sampleMode else { return }
                 await consumeRequestEvents()
             }
             .refreshable { await load() }
-            .sheet(isPresented: $showingSettings) {
+            .sheet(isPresented: $showingSettings, onDismiss: {
+                Task { await load() }
+            }) {
                 NavigationStack {
                     SettingsView(
                         baseURLString: $baseURLString,
@@ -275,7 +299,7 @@ struct RequestInboxView: View {
                 RequestDetailView(request: Binding(
                     get: { selectedRequest ?? request },
                     set: { selectedRequest = $0 }
-                ), onSubmitted: advanceAfterSubmission)
+                ), onSubmitted: advanceAfterSubmission, isSample: sampleMode)
                     .id(selectedRequest?.id ?? request.id)
                     .presentationDetents(
                         request.kind == "visual-review"
@@ -371,9 +395,27 @@ struct RequestInboxView: View {
     }
 
     private func load() async {
+        if sampleMode {
+            requests = NibSampleData.requests
+            error = nil
+            return
+        }
         loading = true
         defer { loading = false }
         do {
+            let auth = try await client.authStatus()
+            guard auth.authenticated else {
+                requiresAuthentication = true
+                projects = []
+                requests = []
+                devices = []
+                notificationStatus = nil
+                waitingPanes = []
+                activity = []
+                error = nil
+                return
+            }
+            requiresAuthentication = false
             async let nextProjects = client.projects()
             async let nextRequests = client.requests()
             async let nextDevices = client.devices()
@@ -471,6 +513,25 @@ struct RequestInboxView: View {
         selectedRequest = requests.first(where: \.isActive)
     }
 
+    private func enterSampleMode() {
+        sampleMode = true
+        requiresAuthentication = false
+        projects = []
+        requests = NibSampleData.requests
+        devices = []
+        notificationStatus = nil
+        waitingPanes = []
+        activity = []
+        error = nil
+        notice = nil
+    }
+
+    private func exitSampleMode() {
+        sampleMode = false
+        selectedRequest = nil
+        Task { await load() }
+    }
+
     private func registerForNotifications() async {
         guard NibEntitlements.hasAPSEnvironment else {
             notice = "This build is missing the APS entitlement. Install a push-signed build to receive lock-screen requests."
@@ -489,6 +550,13 @@ struct RequestInboxView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func restoreNotificationRegistrationIfAuthorized() async {
+        guard NibEntitlements.hasAPSEnvironment else { return }
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus) else { return }
+        await registerForNotifications()
     }
 
     private func registerDevice(token: String) async {
@@ -645,6 +713,7 @@ struct RequestInboxView: View {
     }
 
     private var serverDisplayName: String {
+        if sampleMode { return "Sample workspace" }
         guard let host = URL(string: baseURLString)?.host(), !host.isEmpty else {
             return "Nib server"
         }
@@ -653,6 +722,7 @@ struct RequestInboxView: View {
     }
 
     private var sidebarDeviceLine: String {
+        if sampleMode { return "Local sample data" }
         let deviceName = UIDevice.current.userInterfaceIdiom == .phone ? "iPhone" : UIDevice.current.name
         if let lastError = notificationStatus?.apnsLastError, !lastError.isEmpty {
             return "\(deviceName) · APNs needs attention"
@@ -744,6 +814,43 @@ struct RequestInboxView: View {
         }
     }
 
+}
+
+struct NibSignedOutView: View {
+    var signIn: () -> Void
+    var exploreSample: () -> Void
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Image(systemName: "sparkles.rectangle.stack")
+                .font(.system(size: 46, weight: .medium))
+                .foregroundStyle(NibTheme.blue)
+                .frame(width: 88, height: 88)
+                .background(NibTheme.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+
+            VStack(spacing: 10) {
+                Text("Review agent work from anywhere")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(NibTheme.text)
+                    .multilineTextAlignment(.center)
+                Text("Connect to Nib Cloud to see your private queue, or explore a sample workspace without an account.")
+                    .font(.body)
+                    .foregroundStyle(NibTheme.muted)
+                    .multilineTextAlignment(.center)
+            }
+
+            VStack(spacing: 12) {
+                Button("Sign in to Nib Cloud", action: signIn)
+                    .buttonStyle(NibPrimaryButtonStyle())
+                Button("Explore sample workspace", action: exploreSample)
+                    .buttonStyle(NibSecondaryButtonStyle())
+            }
+            .frame(maxWidth: 360)
+        }
+        .padding(28)
+        .frame(maxWidth: 520)
+        .accessibilityElement(children: .contain)
+    }
 }
 
 enum NibSidebarDestination: String, Identifiable, CaseIterable {
@@ -2131,6 +2238,7 @@ struct RequestDetailView: View {
     @Environment(\.openURL) private var openURL
     @Binding var request: NibRequest
     var onSubmitted: (NibRequest) -> Void
+    var isSample = false
     @State private var reply = ""
     @State private var error: String?
     @State private var notice: String?
@@ -2235,7 +2343,8 @@ struct RequestDetailView: View {
                     AttachmentStrip(request: request)
                 }
 
-                HStack(spacing: 10) {
+                if !isSample {
+                    HStack(spacing: 10) {
                     PhotosPicker(selection: $selectedPhoto, matching: .images) {
                         Label("Attach image", systemImage: "photo.on.rectangle")
                     }
@@ -2254,6 +2363,7 @@ struct RequestDetailView: View {
                         }
                         .buttonStyle(NibSecondaryButtonStyle())
                         .disabled(sending)
+                    }
                     }
                 }
 
@@ -2286,6 +2396,14 @@ struct RequestDetailView: View {
     private func respond(_ payload: RequestResponsePayload) async {
         sending = true
         defer { sending = false }
+        if isSample {
+            completeSampleResponse(
+                text: payload.text ?? "",
+                choice: payload.choice,
+                choiceIndex: payload.choiceIndex
+            )
+            return
+        }
         do {
             request = try await client.respond(
                 requestId: request.id,
@@ -2310,6 +2428,10 @@ struct RequestDetailView: View {
     ) async {
         sending = true
         defer { sending = false }
+        if isSample {
+            completeSampleResponse(text: comment ?? decision.capitalized, choice: decision, choiceIndex: nil)
+            return
+        }
         do {
             request = try await client.respond(
                 requestId: request.id,
@@ -2324,6 +2446,29 @@ struct RequestDetailView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func completeSampleResponse(text: String, choice: String?, choiceIndex: Int?) {
+        let now = ISO8601DateFormatter().string(from: Date())
+        request.status = "answered"
+        request.updatedAt = now
+        request.responses.insert(
+            .init(
+                id: UUID().uuidString,
+                kind: request.kind,
+                text: text,
+                choice: choice,
+                choiceIndex: choiceIndex,
+                deviceId: nil,
+                device: .init(id: "sample-device", name: "Sample device", platform: "ios", pushKind: "local"),
+                createdAt: now
+            ),
+            at: 0
+        )
+        reply = ""
+        notice = "Sample response recorded locally."
+        error = nil
+        onSubmitted(request)
     }
 
     private func upload(item: PhotosPickerItem) async {
@@ -2783,9 +2928,13 @@ struct ToastView: View {
             Text(message)
                 .font(.footnote)
                 .foregroundStyle(NibTheme.text)
+                .lineLimit(4)
+                .truncationMode(.tail)
+                .frame(maxWidth: 520, alignment: .leading)
                 .padding(12)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .padding()
+                .allowsHitTesting(false)
         }
     }
 }

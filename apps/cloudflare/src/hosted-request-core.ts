@@ -577,7 +577,24 @@ export class HostedRequestCoreService implements HostedRequestCore {
         reviewer: reviewerIdentity(input.reviewer, access.context.subject),
         capabilityId: access.context.capabilityId
       };
-      request.status = outcome;
+      if (!request.formatVersion && Array.isArray(request.responses)) {
+        request.responses = [{
+          id: decision.id,
+          kind: "visual-review",
+          text: decision.comment || outcome,
+          choice: outcome,
+          data: {
+            contract: "nib.review-response/v1",
+            decision: outcome,
+            comment: decision.comment,
+            annotations: []
+          },
+          createdAt: now
+        }];
+        request.status = "answered";
+      } else {
+        request.status = outcome;
+      }
       request.reviewable = false;
       request.answeredAt ??= now;
       request.updatedAt = now;

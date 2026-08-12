@@ -4,6 +4,8 @@ enum NibMacConnectionState: Equatable {
     case loading
     case live
     case reconnecting
+    case signedOut
+    case sample
 }
 
 @MainActor
@@ -40,11 +42,25 @@ final class NibMacRequestStore: ObservableObject {
         streamTask?.cancel()
         connectionState = .loading
         streamTask = Task { [weak self] in
-            await self?.consumeRequestEvents()
+            guard let self else { return }
+            do {
+                let status = try await client.authStatus()
+                guard status.authenticated else {
+                    requests = []
+                    connectionState = .signedOut
+                    return
+                }
+                await consumeRequestEvents()
+            } catch is CancellationError {
+                return
+            } catch {
+                connectionState = .reconnecting
+            }
         }
     }
 
     func reload() async {
+        guard connectionState != .sample else { return }
         do {
             requests = try await client.requests().sorted { $0.updatedAt > $1.updatedAt }
             connectionState = .live
@@ -69,6 +85,23 @@ final class NibMacRequestStore: ObservableObject {
             platform: "macos",
             open: open
         )
+    }
+
+    func enterSampleMode() {
+        streamTask?.cancel()
+        requests = NibSampleData.requests
+        connectionState = .sample
+    }
+
+    func exitSampleMode() {
+        requests = []
+        start(baseURLString: baseURLString)
+    }
+
+    func completeSampleRequest(id: String) {
+        guard connectionState == .sample,
+              let index = requests.firstIndex(where: { $0.id == id }) else { return }
+        requests[index].status = "responded"
     }
 
     func apply(_ event: NibRequestSocketEvent) {

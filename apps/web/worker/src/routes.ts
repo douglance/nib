@@ -27,6 +27,36 @@ export function isHostedNibRoute(pathname: string): boolean {
   );
 }
 
+export function publicReviewTenantId(pathname: string): string | undefined {
+  const match = /^\/t\/([^/]+)(?:\/r\/[^/]+|\/v1(?:\/.*)?|\/attachments\/[0-9a-f-]{36})$/i.exec(pathname);
+  if (!match) return undefined;
+  try {
+    const tenantId = decodeURIComponent(match[1]!);
+    return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(tenantId)
+      ? tenantId
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function withoutTrustedGuestContext(request: Request): Request {
+  const headers = new Headers(request.headers);
+  const reviewSession = headers
+    .get("cookie")
+    ?.split(";")
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith("nib_review_session="));
+
+  if (reviewSession) headers.set("cookie", reviewSession);
+  else headers.delete("cookie");
+  headers.delete("cf-access-jwt-assertion");
+  headers.delete("authorization");
+  headers.delete("x-nib-tenant");
+  headers.delete("x-nib-trial-network");
+  return new Request(request, { headers });
+}
+
 export function isSiteAsset(pathname: string): boolean {
   return pathname.startsWith("/assets/");
 }
