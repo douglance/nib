@@ -123,6 +123,7 @@ mod tests {
             scale: 1.0,
             offset: (0.0, 0.0),
             annotations: &EMPTY,
+            active_page_index: None,
             min_drag_distance: 5.0,
         }
     }

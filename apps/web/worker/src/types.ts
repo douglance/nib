@@ -47,14 +47,15 @@ export interface Env {
   GENERATE_WORKFLOW: Workflow<StoredGenerationRequest>;
   ASSETS: Fetcher;
   SITE: Fetcher;
+  REVIEW: Fetcher;
+  EMAIL: SendEmail;
   TENANT_GATE: DurableObjectNamespace;
   SCHEDULER: DurableObjectNamespace;
   TRIAL_GATE: DurableObjectNamespace;
   AI_GATEWAY_ID: string;
-  ACCESS_TEAM_DOMAIN: string;
-  ACCESS_POLICY_AUD: string;
   ENVIRONMENT: string;
   PUBLIC_ORIGIN: string;
+  AUTH_RATE_LIMIT_SECRET: string;
   DEFAULT_PRICE_ID: string;
   HIGH_PRICE_ID: string;
   USAGE_PRICE_ID: string;

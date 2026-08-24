@@ -20,7 +20,7 @@
       "Reject"
     ],
     "allowText": true,
-    "url": "https://nib-global.doug-lance.workers.dev/r/visual-notification-test",
-    "responseUrl": "https://nib-global.doug-lance.workers.dev/api/requests/visual-notification-test/respond"
+    "url": "https://nibtool.com/r/visual-notification-test",
+    "responseUrl": "https://nibtool.com/api/requests/visual-notification-test/respond"
   }
 }

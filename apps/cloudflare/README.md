@@ -10,33 +10,34 @@ on the private network is an origin or availability dependency.
 ```sh
 npm install
 npx wrangler r2 bucket create nib-global-media
-npx wrangler secret put NIB_AUTH_TOKEN
+npx wrangler secret put NIB_APNS_TEAM_ID
+npx wrangler secret put NIB_APNS_KEY_ID
+npx wrangler secret put NIB_APNS_PRIVATE_KEY
 npm run deploy
 ```
 
-`NIB_AUTH_TOKEN` is the Worker bootstrap secret. Do not copy it into an app,
-Code Mode Worker, configuration file, or shell profile.
+`NIB_APNS_PRIVATE_KEY` is the complete PKCS#8 `.p8` file contents, including
+its header and footer. Every Apple app registration supplies its exact bundle
+topic and either the APNs sandbox or production environment. Incomplete device
+registrations are rejected; the Worker has no global topic or environment
+fallback.
 
-Enroll the CLI once, then remove the bootstrap value from the environment:
+Each published request is sent to every registered iOS, visionOS, watchOS, and
+macOS device. The first response is committed atomically. An
+`Idempotency-Key` retry returns that response, while a different later response
+receives `409`. The Worker then sends a collapsed background resolution push to
+every device so delivered notifications and active inboxes converge.
+Alert payloads are compacted to APNs' 4 KB limit without removing the request
+identity. Transient APNs failures are retried up to three times, and tokens that
+APNs reports as unregistered or invalid are removed from the device registry.
+
+Sign in to the CLI with the same Nib account used by the Apple apps:
 
 ```sh
-export NIB_AUTH_TOKEN
-nib auth login
-unset NIB_AUTH_TOKEN
+nib auth login you@example.com
 nib auth status
 ```
 
-`nib auth login` exchanges the bootstrap value for a scoped token and stores
-that token in macOS Keychain. Existing CLI and macOS app credentials stored in
-UserDefaults migrate through the same exchange.
-
-Enroll an iPhone, Apple Watch, Apple Vision Pro, or another Mac with a one-time
-pairing code:
-
-```sh
-nib auth pair
-```
-
-Open the returned `nib://` URL on the device or paste the code in Nib settings.
-The code expires after 10 minutes and works once. `NIB_PORTAL_URL` can override
-the Worker URL for a development or recovery deployment.
+Open the emailed link to finish. The CLI stores the resulting account session
+in macOS Keychain. iPhone, Apple Watch, Apple Vision Pro, and Mac use this same
+email flow. The only service origin is `https://nibtool.com`.

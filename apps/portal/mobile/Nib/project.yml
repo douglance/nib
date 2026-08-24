@@ -8,10 +8,20 @@ options:
     watchOS: "11.0"
 settings:
   base:
-    CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: 0.3.0
+    CURRENT_PROJECT_VERSION: 6
+    MARKETING_VERSION: 0.3.1
     SWIFT_VERSION: 6.0
-    DEVELOPMENT_TEAM: ""
+    DEVELOPMENT_TEAM: 2AS3V73632
+  configs:
+    Debug:
+      APS_ENVIRONMENT: development
+      NIB_APNS_ENVIRONMENT: sandbox
+    Release:
+      APS_ENVIRONMENT: production
+      NIB_APNS_ENVIRONMENT: production
+packages:
+  NibKit:
+    path: Packages/NibKit
 targets:
   Nib:
     type: application
@@ -19,11 +29,25 @@ targets:
     sources:
       - path: Sources/NibModels.swift
       - path: Sources/NibClient.swift
+      - path: Sources/NibAccountView.swift
       - path: Sources/NibApp.swift
       - path: Sources/NibNotificationActions.swift
       - path: Sources/NativeVisualReviewWorkspace.swift
+      - path: Sources/NibDocumentReviewAdapter.swift
+      - path: Sources/NibCloudLibraryAdapter.swift
       - path: Resources
+      - path: SharedResources
     dependencies:
+      - package: NibKit
+        product: NibDomain
+      - package: NibKit
+        product: NibCloud
+      - package: NibKit
+        product: NibFeatures
+      - package: NibKit
+        product: NibDocument
+      - package: NibKit
+        product: NibNotifications
       - target: NibNotificationService
         embed: true
       - target: NibNotificationContent
@@ -36,6 +60,9 @@ targets:
         CFBundleDisplayName: Nib
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        NSHumanReadableCopyright: Copyright 2026 Lance Ventures LLC. All rights reserved.
+        NibAPNSEnvironment: $(NIB_APNS_ENVIRONMENT)
         CFBundleURLTypes:
           - CFBundleURLName: com.douglance.nib
             CFBundleURLSchemes:
@@ -43,6 +70,8 @@ targets:
         UILaunchScreen: {}
         UIStatusBarStyle: UIStatusBarStyleLightContent
         UIViewControllerBasedStatusBarAppearance: false
+        UIBackgroundModes:
+          - remote-notification
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -54,17 +83,15 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         NSCameraUsageDescription: Nib attaches photos to requests so agents can see what you see.
         NSPhotoLibraryUsageDescription: Nib attaches selected images to requests.
-        NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib
     entitlements:
       path: Nib.entitlements
       properties:
-        aps-environment: development
+        aps-environment: $(APS_ENVIRONMENT)
         com.apple.developer.associated-domains:
-          - "applinks:nib-global.doug-lance.workers.dev"
+          - "applinks:nibtool.com"
   NibNotificationService:
     type: app-extension
     platform: iOS
@@ -76,12 +103,12 @@ targets:
         CFBundleDisplayName: Nib rich notifications
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
-          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.NotificationService
@@ -101,6 +128,7 @@ targets:
         CFBundleDisplayName: Nib request actions
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
         NSExtension:
           NSExtensionAttributes:
             UNNotificationExtensionCategory:
@@ -121,7 +149,6 @@ targets:
           NSExtensionPointIdentifier: com.apple.usernotifications.content-extension
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
-          NSAllowsLocalNetworking: true
     settings:
       base:
         APPLICATION_EXTENSION_API_ONLY: YES
@@ -133,101 +160,138 @@ targets:
     sources:
       - path: Sources/NibModels.swift
       - path: Sources/NibClient.swift
+      - path: Sources/NibAccountView.swift
       - path: Sources/NibWatchApp.swift
+      - path: Sources/NibWatchCloudLibrary.swift
       - path: WatchResources
+      - path: SharedResources
+    dependencies:
+      - package: NibKit
+        product: NibDomain
+      - package: NibKit
+        product: NibCloud
+      - package: NibKit
+        product: NibNotifications
     info:
       path: NibWatch-Info.plist
       properties:
         CFBundleDisplayName: Nib
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        NibAPNSEnvironment: $(NIB_APNS_ENVIRONMENT)
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.douglance.nib
-        NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.watchkitapp
     entitlements:
       path: NibWatch.entitlements
       properties:
-        aps-environment: development
+        aps-environment: $(APS_ENVIRONMENT)
   NibVision:
     type: application
     platform: visionOS
     sources:
       - path: Sources/NibModels.swift
       - path: Sources/NibClient.swift
+      - path: Sources/NibAccountView.swift
       - path: Sources/NibApp.swift
       - path: Sources/NibNotificationActions.swift
       - path: Sources/NativeVisualReviewWorkspace.swift
+      - path: Sources/NibDocumentReviewAdapter.swift
+      - path: Sources/NibCloudLibraryAdapter.swift
       - path: Resources
+      - path: SharedResources
+    dependencies:
+      - package: NibKit
+        product: NibDomain
+      - package: NibKit
+        product: NibCloud
+      - package: NibKit
+        product: NibFeatures
+      - package: NibKit
+        product: NibDocument
+      - package: NibKit
+        product: NibNotifications
     info:
       path: NibVision-Info.plist
       properties:
         CFBundleDisplayName: Nib
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleIcons:
+          CFBundlePrimaryIcon: AppIcon
+        ITSAppUsesNonExemptEncryption: false
+        NibAPNSEnvironment: $(NIB_APNS_ENVIRONMENT)
         CFBundleURLTypes:
           - CFBundleURLName: com.douglance.nib
             CFBundleURLSchemes:
               - nib
         NSCameraUsageDescription: Nib attaches photos to requests so agents can see what you see.
         NSPhotoLibraryUsageDescription: Nib attaches selected images to requests.
-        NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
+        UIBackgroundModes:
+          - remote-notification
     settings:
       base:
+        MARKETING_VERSION: 1.0
         PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib
     entitlements:
       path: Nib.entitlements
       properties:
-        aps-environment: development
+        aps-environment: $(APS_ENVIRONMENT)
         com.apple.developer.associated-domains:
-          - "applinks:nib-global.doug-lance.workers.dev"
+          - "applinks:nibtool.com"
   NibMac:
     type: application
     platform: macOS
     sources:
       - path: Sources/NibModels.swift
       - path: Sources/NibClient.swift
+      - path: Sources/NibAccountView.swift
+      - path: Sources/NibCloudLibraryAdapter.swift
       - path: MacSources
+      - path: Resources
+      - path: SharedResources
+    dependencies:
+      - package: NibKit
+        product: NibDomain
+      - package: NibKit
+        product: NibCloud
+      - package: NibKit
+        product: NibFeatures
+      - package: NibKit
+        product: NibDocument
+      - package: NibKit
+        product: NibNotifications
+      - sdk: UserNotifications.framework
+      - sdk: ScreenCaptureKit.framework
     info:
       path: NibMac-Info.plist
       properties:
         CFBundleDisplayName: Nib
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NibAPNSEnvironment: $(NIB_APNS_ENVIRONMENT)
         CFBundleURLTypes:
           - CFBundleURLName: com.douglance.nib.macos
             CFBundleURLSchemes:
               - nib
-        LSUIElement: true
-        NSAppTransportSecurity:
-          NSAllowsLocalNetworking: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.macos
+        ENABLE_HARDENED_RUNTIME: YES
+        NIB_MAC_BUNDLE_IDENTIFIER: com.douglance.nib.macos
+        PRODUCT_BUNDLE_IDENTIFIER: $(NIB_MAC_BUNDLE_IDENTIFIER)
         PRODUCT_NAME: Nib
-    postCompileScripts:
-      - name: Bundle native Rust reviewer
-        basedOnDependencyAnalysis: false
-        script: |
-          set -euo pipefail
-          reviewer="${NIB_REVIEWER_BINARY:-$SRCROOT/../../../../target/release/nib}"
-          if [[ ! -x "$reviewer" ]]; then
-            echo "error: native reviewer is missing or not executable: $reviewer" >&2
-            echo "error: run cargo build --release --all-features --bin nib first" >&2
-            exit 1
-          fi
-          helpers="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers"
-          destination="$helpers/nib-reviewer"
-          /bin/mkdir -p "$helpers"
-          /bin/cp "$reviewer" "$destination"
-          /bin/chmod 0755 "$destination"
-          if [[ -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" && "${EXPANDED_CODE_SIGN_IDENTITY}" != "-" ]]; then
-            /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$destination"
-          fi
+    entitlements:
+      path: NibMac.entitlements
+      properties:
+        com.apple.developer.aps-environment: $(APS_ENVIRONMENT)
+        com.apple.security.app-sandbox: true
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.security.network.client: true
   NibMacTests:
     type: bundle.unit-test
     platform: macOS
@@ -242,6 +306,18 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.douglance.nib.macos.tests
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/Nib.app/Contents/MacOS/Nib
 schemes:
+  Nib:
+    build:
+      targets:
+        Nib: all
+  NibVision:
+    build:
+      targets:
+        NibVision: all
+  NibWatch:
+    build:
+      targets:
+        NibWatch: all
   NibMac:
     build:
       targets:
@@ -251,3 +327,5 @@ schemes:
     test:
       targets:
         - NibMacTests
+      environmentVariables:
+        NIB_TESTING: "1"

@@ -13,9 +13,10 @@ same resources as web, CLI, and MCP:
 - `GET/POST /api/devices`
 - `GET /api/activity`
 
-The Mac nib server remains the authority for project discovery, tmux,
-command execution, local website proxying, screenshots, storage, and APNs
-delivery. The native app is the high-trust mobile control surface.
+Nib Cloud is the authority for accounts, requests, immutable `.nib` history,
+attachments, device registrations, and APNs delivery. Native clients use the
+same account and cloud history on every supported platform. Opening an existing
+`.nib` is read-only; starting an edit creates a new cloud record.
 
 ## v1 screens
 
@@ -40,28 +41,34 @@ See `DESIGN.md` for the implementation rules.
 
 ## Setup notes
 
-Use TestFlight distribution for v1. Bundle identifiers default to:
+Bundle identifiers default to:
 
 - `com.douglance.nib`
 - `com.douglance.nib.NotificationService`
 - `com.douglance.nib.NotificationContent`
 - `com.douglance.nib.watchkitapp`
+- `com.douglance.nib.macos`
 
 The iPhone and Vision Pro builds share `com.douglance.nib` as one universal
-app identity.
+app identity. The Mac app uses its own identifier because its capture and
+sandbox capabilities are Mac-specific.
 
-APNs credentials are configured on the Mac server with:
+Store copy, URLs, review instructions, and localized text live in `AppStore/`.
+Use `ExportOptions-AppStore.plist` for iPhone and Vision Pro App Store packages.
+Use `ExportOptions-DeveloperID.plist` for a Mac build distributed outside the
+Mac App Store. A direct Mac release must have a push-enabled Developer ID
+provisioning profile, hardened runtime, a Developer ID signature, and an Apple
+notarization ticket before publication.
+
+Production APNs credentials are configured as Cloudflare Worker secrets:
 
 - `NIB_APNS_TEAM_ID`
 - `NIB_APNS_KEY_ID`
-- `NIB_APNS_KEY_PATH`
-- `NIB_APNS_TOPIC`
-- `NIB_APNS_ENV=sandbox|production`
+- `NIB_APNS_PRIVATE_KEY`
 
-Use `npm run apns:configure -- TEAM KEYID /absolute/path/AuthKey_KEYID.p8 com.douglance.nib sandbox`
-to write these values into `.nib/server.env`. That file is ignored by git and
-is loaded by `scripts/start-production.sh`, so APNs config survives
-`npm run launchd:install`.
+Each device registration carries its exact environment and topic. The Worker
+rejects incomplete registrations. See `../../../cloudflare/README.md` for the
+deployment commands and health check.
 
 The key must be an Apple Developer APNs provider authentication key. App Store
 Connect API keys are also `.p8` files, but APNs rejects them with

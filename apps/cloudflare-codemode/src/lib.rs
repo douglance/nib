@@ -18,7 +18,7 @@ use incurs_codemode::{
 use incurs_codemode_cloudflare::{
     CloudflareClock, DurableSqlStore, DynamicWorkerExecutor, DynamicWorkerOptions, McpHttpOptions,
     McpHttpRequest, WorkerLoader, drive_with_terminal_failure, handle_mcp_request,
-    persist_terminal_failure, tenant_key,
+    persist_terminal_failure,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -28,10 +28,12 @@ use worker::{
     State, durable_object, event,
 };
 
+const NIB_CLOUD_ORIGIN: &str = "https://nibtool.com";
+
 #[derive(Clone)]
 struct PortalClient {
     base_url: String,
-    token: String,
+    account_id: String,
     service: Fetcher,
 }
 
@@ -47,7 +49,7 @@ impl PortalClient {
             .set("accept", "application/json")
             .map_err(|error| error.to_string())?;
         headers
-            .set("authorization", &format!("Bearer {}", self.token))
+            .set("x-nib-account-id", &self.account_id)
             .map_err(|error| error.to_string())?;
         let mut init = RequestInit::new();
         init.with_method(method).with_headers(headers);
@@ -178,7 +180,7 @@ struct ExecutionRequest {
 }
 
 #[event(fetch)]
-async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response> {
+async fn fetch(mut request: Request, env: Env, _context: Context) -> Result<Response> {
     if request.path() == "/health" && request.method() == Method::Get {
         return code_mode_health(&env).await;
     }
@@ -186,11 +188,12 @@ async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response
     let tenant = if preflight {
         "mcp-preflight".to_string()
     } else {
-        match request_tenant(&request, &env) {
+        match request_tenant(&request, &env).await {
             Ok(tenant) => tenant,
             Err(response) => return Ok(response),
         }
     };
+    request.headers_mut()?.set("x-nib-account-id", &tenant)?;
     env.durable_object("CODEMODE")?
         .id_from_name(&tenant)?
         .get_stub()?
@@ -199,35 +202,21 @@ async fn fetch(request: Request, env: Env, _context: Context) -> Result<Response
 }
 
 async fn code_mode_health(env: &Env) -> Result<Response> {
-    let portal = PortalClient {
-        base_url: env
-            .var("NIB_PORTAL_URL")
-            .map(|value| value.to_string())
-            .unwrap_or_else(|_| "https://nib-global.doug-lance.workers.dev".into()),
-        token: env.secret("NIB_AUTH_TOKEN")?.to_string(),
-        service: env.service("NIB_PORTAL")?,
-    };
-    match portal.call(Method::Get, "/api/auth/status", None).await {
-        Ok(status)
-            if status.get("authenticated").and_then(Value::as_bool) == Some(true)
-                && status.get("kind").and_then(Value::as_str) == Some("token")
-                && status.get("platform").and_then(Value::as_str)
-                    == Some("cloudflare-codemode") =>
-        {
-            Response::from_json(&json!({
-                "ok": true,
-                "service": "nib-codemode-global",
-                "portalAuth": "scoped-token"
-            }))
-        }
-        Ok(_) => Response::from_json(&json!({
+    let request = Request::new(&format!("{NIB_CLOUD_ORIGIN}/api/health"), Method::Get)?;
+    match env.service("NIB_PORTAL")?.fetch_request(request).await {
+        Ok(response) if response.status_code() == 200 => Response::from_json(&json!({
+            "ok": true,
+            "service": "nib-codemode-global",
+            "accountAuth": "nib-session"
+        })),
+        Ok(response) => Response::from_json(&json!({
             "ok": false,
-            "error": "The Code Mode portal credential has the wrong identity"
+            "error": format!("Nib review service returned HTTP {}", response.status_code())
         }))
         .map(|response| response.with_status(503)),
-        Err(_) => Response::from_json(&json!({
+        Err(error) => Response::from_json(&json!({
             "ok": false,
-            "error": "The Code Mode portal credential is unavailable"
+            "error": format!("Nib review service is unavailable: {error}")
         }))
         .map(|response| response.with_status(503)),
     }
@@ -237,6 +226,7 @@ async fn code_mode_health(env: &Env) -> Result<Response> {
 pub struct NibCodeMode {
     state: State,
     env: Env,
+    account_id: OnceCell<String>,
     runtime: OnceCell<Rc<CodeMode>>,
 }
 
@@ -245,11 +235,15 @@ impl DurableObject for NibCodeMode {
         Self {
             state,
             env,
+            account_id: OnceCell::new(),
             runtime: OnceCell::new(),
         }
     }
 
     async fn fetch(&self, mut request: Request) -> Result<Response> {
+        if let Some(account_id) = request.headers().get("x-nib-account-id")? {
+            let _ = self.account_id.set(account_id);
+        }
         let runtime = self.runtime()?;
         let path = request.path();
         if path == "/mcp" {
@@ -382,12 +376,10 @@ impl NibCodeMode {
             .get_stub()?;
         let store = Arc::new(DurableSqlStore::new(self.state.storage().sql())?);
         let portal = PortalClient {
-            base_url: self
-                .env
-                .var("NIB_PORTAL_URL")
-                .map(|value| value.to_string())
-                .unwrap_or_else(|_| "https://nib-global.doug-lance.workers.dev".into()),
-            token: self.env.secret("NIB_AUTH_TOKEN")?.to_string(),
+            base_url: NIB_CLOUD_ORIGIN.into(),
+            account_id: self.account_id.get().cloned().ok_or_else(|| {
+                worker::Error::RustError("Nib account identity is missing".into())
+            })?,
             service: self.env.service("NIB_PORTAL")?,
         };
         let read_only = McpCommandOptions {
@@ -502,26 +494,7 @@ impl incurs_codemode_cloudflare::WorkerCodeModeService for WorkerCodeModeService
     }
 }
 
-fn request_tenant(request: &Request, env: &Env) -> std::result::Result<String, Response> {
-    let local = request
-        .url()
-        .ok()
-        .and_then(|url| url.host_str().map(ToString::to_string))
-        .is_some_and(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"));
-    let configured = env
-        .secret("MCP_AUTH_TOKEN")
-        .ok()
-        .map(|value| value.to_string());
-    let Some(expected) = configured else {
-        if local {
-            return Ok("local-default".into());
-        }
-        return Err(Response::error(
-            "Remote access is disabled until MCP_AUTH_TOKEN is configured",
-            503,
-        )
-        .unwrap());
-    };
+async fn request_tenant(request: &Request, env: &Env) -> std::result::Result<String, Response> {
     let supplied = request
         .headers()
         .get("authorization")
@@ -531,26 +504,42 @@ fn request_tenant(request: &Request, env: &Env) -> std::result::Result<String, R
             value
                 .split_once(' ')
                 .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
-                .map(|(_, token)| token.to_string())
+                .map(|(_, token)| token.trim().to_string())
         });
-    if !supplied.is_some_and(|token| constant_time_eq(token.as_bytes(), expected.as_bytes())) {
+    let Some(token) = supplied.filter(|token| !token.is_empty()) else {
         let mut response = Response::error("Unauthorized", 401).unwrap();
         let _ = response
             .headers_mut()
             .set("www-authenticate", "Bearer realm=\"nib-codemode\"");
         return Err(response);
+    };
+    let headers = Headers::new();
+    headers
+        .set("authorization", &format!("Bearer {token}"))
+        .map_err(|_| Response::error("Unauthorized", 401).unwrap())?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Get).with_headers(headers);
+    let session_request =
+        Request::new_with_init(&format!("{NIB_CLOUD_ORIGIN}/api/auth/session"), &init)
+            .map_err(|_| Response::error("Unauthorized", 401).unwrap())?;
+    let service = env
+        .service("NIB_CLOUD")
+        .map_err(|_| Response::error("Nib account verification is unavailable", 503).unwrap())?;
+    let mut response = service
+        .fetch_request(session_request)
+        .await
+        .map_err(|_| Response::error("Nib account verification is unavailable", 503).unwrap())?;
+    if response.status_code() != 200 {
+        return Err(Response::error("Unauthorized", 401).unwrap());
     }
-    // Version the tenant namespace when catalog policy semantics change. Durable
-    // Object isolates can retain an initialized CodeMode catalog across a Worker
-    // deployment, so a namespace revision makes the corrected policy immediate.
-    Ok(format!("tenant-v2-{}", tenant_key(&expected)))
-}
-
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    let mut difference = left.len() ^ right.len();
-    let length = left.len().max(right.len());
-    for index in 0..length {
-        difference |= usize::from(*left.get(index).unwrap_or(&0) ^ *right.get(index).unwrap_or(&0));
-    }
-    difference == 0
+    let session = response
+        .json::<Value>()
+        .await
+        .map_err(|_| Response::error("Nib account verification is unavailable", 503).unwrap())?;
+    session
+        .pointer("/account/id")
+        .and_then(Value::as_str)
+        .filter(|account_id| !account_id.is_empty())
+        .map(ToString::to_string)
+        .ok_or_else(|| Response::error("Unauthorized", 401).unwrap())
 }

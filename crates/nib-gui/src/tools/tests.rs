@@ -27,6 +27,7 @@ fn make_test_context() -> ToolContext<'static> {
         scale: 1.0,
         offset: (0.0, 0.0),
         annotations: &EMPTY,
+        active_page_index: None,
         min_drag_distance: 5.0,
     }
 }
@@ -47,6 +48,7 @@ fn make_test_context_with_annotations(annotations: &[Annotation]) -> ToolContext
         scale: 1.0,
         offset: (0.0, 0.0),
         annotations,
+        active_page_index: None,
         min_drag_distance: 5.0,
     }
 }
@@ -167,6 +169,7 @@ mod tool_context_tests {
             scale: 2.0,
             offset: (0.0, 0.0),
             annotations: &EMPTY,
+            active_page_index: None,
             min_drag_distance: 5.0,
         };
         let point = ctx.screen_to_image(100.0, 200.0);
@@ -191,6 +194,7 @@ mod tool_context_tests {
             scale: 1.0,
             offset: (50.0, 100.0),
             annotations: &EMPTY,
+            active_page_index: None,
             min_drag_distance: 5.0,
         };
         let point = ctx.screen_to_image(100.0, 200.0);
@@ -223,6 +227,7 @@ mod tool_context_tests {
             scale: 2.0,
             offset: (50.0, 100.0),
             annotations: &EMPTY,
+            active_page_index: None,
             min_drag_distance: 5.0,
         };
         let (screen_x, screen_y) = ctx.image_to_screen(Point::new(100.0, 200.0));
@@ -255,6 +260,28 @@ mod tool_context_tests {
     }
 
     #[test]
+    fn pdf_numbering_only_counts_the_active_page() {
+        let annotations = vec![
+            Annotation::new(AnnotationType::Number {
+                position: Point::new(100.0, 100.0),
+                value: 4,
+                radius: 14.0,
+            })
+            .with_page_index(Some(0)),
+            Annotation::new(AnnotationType::Number {
+                position: Point::new(100.0, 100.0),
+                value: 9,
+                radius: 14.0,
+            })
+            .with_page_index(Some(1)),
+        ];
+        let mut ctx = make_test_context_with_annotations(&annotations);
+        ctx.active_page_index = Some(0);
+
+        assert_eq!(ctx.next_number_value(), 5);
+    }
+
+    #[test]
     fn test_annotation_at_empty() {
         let ctx = make_test_context();
         let result = ctx.annotation_at(Point::new(100.0, 100.0));
@@ -273,6 +300,40 @@ mod tool_context_tests {
         let ctx = make_test_context_with_annotations(&annotations);
         let result = ctx.annotation_at(Point::new(100.0, 100.0));
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn pdf_hit_testing_ignores_annotations_from_other_pages() {
+        let page_zero = Annotation::new(AnnotationType::Box {
+            region: Region::new(50.0, 50.0, 100.0, 100.0),
+            stroke_width: 2.0,
+            stroke_style: nib_core::StrokeStyle::Solid,
+            filled: false,
+            corner_radius: 0.0,
+        })
+        .with_page_index(Some(0));
+        let page_one = Annotation::new(AnnotationType::Box {
+            region: Region::new(50.0, 50.0, 100.0, 100.0),
+            stroke_width: 2.0,
+            stroke_style: nib_core::StrokeStyle::Solid,
+            filled: false,
+            corner_radius: 0.0,
+        })
+        .with_page_index(Some(1));
+        let page_zero_id = page_zero.id;
+        let annotations = vec![page_zero, page_one];
+        let mut ctx = make_test_context_with_annotations(&annotations);
+        ctx.active_page_index = Some(0);
+
+        assert_eq!(
+            ctx.annotation_at(Point::new(100.0, 100.0)).map(|a| a.id),
+            Some(page_zero_id)
+        );
+        assert_eq!(
+            ctx.topmost_unlocked_at(Point::new(100.0, 100.0))
+                .map(|a| a.id),
+            Some(page_zero_id)
+        );
     }
 }
 

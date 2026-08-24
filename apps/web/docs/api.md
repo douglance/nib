@@ -25,7 +25,7 @@ CLI references are file paths. MCP references are base64 data URIs. Supported MI
 - Transport: Streamable HTTP at `/mcp`, or stdio with `nib --mcp`.
 - Tool name: `generate_ui`.
 - Discovery: `initialize`, `notifications/initialized`, `ping`, and `tools/list` are public so an agent can install and inspect the tool before sign-in.
-- Execution: `tools/call` requires a trusted tenant. The current implementation accepts a verified Cloudflare Access identity; scalable customer authentication remains a launch blocker.
+- Execution: `tools/call` requires a valid Nib account session.
 - Result: text metadata, `structuredContent`, and an `image` content block on success.
 - Semantics: one eligible Fast 1K trial image before payment; otherwise paid, non-read-only, non-destructive, non-idempotent, and open-world because it invokes an external model.
 
@@ -33,14 +33,14 @@ The rich image mapping is declared with JSON Pointers `/image/data` and `/image/
 
 ## End-user authentication
 
-Authenticate once under the end user's identity, then export the application token for the Nib CLI and local stdio MCP server:
+Authenticate once with the same email account used by every Nib app:
 
 ```sh
-cloudflared access login https://nib.doug-lance.workers.dev/internal/v1/generate
-export NIB_ACCESS_TOKEN="$(cloudflared access token -app=https://nib.doug-lance.workers.dev/internal/v1/generate)"
+nib auth login you@example.com
+nib auth status
 ```
 
-The standalone CLI sends the token as `cf-access-token` to the Access-protected generation route. The public Streamable HTTP MCP route accepts unauthenticated discovery, then verifies the same token directly from `cf-access-jwt-assertion` on `tools/call`. Service tokens are only for private headless operators; they are not issued to trial users. See [Cloudflare's CLI Access flow](https://developers.cloudflare.com/cloudflare-one/tutorials/cli/) and [coding-agent authentication guidance](https://developers.cloudflare.com/cloudflare-one/access-controls/authenticate-agents/).
+Open the emailed link to finish. The CLI stores the revocable session in the system Keychain and sends it as a bearer token. `NIB_AUTH_TOKEN` remains available only as an explicit automation override.
 
 ## Request
 
@@ -56,7 +56,7 @@ The standalone CLI sends the token as `cf-access-token` to the Access-protected 
 }
 ```
 
-Only Worker-internal routing may supply `x-nib-tenant`. The Worker deletes any caller-provided tenant header and replaces it with the verified identity before invoking generation; see [`worker/src/access.ts`](../worker/src/access.ts) and [`worker/src/index.ts`](../worker/src/index.ts).
+Only Worker-internal routing may supply the account identity. The Worker deletes caller-provided trusted headers and replaces them with the verified UUID account ID before invoking generation or review; see [`worker/src/index.ts`](../worker/src/index.ts).
 
 Standalone CLI and stdio MCP calls post to `/internal/v1/generate`. Remote MCP calls enter the Worker-native stateless Streamable HTTP handler at `/mcp`. Both paths invoke [`handleGeneration`](../worker/src/generation.ts) inside the same Worker after authentication; there is no process or Container hop.
 
@@ -94,7 +94,7 @@ The Durable Object scheduler chooses four High jobs, then one Default job, with 
 | Status/code | Meaning |
 | --- | --- |
 | `400` | Invalid prompt, reference count, aspect, preset, or resolution |
-| `401` | No trusted Cloudflare Access tenant |
+| `401` | No valid Nib account session |
 | `402 FREE_TRIAL_FAST_1K_ONLY` | An unsubscribed identity requested Standard, Pro, or output above 1K |
 | `402 FREE_TRIAL_BLOCKING_ONLY` | An unsubscribed identity requested background generation |
 | `402 FREE_TRIAL_USED` | The verified identity consumed its one free image |
@@ -118,4 +118,8 @@ The Durable Object scheduler chooses four High jobs, then one Default job, with 
 | MCP | `/mcp` |
 | Health | `/health` |
 
-OpenAPI, both skill resources, the agent installer, and the non-executing MCP discovery methods are public so agents can install and inspect the tool before authentication. MCP `tools/call`, generation, artifacts, account, and billing operations remain behind Cloudflare Access.
+OpenAPI, both skill resources, the agent installer, and non-executing MCP discovery are public. MCP `tools/call`, generation, artifacts, review history, account, and billing require a Nib account session.
+
+## Account deletion
+
+`DELETE /api/account` permanently deletes the authenticated account. Browser confirmation posts to `/api/account/delete` and follows the same operation. Nib deletes the Stripe customer first, then the account's review Durable Object state, review media, generated artifacts, temporary references, sessions, challenges, jobs, usage ledger, and account row. The response is `{"deleted":true}` and expires the browser session cookie. A failed Stripe or storage deletion returns `502` without deleting the D1 account.

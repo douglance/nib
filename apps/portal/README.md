@@ -1,42 +1,19 @@
-# Nib portal
+# Nib Apple apps
 
-This package is Nib's private web, server, push, iPhone, and Watch surface. It
-is part of the main Nib repository and is not a second product or CLI.
+The retired local portal has been removed. `mobile/Nib` contains the iPhone,
+Apple Watch, Apple Vision Pro, and Mac clients. Every client uses the fixed
+`https://nibtool.com` production origin and the same Nib account.
 
-The canonical `nib` command and native desktop annotation engine remain in the
-Rust workspace at the repository root. The production request relay is the
-Cloudflare Worker in `../cloudflare`; this package remains the complete local
-development portal and uses the same request and annotation contracts.
+Product, account, billing, and public-site code lives in `apps/web`. Durable
+requests, immutable `.nib` history, media, device registrations, and APNs live
+in `apps/cloudflare` behind the same public origin.
 
-## Local development
-
-```bash
-npm ci
-npm run dev
-```
-
-The server and Vite client bind to loopback by default. They are not required
-for the global Cloudflare request path.
-
-## Validation
+Generate and validate the Apple project directly:
 
 ```bash
-npm run verify
-xcodegen generate --spec mobile/Nib/project.yml
+xcodegen generate --spec mobile/Nib/project.yml --project mobile/Nib
 xcodebuild -project mobile/Nib/Nib.xcodeproj -scheme Nib \
   -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
 xcodebuild -project mobile/Nib/Nib.xcodeproj -scheme NibMac \
-  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO test
 ```
-
-The request API accepts `nib.review/v2` video subjects, streams raw H.264 MP4
-uploads, serves byte ranges for seeking, and accepts an optional MP4 response
-attachment. Reviewers pause the video before annotating; each annotation stores
-its media timestamp.
-
-## Runtime data
-
-Runtime state lives under `.nib/` and is never committed. The old service's
-data is migrated once during deployment; new installs use only Nib names,
-environment variables, bundle identifiers, notification categories, and URL
-schemes.

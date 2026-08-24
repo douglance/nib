@@ -303,10 +303,6 @@ pub struct RequestWaitArgs {
 pub struct RequestReviewArgs {
     /// Durable request ID
     pub request_id: String,
-
-    /// Portal base URL; defaults to NIB_PORTAL_URL or the configured portal
-    #[arg(long)]
-    pub portal: Option<String>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -837,20 +833,11 @@ mod tests {
     }
 
     #[test]
-    fn request_review_accepts_an_explicit_portal() {
-        let cli = Cli::try_parse_from([
-            "nib",
-            "request",
-            "review",
-            "req-123",
-            "--portal",
-            "https://nib.example",
-        ])
-        .unwrap();
+    fn request_review_uses_the_fixed_service() {
+        let cli = Cli::try_parse_from(["nib", "request", "review", "req-123"]).unwrap();
         let Command::Request(RequestCommand::Review(args)) = cli.command else {
             panic!("expected request review command");
         };
         assert_eq!(args.request_id, "req-123");
-        assert_eq!(args.portal.as_deref(), Some("https://nib.example"));
     }
 }

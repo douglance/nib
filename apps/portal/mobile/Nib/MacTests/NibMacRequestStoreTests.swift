@@ -15,11 +15,11 @@ final class NibMacRequestStoreTests: XCTestCase {
         XCTAssertEqual(store.activeRequests.map(\.id), ["older"])
     }
 
-    func testReviewURLUsesConfiguredPortalOnAnyMac() throws {
+    func testReviewURLUsesFixedNibCloudOriginOnAnyMac() throws {
         let request = try request(id: "request-id", status: "open", updatedAt: "2026-07-23T11:00:00.000Z")
-        let store = NibMacRequestStore(baseURLString: "https://nib.example.test")
+        let store = NibMacRequestStore()
 
-        XCTAssertEqual(store.reviewURL(for: request)?.absoluteString, "https://nib.example.test/r/request-id")
+        XCTAssertEqual(store.reviewURL(for: request)?.absoluteString, "https://nibtool.com/r/request-id")
     }
 
     func testVisualReviewProvidesImageAndDecisionMapping() throws {
@@ -31,11 +31,11 @@ final class NibMacRequestStoreTests: XCTestCase {
         XCTAssertNil(request.visualReviewDecision(choiceIndex: 2))
     }
 
-    func testNativeReviewLauncherUsesBundledHelperCommandContract() throws {
+    func testRequestNavigatorUsesPortalRequestURLContract() throws {
         let portal = try XCTUnwrap(URL(string: "https://nib.example.test/"))
         XCTAssertEqual(
-            NibNativeReviewLauncher.arguments(requestID: "req-123", portalURL: portal),
-            ["request", "review", "req-123", "--portal", "https://nib.example.test"]
+            NibMacRequestNavigator.requestURL(requestID: "req-123", portalURL: portal)?.absoluteString,
+            "https://nib.example.test/r/req-123"
         )
     }
 

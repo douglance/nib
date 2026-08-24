@@ -9,6 +9,7 @@ target/
 node_modules/
 .wrangler/
 dist/
+.build/
 
 # Local worker secrets
 .dev.vars
@@ -19,3 +20,5 @@ demo.png
 demo.*.png
 *.rendered.png
 *.annotations.json
+*.nib-shm
+*.nib-wal

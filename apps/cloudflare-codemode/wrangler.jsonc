@@ -4,11 +4,9 @@
   "main": "build/worker/shim.mjs",
   "compatibility_date": "2026-07-31",
   "compatibility_flags": ["nodejs_compat"],
-  "vars": {
-    "NIB_PORTAL_URL": "https://nib-global.doug-lance.workers.dev"
-  },
   "services": [
-    { "binding": "NIB_PORTAL", "service": "nib-global" }
+    { "binding": "NIB_PORTAL", "service": "nib-global" },
+    { "binding": "NIB_CLOUD", "service": "nib" }
   ],
   "durable_objects": {
     "bindings": [

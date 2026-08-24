@@ -11,7 +11,7 @@ use gpui::{
     LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, ParentElement,
     PathBuilder, PathPromptOptions, Pixels, Point, Render, RenderImage, Result as GpuiResult,
     ScrollHandle, ScrollWheelEvent, SharedString, Size, StatefulInteractiveElement, Style, Styled,
-    StyledImage, StyledText, Task, TextAlign, TextRun, TitlebarOptions, UTF16Selection,
+    StyledImage, StyledText, Task, TextAlign, TextRun, TitlebarOptions, TouchPhase, UTF16Selection,
     UnderlineStyle, Window, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions,
     WrappedLine,
 };
@@ -109,7 +109,8 @@ use crate::tool_flyout;
 use crate::toolbar::Tool;
 use crate::tools::{
     images_from_dropped_paths, Modifiers, MouseButton as ToolMouseButton, StyleState, TextTool,
-    ToolContext, ToolEvent, ToolId, ToolManager, ToolMode, ToolPreview, ToolResult,
+    ToolContext, ToolDocumentState, ToolEvent, ToolId, ToolManager, ToolMode, ToolPreview,
+    ToolResult,
 };
 use crate::window_motion;
 use crate::zorder;
@@ -135,6 +136,24 @@ pub use nib_serde::{
 const TOOLBAR_HEIGHT: f32 = 0.0; // Toolbar floats inside canvas, doesn't offset coordinates
 const TITLEBAR_CONTENT_INSET: f32 = 28.0;
 const RESPONSE_COMPOSER_HEIGHT: f32 = 88.0;
+const PDF_SCROLL_PAGE_THRESHOLD: f32 = 40.0;
+
+fn pdf_scroll_page_offset(accumulated_y: &mut f32, delta_x: f32, delta_y: f32) -> isize {
+    if delta_y == 0.0 || delta_x.abs() >= delta_y.abs() {
+        return 0;
+    }
+    if *accumulated_y != 0.0 && accumulated_y.signum() != delta_y.signum() {
+        *accumulated_y = 0.0;
+    }
+    *accumulated_y += delta_y;
+    if accumulated_y.abs() < PDF_SCROLL_PAGE_THRESHOLD {
+        return 0;
+    }
+
+    let page_offset = if *accumulated_y < 0.0 { 1 } else { -1 };
+    *accumulated_y = 0.0;
+    page_offset
+}
 
 /// Cap on remembered undo entries (oldest dropped once exceeded)
 const HISTORY_CAP: usize = 100;
@@ -1398,6 +1417,8 @@ const DEFAULT_WINDOW_WIDTH: f32 = 1400.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 720.0;
 const DISPLAY_MARGIN: f32 = 24.0;
 const REVIEW_RAIL_WIDTH: f32 = 320.0;
+const MIN_WINDOW_WIDTH: f32 = 680.0;
+const MIN_WINDOW_HEIGHT: f32 = 500.0;
 const TOOLBAR_SAFE_AREA: f32 = 80.0;
 const DEFAULT_ACTIVE_TOOL: Tool = Tool::Select;
 
@@ -1428,15 +1449,36 @@ fn local_selection_handle_position(
 }
 
 #[cfg(target_os = "macos")]
-fn force_frontmost_application() {
+fn review_window(window_title: &str) -> Option<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    let main_thread = MainThreadMarker::new()?;
+    NSApplication::sharedApplication(main_thread)
+        .windows()
+        .iter()
+        .find(|window| window.title().to_string() == window_title)
+}
+
+#[cfg(target_os = "macos")]
+fn activate_application() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+
+    let main_thread = MainThreadMarker::new().expect("nib GUI must launch on the main thread");
+    let application = NSApplication::sharedApplication(main_thread);
+    application.activate();
+}
+
+#[cfg(target_os = "macos")]
+fn configure_frontmost_application(window_title: &str) {
     use std::ffi::c_void;
 
     use objc2::MainThreadMarker;
     use objc2_app_kit::{
-        NSApplication, NSApplicationActivationOptions, NSAutoresizingMaskOptions,
-        NSFloatingWindowLevel, NSImage, NSRunningApplication, NSVisualEffectBlendingMode,
-        NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindowOrderingMode,
-        NSWindowSharingType,
+        NSApplication, NSAutoresizingMaskOptions, NSFloatingWindowLevel, NSImage,
+        NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+        NSVisualEffectView, NSWindowOrderingMode, NSWindowSharingType,
     };
     use objc2_foundation::NSData;
 
@@ -1451,41 +1493,51 @@ fn force_frontmost_application() {
     // GPUI 0.2.2 maps `WindowKind::Floating` to `NSNormalWindowLevel` on macOS.
     // Override the native level so the blocking review surface is not buried
     // beneath the terminal that launched it.
-    for window in application.windows().iter() {
-        if let Some(content_view) = window.contentView() {
-            let frame = content_view.bounds();
-            let blur_view =
-                NSVisualEffectView::initWithFrame(main_thread.alloc::<NSVisualEffectView>(), frame);
-            blur_view.setMaterial(NSVisualEffectMaterial::HUDWindow);
-            blur_view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
-            blur_view.setState(NSVisualEffectState::Active);
-            blur_view.setAutoresizingMask(
-                NSAutoresizingMaskOptions::ViewWidthSizable
-                    | NSAutoresizingMaskOptions::ViewHeightSizable,
-            );
-            content_view.setAutoresizingMask(
-                NSAutoresizingMaskOptions::ViewWidthSizable
-                    | NSAutoresizingMaskOptions::ViewHeightSizable,
-            );
-            content_view.addSubview_positioned_relativeTo(
-                &blur_view,
-                NSWindowOrderingMode::Below,
-                None,
-            );
-        }
-        window.makeKeyAndOrderFront(None);
-        window.setLevel(NSFloatingWindowLevel);
-        window.setSharingType(NSWindowSharingType::ReadOnly);
-        window_motion::show_with_entry_animation(&window);
+    let Some(window) = review_window(window_title) else {
+        return;
+    };
+    if let Some(content_view) = window.contentView() {
+        let frame = content_view.bounds();
+        let blur_view =
+            NSVisualEffectView::initWithFrame(main_thread.alloc::<NSVisualEffectView>(), frame);
+        blur_view.setMaterial(NSVisualEffectMaterial::HUDWindow);
+        blur_view.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        blur_view.setState(NSVisualEffectState::Active);
+        blur_view.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        content_view.setAutoresizingMask(
+            NSAutoresizingMaskOptions::ViewWidthSizable
+                | NSAutoresizingMaskOptions::ViewHeightSizable,
+        );
+        content_view.addSubview_positioned_relativeTo(
+            &blur_view,
+            NSWindowOrderingMode::Below,
+            None,
+        );
     }
-    #[allow(deprecated)]
-    application.activateIgnoringOtherApps(true);
-    NSRunningApplication::currentApplication()
-        .activateWithOptions(NSApplicationActivationOptions::ActivateAllWindows);
+    window.setLevel(NSFloatingWindowLevel);
+    window.setSharingType(NSWindowSharingType::ReadOnly);
+    window_motion::show_with_entry_animation(&window);
+    activate_application();
 }
 
 #[cfg(not(target_os = "macos"))]
-fn force_frontmost_application() {}
+fn configure_frontmost_application(_window_title: &str) {}
+
+#[cfg(target_os = "macos")]
+fn refocus_frontmost_application(window_title: &str) {
+    let Some(window) = review_window(window_title) else {
+        return;
+    };
+    window.orderFrontRegardless();
+    window.makeKeyAndOrderFront(None);
+    activate_application();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn refocus_frontmost_application(_window_title: &str) {}
 
 fn centered_window_bounds(
     display_bounds: Option<Bounds<Pixels>>,
@@ -1507,6 +1559,16 @@ fn centered_window_bounds(
         point(center.x - half.width, center.y - half.height),
         window_size,
     )
+}
+
+fn minimum_window_size(display_bounds: Option<Bounds<Pixels>>) -> Size<Pixels> {
+    let desired = size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT));
+    display_bounds.map_or(desired, |bounds| {
+        desired.min(&size(
+            (bounds.size.width - px(DISPLAY_MARGIN * 2.0)).max(px(1.0)),
+            (bounds.size.height - px(DISPLAY_MARGIN * 2.0)).max(px(1.0)),
+        ))
+    })
 }
 
 fn initial_window_size(
@@ -1537,6 +1599,7 @@ fn initial_window_size(
         px(inner_height * aspect + horizontal_chrome),
         px(inner_height + vertical_chrome),
     )
+    .max(&minimum_window_size(display_bounds))
 }
 
 impl NibApp {
@@ -1570,9 +1633,21 @@ impl NibApp {
             .with_assets(Assets { base: assets_base })
             .run(move |cx: &mut App| {
                 let primary_display = cx.primary_display();
-                let image_dimensions = file_path
-                    .as_ref()
-                    .and_then(|path| image::image_dimensions(path).ok());
+                let image_dimensions = file_path.as_ref().and_then(|path| {
+                    image::image_dimensions(path).ok().or_else(|| {
+                        let is_pdf = path
+                            .extension()
+                            .and_then(|extension| extension.to_str())
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"));
+                        if is_pdf {
+                            crate::pdf::render_page(path, 0)
+                                .ok()
+                                .map(|page| (page.width, page.height))
+                        } else {
+                            None
+                        }
+                    })
+                });
                 let window_size = initial_window_size(
                     primary_display.as_ref().map(|display| display.bounds()),
                     image_dimensions,
@@ -1581,6 +1656,12 @@ impl NibApp {
                     primary_display.as_ref().map(|display| display.bounds()),
                     window_size,
                 );
+                let window_title = file_path
+                    .as_ref()
+                    .and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str())
+                    .map(|name| format!("Nib - {name}"))
+                    .unwrap_or_else(|| "Nib".to_string());
 
                 // nib is a short, human-blocking review surface. Bring it to the
                 // foreground instead of leaving the caller hunting for its window.
@@ -1588,10 +1669,13 @@ impl NibApp {
 
                 let options = WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(window_bounds)),
+                    window_min_size: Some(minimum_window_size(
+                        primary_display.as_ref().map(|display| display.bounds()),
+                    )),
                     display_id: primary_display.as_ref().map(|display| display.id()),
                     focus: true,
                     titlebar: Some(TitlebarOptions {
-                        title: None,
+                        title: Some(SharedString::from(window_title.clone())),
                         appears_transparent: true,
                         traffic_light_position: None,
                     }),
@@ -1622,9 +1706,10 @@ impl NibApp {
                     .expect("Failed to open window");
                 // Defer native activation until the window exists in AppKit's
                 // event loop; activating during construction is ignored.
+                let initial_window_title = window_title.clone();
                 cx.defer(move |cx| {
                     cx.activate(true);
-                    force_frontmost_application();
+                    configure_frontmost_application(&initial_window_title);
                     let _ = window_handle.update(cx, |_view, window, _cx| {
                         window.activate_window();
                     });
@@ -1637,7 +1722,7 @@ impl NibApp {
                         cx.background_executor().timer(delay).await;
                         let _ = cx.update(|cx| {
                             cx.activate(true);
-                            force_frontmost_application();
+                            refocus_frontmost_application(&window_title);
                         });
                     }
                 })
@@ -1742,6 +1827,11 @@ pub struct EditorView {
     video_duration_ms: u64,
     pub(crate) video_annotation_times: std::collections::HashMap<AnnotationId, u64>,
     video_error: Option<String>,
+    pdf_frame: Option<Arc<RenderImage>>,
+    pdf_page_index: usize,
+    pdf_page_count: usize,
+    pdf_scroll_accumulated_y: f32,
+    pdf_error: Option<String>,
 }
 
 impl EditorView {
@@ -1757,14 +1847,20 @@ impl EditorView {
             .and_then(|path| path.extension())
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"));
+        let is_pdf_file = file_path
+            .as_ref()
+            .and_then(|path| path.extension())
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"));
 
         // For .nib files, we need to extract the image and open the NibFile
         let (actual_file_path, nib_file, nib_path, image_width, image_height) = if is_nib_file {
             if let Some(ref path) = file_path {
-                match NibFile::open(path) {
+                match NibFile::open_editable(path) {
                     Ok(nib) => {
                         match nib.get_image() {
                             Ok((image_data, image_info)) => {
+                                let editable_nib_path = nib.path().to_path_buf();
                                 // Create a temp file for the extracted image
                                 let temp_dir = std::env::temp_dir();
                                 let temp_filename = format!(
@@ -1785,7 +1881,7 @@ impl EditorView {
                                     (
                                         Some(temp_path),
                                         Some(nib),
-                                        file_path.clone(),
+                                        Some(editable_nib_path),
                                         image_info.width,
                                         image_info.height,
                                     )
@@ -1817,6 +1913,25 @@ impl EditorView {
                 (1920, 1080) // default for no image
             };
             (file_path.clone(), None, None, width, height)
+        };
+
+        let (pdf_frame, pdf_page_count, pdf_error, image_width, image_height) = if is_pdf_file {
+            match file_path
+                .as_deref()
+                .ok_or_else(|| "PDF path is missing".to_string())
+                .and_then(|path| crate::pdf::render_page(path, 0))
+            {
+                Ok(page) => (
+                    Some(page.image),
+                    page.page_count,
+                    None,
+                    page.width,
+                    page.height,
+                ),
+                Err(error) => (None, 0, Some(error), image_width, image_height),
+            }
+        } else {
+            (None, 0, None, image_width, image_height)
         };
 
         // Estimate the initial canvas size. Feedback sessions reserve a right rail;
@@ -1889,6 +2004,11 @@ impl EditorView {
             video_duration_ms: 0,
             video_annotation_times: std::collections::HashMap::new(),
             video_error,
+            pdf_frame,
+            pdf_page_index: 0,
+            pdf_page_count,
+            pdf_scroll_accumulated_y: 0.0,
+            pdf_error,
         };
 
         view.load_annotations();
@@ -1900,9 +2020,11 @@ impl EditorView {
         }
 
         // Start collab session for .nib files
-        let collab_path = nib_path
-            .clone()
-            .or_else(|| is_video_file.then(|| file_path.clone()).flatten());
+        let collab_path = nib_path.clone().or_else(|| {
+            (is_video_file || is_pdf_file)
+                .then(|| file_path.clone())
+                .flatten()
+        });
         if let Some(path) = collab_path {
             view.start_collab_session(path.clone());
         }
@@ -1916,6 +2038,53 @@ impl EditorView {
             .and_then(|path| path.extension())
             .and_then(|extension| extension.to_str())
             .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
+    }
+
+    fn is_pdf_review(&self) -> bool {
+        self.file_path
+            .as_ref()
+            .and_then(|path| path.extension())
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    }
+
+    fn show_pdf_page(&mut self, requested_index: isize, cx: &mut Context<Self>) {
+        let Some(path) = self.file_path.as_deref() else {
+            return;
+        };
+        if self.pdf_page_count == 0 {
+            return;
+        }
+        let page_index = requested_index.clamp(0, self.pdf_page_count as isize - 1) as usize;
+        if page_index == self.pdf_page_index {
+            return;
+        }
+        match crate::pdf::render_page(path, page_index) {
+            Ok(page) => {
+                self.pdf_frame = Some(page.image);
+                self.pdf_page_index = page_index;
+                self.pdf_page_count = page.page_count;
+                self.image_width = page.width;
+                self.image_height = page.height;
+                self.canvas = Canvas::new(page.width, page.height);
+                self.canvas
+                    .set_viewport(self.canvas_width as f64, self.canvas_height as f64);
+                self.tool_manager.reset_all();
+                self.text_input_state = None;
+                self.pdf_error = None;
+                cx.notify();
+            }
+            Err(error) => {
+                self.pdf_error = Some(error.clone());
+                self.add_toast(format!("PDF page failed: {error}"), cx);
+            }
+        }
+    }
+
+    fn anchor_pdf_annotation(&self, annotation: &mut Annotation) {
+        if self.is_pdf_review() {
+            annotation.set_page_index(Some(self.pdf_page_index as u32));
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -2175,6 +2344,13 @@ impl EditorView {
                 }
             }
         }
+        if self.is_pdf_review() {
+            for (item, annotation) in items.iter_mut().zip(delta_annotations.iter()) {
+                if let Some(page_index) = annotation.page_index() {
+                    item["pageIndex"] = serde_json::json!(page_index);
+                }
+            }
+        }
         let payload = Self::build_send_payload(
             decision,
             (!comment.is_empty()).then_some(comment.as_str()),
@@ -2269,7 +2445,8 @@ impl EditorView {
                     // Handle AddAnnotations that were converted to Operations
                     use nib_collab::types::AnnotationOp;
                     if let AnnotationOp::Add { id, data } = &op.operation {
-                        let annotation = data_to_annotation(*id, data);
+                        let mut annotation = data_to_annotation(*id, data);
+                        self.anchor_pdf_annotation(&mut annotation);
                         self.annotations.push(annotation);
                         self.sent_annotation_ids.insert(*id);
                         AnnotationId::bump_to_at_least(id.saturating_add(1));
@@ -2943,7 +3120,10 @@ impl EditorView {
             (self.image_width, self.image_height),
             scale,
             (offset_x, offset_y),
-            &self.annotations,
+            ToolDocumentState {
+                annotations: &self.annotations,
+                active_page_index: self.is_pdf_review().then_some(self.pdf_page_index as u32),
+            },
             5.0,
         )
     }
@@ -2951,7 +3131,8 @@ impl EditorView {
     /// Process a ToolResult and update EditorView state accordingly
     fn process_tool_result(&mut self, result: ToolResult, cx: &mut Context<Self>) {
         match result {
-            ToolResult::Created(annotation) => {
+            ToolResult::Created(mut annotation) => {
+                self.anchor_pdf_annotation(&mut annotation);
                 let annotation_id = annotation.id;
                 // Log with full content for text annotations
                 let details = match &annotation.annotation_type {
@@ -2996,10 +3177,11 @@ impl EditorView {
                 cx.notify();
             }
             ToolResult::CreatedWithAsset {
-                annotation,
+                mut annotation,
                 asset_hash,
                 asset,
             } => {
+                self.anchor_pdf_annotation(&mut annotation);
                 let annotation_id = annotation.id;
                 tracing::info!(
                     "human created a{} image ({}x{})",
@@ -3712,11 +3894,19 @@ impl EditorView {
         match std::fs::read_to_string(&annotations_path) {
             Ok(json) => match serde_json::from_str::<AnnotationsFile>(&json) {
                 Ok(file) => {
-                    self.annotations = file
+                    let mut annotations: Vec<Annotation> = file
                         .annotations
                         .iter()
                         .filter_map(deserialize_annotation)
                         .collect();
+                    if self.is_pdf_review() {
+                        for annotation in &mut annotations {
+                            if annotation.page_index().is_none() {
+                                annotation.set_page_index(Some(0));
+                            }
+                        }
+                    }
+                    self.annotations = annotations;
                     tracing::info!(
                         "Loaded {} annotations from {:?}",
                         self.annotations.len(),
@@ -3771,7 +3961,10 @@ impl EditorView {
                 (self.image_width, self.image_height),
                 scale,
                 offset,
-                &self.annotations,
+                ToolDocumentState {
+                    annotations: &self.annotations,
+                    active_page_index: self.is_pdf_review().then_some(self.pdf_page_index as u32),
+                },
                 5.0,
             );
             self.tool_manager.set_active_tool(tool, &ctx)
@@ -3901,7 +4094,10 @@ impl EditorView {
                 (self.image_width, self.image_height),
                 scale,
                 offset,
-                &self.annotations,
+                ToolDocumentState {
+                    annotations: &self.annotations,
+                    active_page_index: self.is_pdf_review().then_some(self.pdf_page_index as u32),
+                },
                 5.0,
             );
             self.tool_manager.handle_event(tool_event, &ctx)
@@ -3942,7 +4138,10 @@ impl EditorView {
                 (self.image_width, self.image_height),
                 scale,
                 offset,
-                &self.annotations,
+                ToolDocumentState {
+                    annotations: &self.annotations,
+                    active_page_index: self.is_pdf_review().then_some(self.pdf_page_index as u32),
+                },
                 5.0,
             );
             self.tool_manager.handle_event(tool_event, &ctx)
@@ -3986,7 +4185,10 @@ impl EditorView {
                 (self.image_width, self.image_height),
                 scale,
                 offset,
-                &self.annotations,
+                ToolDocumentState {
+                    annotations: &self.annotations,
+                    active_page_index: self.is_pdf_review().then_some(self.pdf_page_index as u32),
+                },
                 5.0,
             );
             self.tool_manager.handle_event(tool_event, &ctx)
@@ -4004,8 +4206,9 @@ impl EditorView {
         let delta = event.delta.pixel_delta(px(20.0));
         let delta_y: f32 = delta.y.into();
 
-        // Cmd/Ctrl + scroll = zoom, otherwise pan
+        // Cmd/Ctrl + scroll = zoom, otherwise pan or change PDF pages.
         if event.modifiers.secondary() {
+            self.pdf_scroll_accumulated_y = 0.0;
             // Zoom mode: zoom in/out centered on cursor
             // Positive delta_y = scroll up = zoom in
             let zoom_factor = if delta_y > 0.0 {
@@ -4018,6 +4221,24 @@ impl EditorView {
 
             self.canvas.zoom_at(screen_x, screen_y, zoom_factor);
             cx.notify();
+        } else if self.is_pdf_review() {
+            let delta_x: f32 = delta.x.into();
+            if matches!(event.touch_phase, TouchPhase::Started) {
+                self.pdf_scroll_accumulated_y = 0.0;
+            }
+
+            let page_offset =
+                pdf_scroll_page_offset(&mut self.pdf_scroll_accumulated_y, delta_x, delta_y);
+            if page_offset != 0 {
+                self.show_pdf_page(self.pdf_page_index as isize + page_offset, cx);
+            } else if delta_x.abs() > delta_y.abs() {
+                self.canvas.pan(delta_x as f64, delta_y as f64);
+                cx.notify();
+            }
+
+            if matches!(event.touch_phase, TouchPhase::Ended) {
+                self.pdf_scroll_accumulated_y = 0.0;
+            }
         } else {
             // Pan mode: scroll to pan the canvas
             let delta_x: f32 = delta.x.into();
@@ -4058,6 +4279,8 @@ impl EditorView {
                 div()
                     .flex()
                     .flex_col()
+                    .max_w_full()
+                    .overflow_hidden()
                     .bg(rgba(0x2c2c2ce8))
                     .rounded_xl()
                     .border_1()
@@ -4066,11 +4289,17 @@ impl EditorView {
                     .when(self.is_video_review(), |toolbar| {
                         toolbar.child(self.render_video_controls(cx))
                     })
+                    .when(self.is_pdf_review(), |toolbar| {
+                        toolbar.child(self.render_pdf_controls(cx))
+                    })
                     .child(
                         // Annotation tools and video transport share one toolbar surface.
                         div()
+                            .id("annotation-tool-scroll")
                             .flex()
                             .flex_row()
+                            .max_w_full()
+                            .overflow_x_scroll()
                             .h(px(64.))
                             .px_3()
                             .gap_1()
@@ -4981,6 +5210,68 @@ impl EditorView {
             )
     }
 
+    fn render_pdf_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let page = self.pdf_page_index + 1;
+        let count = self.pdf_page_count;
+        div()
+            .id("pdf-controls")
+            .w_full()
+            .flex_shrink_0()
+            .h(px(48.0))
+            .px_4()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .border_b_1()
+            .border_color(rgba(0xffffff24))
+            .child(
+                div()
+                    .id("pdf-previous-page")
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(if self.pdf_page_index == 0 {
+                        rgb(0x777777)
+                    } else {
+                        rgb(0xffffff)
+                    })
+                    .hover(|style| style.bg(rgba(0xffffff18)))
+                    .child("Previous")
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.show_pdf_page(this.pdf_page_index as isize - 1, cx);
+                    })),
+            )
+            .child(
+                div()
+                    .min_w(px(112.0))
+                    .text_center()
+                    .text_color(rgb(0xdddddd))
+                    .text_size(px(13.0))
+                    .child(format!("Page {page} of {count}")),
+            )
+            .child(
+                div()
+                    .id("pdf-next-page")
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .cursor_pointer()
+                    .text_color(if page >= count {
+                        rgb(0x777777)
+                    } else {
+                        rgb(0xffffff)
+                    })
+                    .hover(|style| style.bg(rgba(0xffffff18)))
+                    .child("Next")
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.show_pdf_page(this.pdf_page_index as isize + 1, cx);
+                    })),
+            )
+    }
+
     /// Render the canvas area with image and annotations
     fn render_canvas(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let text_color = rgb(0xcccccc);
@@ -5020,9 +5311,15 @@ impl EditorView {
         #[cfg(not(target_os = "macos"))]
         let video_frame: Option<Arc<RenderImage>> = None;
 
-        // Add image or decoded video frame with explicit positioning so the
-        // annotation coordinate space remains identical for both subjects.
-        if let Some(frame) = video_frame {
+        let media_frame = if self.is_pdf_review() {
+            self.pdf_frame.clone()
+        } else {
+            video_frame
+        };
+
+        // Add image or decoded media frame with explicit positioning so the
+        // annotation coordinate space remains identical for every subject.
+        if let Some(frame) = media_frame {
             let (scale, offset_x, offset_y) = self.calculate_scale_and_offset();
             let scaled_width = self.image_width as f32 * scale;
             let scaled_height = self.image_height as f32 * scale;
@@ -5055,6 +5352,24 @@ impl EditorView {
                         self.video_error
                             .clone()
                             .unwrap_or_else(|| "Loading video...".to_string()),
+                    ),
+            );
+        } else if self.is_pdf_review() {
+            canvas = canvas.child(
+                div()
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(if self.pdf_error.is_some() {
+                        rgb(0xff8888)
+                    } else {
+                        rgb(0xcccccc)
+                    })
+                    .child(
+                        self.pdf_error
+                            .clone()
+                            .unwrap_or_else(|| "Loading PDF...".to_string()),
                     ),
             );
         } else if let Some(path) = &self.file_path {
@@ -5122,6 +5437,9 @@ impl EditorView {
                         !Self::video_annotation_visible(playing, self.video_current_ms, *anchor)
                     })
             {
+                continue;
+            }
+            if self.is_pdf_review() && annotation.page_index() != Some(self.pdf_page_index as u32) {
                 continue;
             }
             // If we're editing this annotation, skip rendering it - we'll render the editable version
@@ -5205,6 +5523,24 @@ impl EditorView {
                 }
                 "right" => {
                     self.step_video_frame(1, cx);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        if self.is_pdf_review()
+            && !keystroke.modifiers.platform
+            && !keystroke.modifiers.control
+            && !keystroke.modifiers.alt
+        {
+            match keystroke.key.as_str() {
+                "left" => {
+                    self.show_pdf_page(self.pdf_page_index as isize - 1, cx);
+                    return;
+                }
+                "right" => {
+                    self.show_pdf_page(self.pdf_page_index as isize + 1, cx);
                     return;
                 }
                 _ => {}
@@ -5351,7 +5687,10 @@ impl EditorView {
                 (self.image_width, self.image_height),
                 scale,
                 offset,
-                &self.annotations,
+                ToolDocumentState {
+                    annotations: &self.annotations,
+                    active_page_index: self.is_pdf_review().then_some(self.pdf_page_index as u32),
+                },
                 5.0,
             );
             self.tool_manager.handle_event(tool_event, &ctx)
@@ -5384,7 +5723,10 @@ impl EditorView {
                 (self.image_width, self.image_height),
                 scale,
                 (offset_x, offset_y),
-                &self.annotations,
+                ToolDocumentState {
+                    annotations: &self.annotations,
+                    active_page_index: self.is_pdf_review().then_some(self.pdf_page_index as u32),
+                },
                 5.0,
             );
             if let Some(text_tool) = self.tool_manager.get_tool_as_mut::<TextTool>(ToolId::Text) {
@@ -5547,6 +5889,39 @@ mod feedback_payload_tests {
 }
 
 #[cfg(test)]
+mod pdf_scroll_tests {
+    use super::pdf_scroll_page_offset;
+
+    #[test]
+    fn vertical_scroll_accumulates_before_changing_pages() {
+        let mut accumulated_y = 0.0;
+        assert_eq!(pdf_scroll_page_offset(&mut accumulated_y, 0.0, -18.0), 0);
+        assert_eq!(pdf_scroll_page_offset(&mut accumulated_y, 0.0, -22.0), 1);
+        assert_eq!(accumulated_y, 0.0);
+    }
+
+    #[test]
+    fn upward_scroll_moves_to_the_previous_page() {
+        let mut accumulated_y = 0.0;
+        assert_eq!(pdf_scroll_page_offset(&mut accumulated_y, 0.0, 40.0), -1);
+    }
+
+    #[test]
+    fn horizontal_scroll_does_not_change_pages() {
+        let mut accumulated_y = 0.0;
+        assert_eq!(pdf_scroll_page_offset(&mut accumulated_y, 50.0, -40.0), 0);
+        assert_eq!(accumulated_y, 0.0);
+    }
+
+    #[test]
+    fn reversing_direction_discards_the_previous_partial_scroll() {
+        let mut accumulated_y = -30.0;
+        assert_eq!(pdf_scroll_page_offset(&mut accumulated_y, 0.0, 25.0), 0);
+        assert_eq!(accumulated_y, 25.0);
+    }
+}
+
+#[cfg(test)]
 mod window_layout_tests {
     use super::*;
 
@@ -5570,6 +5945,21 @@ mod window_layout_tests {
         );
         assert_eq!(bounds.size, size(px(752.0), px(552.0)));
         assert_eq!(bounds.center(), display.center());
+    }
+
+    #[test]
+    fn review_window_minimum_is_large_enough_for_pdf_navigation() {
+        let large_display = Bounds::new(point(px(0.0), px(0.0)), size(px(1728.0), px(1117.0)));
+        assert_eq!(
+            minimum_window_size(Some(large_display)),
+            size(px(680.0), px(500.0))
+        );
+
+        let small_display = Bounds::new(point(px(0.0), px(0.0)), size(px(640.0), px(480.0)));
+        assert_eq!(
+            minimum_window_size(Some(small_display)),
+            size(px(592.0), px(432.0))
+        );
     }
 
     #[test]
@@ -5779,7 +6169,12 @@ impl Render for EditorView {
         let viewport_height: f32 = viewport.height.into();
         let review_rail_visible = self.collab_session.is_some() || self.claude_question.is_some();
         self.canvas_width = canvas_viewport_width(viewport_width, review_rail_visible);
-        let toolbar_safe_area = TOOLBAR_SAFE_AREA + if self.is_video_review() { 48.0 } else { 0.0 };
+        let toolbar_safe_area = TOOLBAR_SAFE_AREA
+            + if self.is_video_review() || self.is_pdf_review() {
+                48.0
+            } else {
+                0.0
+            };
         self.canvas_height =
             (viewport_height - TITLEBAR_CONTENT_INSET - toolbar_safe_area).max(1.0);
 

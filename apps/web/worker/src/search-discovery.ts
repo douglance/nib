@@ -59,6 +59,7 @@ function sitemap(origin: string): string {
   <url><loc>${origin}/</loc></url>
   <url><loc>${origin}/docs</loc></url>
   <url><loc>${origin}/pricing</loc></url>
+  <url><loc>${origin}/support</loc></url>
   <url><loc>${origin}/privacy</loc></url>
   <url><loc>${origin}/terms</loc></url>
 </urlset>
@@ -180,7 +181,7 @@ Do not call \`generate_ui\` during installation because that would consume the u
 
 ## First image and authentication
 
-Authentication is deferred until the first image so installation and discovery do not require payment. If the first \`generate_ui\` call returns \`401\`, follow ${origin}/docs#authentication to complete the user-scoped Cloudflare Access sign-in. For remote MCP, add the resulting token as \`cf-access-jwt-assertion\` with the active host's supported secret or environment mechanism. Never write the token into the skill or instruction file.
+Authentication is deferred until the first image so installation and discovery do not require payment. If the first \`generate_ui\` call returns \`401\`, follow ${origin}/docs#authentication to complete email sign-in. Never write the resulting account token into the skill or instruction file.
 `;
 }
 

@@ -1,4 +1,5 @@
 import Foundation
+import NibDomain
 
 enum NibMacConnectionState: Equatable {
     case loading
@@ -9,39 +10,84 @@ enum NibMacConnectionState: Equatable {
 @MainActor
 final class NibMacRequestStore: ObservableObject {
     @Published private(set) var requests: [NibRequest] = []
+    @Published private(set) var projects: [NibProject] = []
+    @Published private(set) var devices: [NibDevice] = []
+    @Published private(set) var activityEvents: [NibActivityEvent] = []
+    @Published private(set) var captureArtifacts: [NibMacCaptureArtifact] = []
+    @Published private(set) var notificationError: String?
     @Published private(set) var connectionState: NibMacConnectionState = .loading
 
-    private let client: NibClient
+    let client: NibClient
     private var streamTask: Task<Void, Never>?
-    private(set) var baseURLString: String
 
-    init(
-        baseURLString: String = NibDefaults.defaultBaseURLString,
-        client: NibClient? = nil
-    ) {
-        self.baseURLString = baseURLString
+    init(client: NibClient? = nil) {
         self.client = client ?? NibClient()
-        self.client.configure(baseURLString: baseURLString)
     }
 
     var activeRequests: [NibRequest] {
         requests.filter(\.isActive)
     }
 
+    var inboxRequests: [NibRequest] {
+        activeRequests
+    }
+
+    var historyRequests: [NibRequest] {
+        requests.filter(\.isMacHistoryItem)
+    }
+
+    var badges: NibMacBadgeSnapshot {
+        let inboxCount = inboxRequests.count
+        let historyCount = historyRequests.count
+        return NibMacBadgeSnapshot(
+            sidebar: [
+                .inbox: inboxCount,
+                .history: historyCount
+            ],
+            dock: inboxCount,
+            menuBar: inboxCount
+        )
+    }
+
+    var captureLibraryItems: [NibLibraryItem] {
+        captureArtifacts.map { artifact in
+            NibLibraryItem(
+                id: artifact.id,
+                name: artifact.metadata.fileName,
+                contentType: artifact.metadata.contentType,
+                bytes: Int64(artifact.metadata.bytes),
+                sha256: artifact.metadata.sha256,
+                createdAt: artifact.metadata.createdAt,
+                status: .queued,
+                lineage: nil,
+                file: nil,
+                upload: nil
+            )
+        }
+    }
+
     var baseURL: URL {
         client.baseURL
     }
 
-    func start(baseURLString: String) {
-        let normalized = baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty else { return }
-        self.baseURLString = normalized
-        client.configure(baseURLString: normalized)
+    func start() {
         streamTask?.cancel()
         connectionState = .loading
         streamTask = Task { [weak self] in
             await self?.consumeRequestEvents()
         }
+    }
+
+    func stopAndClear() {
+        streamTask?.cancel()
+        streamTask = nil
+        requests = []
+        projects = []
+        devices = []
+        activityEvents = []
+        captureArtifacts = []
+        notificationError = nil
+        connectionState = .loading
     }
 
     func reload() async {
@@ -55,20 +101,77 @@ final class NibMacRequestStore: ObservableObject {
         }
     }
 
-    func migrateLegacyCredentialIfNeeded() async throws {
-        try await client.migrateLegacyCredentialIfNeeded(name: Host.current().localizedName ?? "Nib Mac", platform: "macos")
+    func reloadDashboard() async {
+        async let nextProjects = loadProjects()
+        async let nextDevices = loadDevices()
+        async let nextActivity = loadActivity()
+
+        let values = await (nextProjects, nextDevices, nextActivity)
+        projects = values.0
+        devices = values.1
+        activityEvents = values.2
+    }
+
+    func reloadAll() async {
+        await reload()
+        await reloadDashboard()
+    }
+
+    func applyPreviewState(
+        requests: [NibRequest],
+        projects: [NibProject] = [],
+        devices: [NibDevice] = [],
+        activityEvents: [NibActivityEvent] = [],
+        connectionState: NibMacConnectionState = .live
+    ) {
+        streamTask?.cancel()
+        self.requests = requests.sorted { $0.updatedAt > $1.updatedAt }
+        self.projects = projects
+        self.devices = devices
+        self.activityEvents = activityEvents
+        self.connectionState = connectionState
     }
 
     func authStatus() async throws -> NibAuthStatus {
         try await client.authStatus()
     }
 
-    func redeemPairing(code: String) async throws -> NibAuthStatus {
-        try await client.redeemPairing(
-            code: code,
-            name: Host.current().localizedName ?? "Nib Mac",
-            platform: "macos"
+    func registerMacPushDevice(token: Data, topic: String?) async {
+        let tokenString = token.map { String(format: "%02x", $0) }.joined()
+        do {
+            let device = try await client.registerDevice(
+                name: Host.current().localizedName ?? "Nib Mac",
+                token: tokenString,
+                platform: "macos",
+                apnsTopic: topic,
+                capabilities: ["requests", "visual-review", "capture"]
+            )
+            NibDefaults.rememberRegisteredDevice(device)
+            notificationError = nil
+            await reloadDashboard()
+        } catch {
+            notificationError = "Could not register this Mac for Nib notifications: \(error.localizedDescription)"
+        }
+    }
+
+    func setNotificationRegistrationError(_ error: Error) {
+        notificationError = "Could not register this Mac for Nib notifications: \(error.localizedDescription)"
+    }
+
+    func respondToNotification(
+        requestID: String,
+        choiceIndex: Int? = nil,
+        text: String? = nil,
+        idempotencyKey: String = UUID().uuidString
+    ) async throws -> NibRequest {
+        let request = try await client.respond(
+            requestId: requestID,
+            text: text,
+            choiceIndex: choiceIndex,
+            idempotencyKey: idempotencyKey
         )
+        apply(NibRequestSocketEvent(type: "request", action: "responded", request: request))
+        return request
     }
 
     func apply(_ event: NibRequestSocketEvent) {
@@ -78,23 +181,36 @@ final class NibMacRequestStore: ObservableObject {
         requests.sort { $0.updatedAt > $1.updatedAt }
     }
 
+    func recordCaptureArtifact(_ artifact: NibMacCaptureArtifact) {
+        captureArtifacts.removeAll { $0.id == artifact.id }
+        captureArtifacts.insert(artifact, at: 0)
+    }
+
     func reviewURL(for request: NibRequest) -> URL? {
         URL(string: "/r/\(request.id)", relativeTo: baseURL)?.absoluteURL
     }
 
+    func requestURL(for requestID: String) -> URL? {
+        URL(string: "/r/\(requestID)", relativeTo: baseURL)?.absoluteURL
+    }
+
+    func projectURL(for project: NibProject) -> URL? {
+        URL(string: project.openPath, relativeTo: baseURL)?.absoluteURL
+    }
+
     private func consumeRequestEvents() async {
         var reconnectAttempt = 0
-        await reload()
+        await reloadAll()
 
         while !Task.isCancelled {
-            await reload()
+            await reloadAll()
             do {
                 for try await event in client.requestEvents() {
                     try Task.checkCancellation()
                     if event.type == "ready" {
                         reconnectAttempt = 0
                         connectionState = .live
-                        await reload()
+                        await reloadAll()
                     } else if event.type == "request" {
                         apply(event)
                         connectionState = .live
@@ -116,5 +232,17 @@ final class NibMacRequestStore: ObservableObject {
                 return
             }
         }
+    }
+
+    private func loadProjects() async -> [NibProject] {
+        (try? await client.projects()) ?? projects
+    }
+
+    private func loadDevices() async -> [NibDevice] {
+        (try? await client.devices()) ?? devices
+    }
+
+    private func loadActivity() async -> [NibActivityEvent] {
+        (try? await client.activity()) ?? activityEvents
     }
 }

@@ -1,11 +1,11 @@
 import Foundation
+import CryptoKit
+import NibNotifications
 import Security
 
 enum NibDefaults {
-    static let defaultBaseURLString = "https://nib-global.doug-lance.workers.dev"
+    static let defaultBaseURLString = "https://nibtool.com"
     static let registeredDeviceIDKey = "nib.registeredDeviceID"
-    static let authTokenKey = "nib.authToken"
-    static let bootstrapAuthTokenKey = "nib.bootstrapAuthToken"
 
     static var registeredDeviceID: String? {
         UserDefaults.standard.string(forKey: registeredDeviceIDKey)
@@ -22,21 +22,11 @@ enum NibDefaults {
 }
 
 enum NibCredentialStore {
-    private static let service = "com.douglance.nib.auth"
+    private static let keyPrefix = "nib.localSession."
 
     static func token(for portal: URL) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account(for: portal),
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data,
-              let token = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let token = UserDefaults.standard.string(forKey: key(for: portal))?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
               !token.isEmpty else {
             return nil
         }
@@ -48,75 +38,66 @@ enum NibCredentialStore {
         guard !value.isEmpty else {
             throw NSError(
                 domain: "NibCredentialStore",
-                code: Int(errSecParam),
+                code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "The Nib credential is empty."]
             )
         }
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account(for: portal)
-        ]
-        let attributes: [String: Any] = [
-            kSecValueData as String: Data(value.utf8),
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        ]
-        let updateStatus = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if updateStatus == errSecSuccess { return }
-        guard updateStatus == errSecItemNotFound else {
-            throw keychainError(updateStatus)
-        }
-        var item = query
-        attributes.forEach { item[$0.key] = $0.value }
-        let addStatus = SecItemAdd(item as CFDictionary, nil)
-        guard addStatus == errSecSuccess else { throw keychainError(addStatus) }
+        UserDefaults.standard.set(value, forKey: key(for: portal))
     }
 
     @discardableResult
     static func remove(for portal: URL) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account(for: portal)
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        return status == errSecSuccess || status == errSecItemNotFound
+        UserDefaults.standard.removeObject(forKey: key(for: portal))
+        return true
     }
 
-    private static func account(for portal: URL) -> String {
+    private static func key(for portal: URL) -> String {
         var value = (portal.host() ?? portal.absoluteString).lowercased()
         if let port = portal.port { value += ":\(port)" }
-        return value
-    }
-
-    private static func keychainError(_ status: OSStatus) -> NSError {
-        NSError(
-            domain: "NibCredentialStore",
-            code: Int(status),
-            userInfo: [
-                NSLocalizedDescriptionKey: SecCopyErrorMessageString(status, nil) as String?
-                    ?? "Keychain returned \(status)."
-            ]
-        )
+        return keyPrefix + value
     }
 }
 
-struct NibAuthStatus: Codable, Hashable {
+struct NibAuthStatus: Decodable, Hashable {
+    struct Account: Decodable, Hashable {
+        var id: String
+        var email: String
+    }
+
+    struct Session: Decodable, Hashable {
+        var id: String
+        var name: String
+        var platform: String
+    }
+
     var authenticated: Bool
-    var kind: String
-    var subject: String
-    var name: String
-    var platform: String
-    var scopes: [String]
+    var account: Account
+    var session: Session
+    var kind: String { "session" }
+    var subject: String { account.id }
+    var name: String { session.name }
+    var platform: String { session.platform }
+    var scopes: [String] { [] }
 }
 
 struct NibAuthLogout: Codable, Hashable {
     var revoked: Bool
 }
 
+struct NibAccountDeletion: Codable, Hashable {
+    var deleted: Bool
+}
+
+struct NibPendingSignIn: Codable, Hashable {
+    var challengeId: String
+    var verifier: String
+    var expiresAt: Date
+    var email: String
+}
+
 @MainActor
 final class NibClient: ObservableObject {
-    var baseURL: URL
+    let baseURL: URL
     private let session: URLSession
 
     init(baseURL: URL = URL(string: NibDefaults.defaultBaseURLString)!, session: URLSession = .shared) {
@@ -124,24 +105,56 @@ final class NibClient: ObservableObject {
         self.session = session
     }
 
-    func configure(baseURLString: String) {
-        guard let next = URL(string: baseURLString.trimmingCharacters(in: .whitespacesAndNewlines)) else {
-            return
-        }
-        baseURL = next
-    }
-
     func authStatus() async throws -> NibAuthStatus {
-        try await get("/api/auth/status")
+        try await get("/api/auth/session")
     }
 
-    func redeemPairing(code: String, name: String, platform: String) async throws -> NibAuthStatus {
-        let issued: NibIssuedCredential = try await postUnauthenticated(
-            "/api/auth/pairings/redeem",
-            body: PairingBody(code: code, name: name, platform: platform)
+    func beginEmailSignIn(email: String, name: String, platform: String) async throws -> NibPendingSignIn {
+        let verifier = Self.pkceVerifier()
+        let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncodedString()
+        let response: NibAuthChallenge = try await postUnauthenticated(
+            "/api/auth/challenges",
+            body: NibAuthChallengeBody(
+                email: email.trimmingCharacters(in: .whitespacesAndNewlines),
+                pkceChallenge: challenge,
+                platform: platform,
+                deviceName: name
+            )
         )
+        return NibPendingSignIn(
+            challengeId: response.challengeId,
+            verifier: verifier,
+            expiresAt: ISO8601DateFormatter().date(from: response.expiresAt) ?? Date().addingTimeInterval(600),
+            email: email.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    func pollEmailSignIn(_ pending: NibPendingSignIn) async throws -> NibAuthStatus? {
+        var request = URLRequest(url: url("/api/auth/challenges/\(pending.challengeId)/token"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = try JSONEncoder().encode(NibAuthTokenBody(verifier: pending.verifier))
+        let (data, response) = try await session.data(for: request)
+        if (response as? HTTPURLResponse)?.statusCode == 202 { return nil }
+        try validate(response: response, data: data)
+        let issued = try JSONDecoder().decode(NibIssuedCredential.self, from: data)
         try NibCredentialStore.store(issued.token, for: baseURL)
         return try await authStatus()
+    }
+
+    func redeemEmailSignInCode(_ code: String, pending: NibPendingSignIn) async throws -> NibAuthStatus {
+        let _: NibAuthVerification = try await postUnauthenticated(
+            "/api/auth/challenges/\(pending.challengeId)/verify",
+            body: NibAuthCodeBody(code: code)
+        )
+        guard let status = try await pollEmailSignIn(pending) else {
+            throw NSError(
+                domain: "NibClient",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "The sign-in code could not be completed."]
+            )
+        }
+        return status
     }
 
     func logout() async throws -> NibAuthLogout {
@@ -149,22 +162,14 @@ final class NibClient: ObservableObject {
         return try await post("/api/auth/logout", body: EmptyBody())
     }
 
-    func migrateLegacyCredentialIfNeeded(name: String, platform: String) async throws {
-        guard NibCredentialStore.token(for: baseURL) == nil else { return }
-        let defaults = UserDefaults.standard
-        let legacy = [NibDefaults.authTokenKey, NibDefaults.bootstrapAuthTokenKey]
-            .compactMap { defaults.string(forKey: $0) }
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty }
-        guard let legacy else { return }
-        let issued: NibIssuedCredential = try await postUnauthenticated(
-            "/api/auth/exchange",
-            body: AuthExchangeBody(name: name, platform: platform),
-            bearer: legacy
-        )
-        try NibCredentialStore.store(issued.token, for: baseURL)
-        defaults.removeObject(forKey: NibDefaults.authTokenKey)
-        defaults.removeObject(forKey: NibDefaults.bootstrapAuthTokenKey)
+    func deleteAccount() async throws -> NibAccountDeletion {
+        defer { NibCredentialStore.remove(for: baseURL) }
+        var request = URLRequest(url: url("/api/account"))
+        request.httpMethod = "DELETE"
+        authorize(&request)
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+        return try JSONDecoder().decode(NibAccountDeletion.self, from: data)
     }
 
     func requests() async throws -> [NibRequest] {
@@ -343,7 +348,8 @@ final class NibClient: ObservableObject {
         choiceIndex: Int? = nil,
         decision: String? = nil,
         comment: String? = nil,
-        annotations: [NibReviewAnnotation]? = nil
+        annotations: [NibReviewAnnotation]? = nil,
+        idempotencyKey: String = UUID().uuidString
     ) async throws -> NibRequest {
         try await post(
             "/api/requests/\(requestId)/respond",
@@ -354,8 +360,10 @@ final class NibClient: ObservableObject {
                 decision: decision,
                 comment: comment,
                 annotations: annotations,
-                deviceId: NibDefaults.registeredDeviceID
-            )
+                deviceId: NibDefaults.registeredDeviceID,
+                idempotencyKey: idempotencyKey
+            ),
+            headers: ["idempotency-key": idempotencyKey]
         )
     }
 
@@ -364,6 +372,7 @@ final class NibClient: ObservableObject {
         token: String,
         platform: String,
         apnsTopic: String?,
+        apnsEnvironment: String? = NibNotificationContract.apnsEnvironment,
         capabilities: [String]
     ) async throws -> NibDevice {
         try await post(
@@ -374,6 +383,7 @@ final class NibClient: ObservableObject {
                 pushKind: "apns",
                 token: token,
                 apnsTopic: apnsTopic,
+                apnsEnvironment: apnsEnvironment,
                 capabilities: capabilities
             )
         )
@@ -410,10 +420,17 @@ final class NibClient: ObservableObject {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
-    private func post<T: Decodable, Body: Encodable>(_ path: String, body: Body) async throws -> T {
+    private func post<T: Decodable, Body: Encodable>(
+        _ path: String,
+        body: Body,
+        headers: [String: String] = [:]
+    ) async throws -> T {
         var request = URLRequest(url: url(path))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
         request.httpBody = try JSONEncoder().encode(body)
         authorize(&request)
         let (data, response) = try await session.data(for: request)
@@ -484,6 +501,13 @@ final class NibClient: ObservableObject {
         value.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? value
     }
 
+    private static func pkceVerifier() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        precondition(status == errSecSuccess, "Secure random generation failed")
+        return Data(bytes).base64URLEncodedString()
+    }
+
     private func yieldCommandEvent(
         dataLines: [String],
         continuation: AsyncThrowingStream<NibCommandEvent, Error>.Continuation
@@ -509,6 +533,7 @@ private struct ResponseBody: Encodable {
     var comment: String?
     var annotations: [NibReviewAnnotation]?
     var deviceId: String?
+    var idempotencyKey: String
 }
 
 private struct DeviceBody: Encodable {
@@ -517,6 +542,7 @@ private struct DeviceBody: Encodable {
     var pushKind: String
     var token: String
     var apnsTopic: String?
+    var apnsEnvironment: String?
     var capabilities: [String]
 }
 
@@ -542,17 +568,39 @@ private struct RouteBody: Encodable {
 
 private struct EmptyBody: Encodable {}
 
-private struct PairingBody: Encodable {
-    var code: String
-    var name: String
+private struct NibAuthChallengeBody: Encodable {
+    var email: String
+    var pkceChallenge: String
     var platform: String
+    var deviceName: String
 }
 
-private struct AuthExchangeBody: Encodable {
-    var name: String
-    var platform: String
+private struct NibAuthChallenge: Decodable {
+    var challengeId: String
+    var expiresAt: String
+}
+
+private struct NibAuthTokenBody: Encodable {
+    var verifier: String
+}
+
+private struct NibAuthCodeBody: Encodable {
+    var code: String
+}
+
+private struct NibAuthVerification: Decodable {
+    var verified: Bool
 }
 
 private struct NibIssuedCredential: Decodable {
     var token: String
+}
+
+private extension Data {
+    func base64URLEncodedString() -> String {
+        base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
 }

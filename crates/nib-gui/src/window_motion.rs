@@ -71,7 +71,7 @@ static EXIT_GUARD: ExitGuard = ExitGuard::new();
 mod macos {
     use super::*;
     use block2::RcBlock;
-    use objc2::{rc::Retained, runtime::AnyObject, MainThreadMarker};
+    use objc2::{rc::Retained, runtime::AnyObject, MainThreadMarker, Message};
     use objc2_app_kit::{
         NSAnimatablePropertyContainer, NSAnimationContext, NSApplication, NSWindow, NSWorkspace,
     };
@@ -116,10 +116,8 @@ mod macos {
 
     fn current_window() -> Option<Retained<NSWindow>> {
         let main_thread = MainThreadMarker::new()?;
-        NSApplication::sharedApplication(main_thread)
-            .windows()
-            .iter()
-            .next()
+        let application = NSApplication::sharedApplication(main_thread);
+        application.keyWindow().or_else(|| application.mainWindow())
     }
 
     fn animate_to(
@@ -176,11 +174,16 @@ mod macos {
             ENTER_PHASE_SECONDS,
         );
 
+        let rebound_window = window.retain();
         let rebound = RcBlock::new(move || {
-            if let Some(window) = current_window() {
-                clear_window_blur(&window);
-                animate_to(&window, resting_frame, 1.0, ENTER_PHASE_SECONDS, None);
-            }
+            clear_window_blur(&rebound_window);
+            animate_to(
+                &rebound_window,
+                resting_frame,
+                1.0,
+                ENTER_PHASE_SECONDS,
+                None,
+            );
         });
         animate_to(
             window,

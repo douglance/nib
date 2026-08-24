@@ -3,6 +3,7 @@ export function isPublicPage(pathname: string): boolean {
     pathname === "/" ||
     pathname === "/docs" ||
     pathname === "/pricing" ||
+    pathname === "/support" ||
     pathname === "/privacy" ||
     pathname === "/terms" ||
     pathname.startsWith("/assets/")
@@ -14,7 +15,7 @@ export function isSiteAsset(pathname: string): boolean {
 }
 
 export function isPrivatePage(pathname: string): boolean {
-  return pathname === "/account";
+  return pathname === "/account" || pathname === "/account/delete";
 }
 
 export function isPublicDiscovery(pathname: string): boolean {

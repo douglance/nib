@@ -43,6 +43,7 @@ pub mod gui;
 pub mod media;
 #[cfg(feature = "ocr")]
 pub mod ocr;
+pub mod pdf;
 pub mod storage;
 
 // Re-export serialization types from nib-serde for use without gui feature

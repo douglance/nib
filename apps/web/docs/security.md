@@ -2,9 +2,7 @@
 
 ## Trust boundary
 
-The current image-execution boundary verifies Cloudflare Access assertions. [`worker/src/access.ts`](../worker/src/access.ts) validates `Cf-Access-Jwt-Assertion` with the team JWKS, issuer, and application audience. Interactive users are keyed by the verified `email` claim; service tokens are keyed by their verified `common_name` client ID. [`worker/src/index.ts`](../worker/src/index.ts) removes any inbound `x-nib-tenant` header and replaces it with the verified identity before invoking Worker-native MCP or generation code.
-
-Cloudflare Zero Trust is reserved for owner/admin and dogfood access. The current Standard seat is not a scalable customer identity system. Customer generation must remain closed until a separate customer sign-up and credential flow is implemented and tested.
+The public Worker authenticates one passwordless email account. A one-time email link verifies the address; PKCE binds the link to the initiating client. D1 stores hashed challenges and session tokens, and every product record is keyed by a UUID account ID. The public Worker strips caller-supplied trusted headers before forwarding review traffic through the private `REVIEW` service binding.
 
 Unauthenticated MCP traffic is limited to `initialize`, `notifications/initialized`, `ping`, and `tools/list`. The Worker strips all caller-supplied trusted-context headers before forwarding those discovery requests. `tools/call` and every generation path require a valid tenant assertion and otherwise receive `401`, so public installation and tool discovery cannot invoke the model or consume credits.
 
@@ -19,9 +17,15 @@ There is no production Container. The Worker holds Cloudflare bindings and Wrang
 | Generated image | Private R2 artifact | Trial 1 day; Default 7 days; High 30 days |
 | Job metadata | D1 | Operational/billing record |
 | Usage event | D1 and Stripe | Billing record |
+| Magic-link challenge | D1, token hashed | 10 minutes; one use |
+| Account session | D1, token hashed; client token in cookie or Keychain | Until sign-out or revocation |
+| Account identity | D1 UUID and verified email | Until account deletion |
+| Review files, history, and devices | Account Durable Object and private R2 objects | Until account deletion |
 | Stripe secret/webhook secret | Wrangler secret | Until rotated |
 
 Artifact downloads query D1 with both job ID and tenant ID before reading R2. Artifact responses are `private` and have a five-minute browser cache lifetime.
+
+Account deletion removes billing access before product data. It deletes the Stripe customer, writes a non-personal UUID deletion tombstone, purges account-scoped R2 prefixes and Durable Object state, removes authentication and product rows, and expires the current cookie or Keychain credential. The review Durable Object retains only a deletion tombstone so late requests cannot recreate data under the deleted account ID.
 
 ## AI privacy
 
@@ -41,6 +45,6 @@ Every AI call skips AI Gateway cache and requests no AI Gateway log collection. 
 - Production subscription gate after the trial is consumed or for Standard, Pro, and background work.
 - Private artifacts and tenant-scoped keys.
 - Stripe webhook HMAC verification with timestamp tolerance and event idempotency.
-- Cloudflare Access JWT signature, issuer, audience, expiry, and stable-claim validation.
+- One-time email challenge, PKCE verification, hashed session token, and explicit revocation.
 
 Before launch, add a Cloudflare WAF request-body rule aligned with these application limits so oversized requests are rejected before Worker execution.

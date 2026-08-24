@@ -128,7 +128,11 @@ pub fn sidecar_to_annotation(serialized: &SerializedAnnotation) -> Option<Annota
         _ => return None,
     };
 
-    Some(Annotation::new(annotation_type).with_color(color))
+    Some(
+        Annotation::new(annotation_type)
+            .with_color(color)
+            .with_page_index(serialized.page_index),
+    )
 }
 
 /// Convert a core Annotation to SerializedAnnotation (sidecar format)
@@ -246,6 +250,7 @@ pub fn annotation_to_sidecar(annotation: &Annotation) -> SerializedAnnotation {
         annotation_type,
         geometry,
         color: format_color_hex(&annotation.color),
+        page_index: annotation.page_index(),
         // This module's sidecar<->core conversion is a separate, pre-existing path from
         // nib-serde's serialize_annotation/deserialize_annotation (used by the GUI's save/load
         // flow) and is out of scope for the Phase 1 sidecar fidelity fix, which targets
@@ -359,6 +364,7 @@ mod tests {
                 height: 50.0,
             },
             color: "#ff0000".to_string(),
+            page_index: None,
             style: SerializedStyle::default(),
         };
 
@@ -384,6 +390,7 @@ mod tests {
                 end_y: 100.0,
             },
             color: "#00ff00".to_string(),
+            page_index: None,
             style: SerializedStyle::default(),
         };
 

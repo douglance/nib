@@ -39,8 +39,8 @@ apps:
 make ship-everywhere
 ```
 
-The defaults target the primary Cloudflare deployment. Override `NIB_BIN_DIR`,
-`NIB_PORTAL_HEALTH_URL`, `NIB_MAC_APP_DIR`, `NIB_IOS_DESTINATION_ID`, `NIB_IOS_DEVICE_ID`,
+The defaults target Nib Cloud. Override `NIB_BIN_DIR`, `NIB_MAC_APP_DIR`,
+`NIB_IOS_DESTINATION_ID`, `NIB_IOS_DEVICE_ID`,
 `NIB_WATCH_DEVICE_ID`, or `NIB_APPLE_TEAM_ID` when shipping from another Mac,
 server, or device. Cloudflare Durable Objects preserve request state and R2
 preserves review media. The Watch app is always embedded in the installed iPhone
@@ -148,12 +148,11 @@ character-art fallback. It supports true SSH, but rejects vmux/mosh because
 mosh synchronizes terminal cell state rather than forwarding graphics control
 sequences.
 
-Durable review uses `https://nib-global.doug-lance.workers.dev` by default.
-Override it with `NIB_PORTAL_URL` for another deployment or local development
-server. Run `nib auth login` once to exchange `NIB_AUTH_TOKEN` for a scoped
-credential in macOS Keychain. `NIB_AUTH_TOKEN` remains an explicit bootstrap or
-automation override and should not be stored in an app or shell profile. Run
-`nib auth pair` to enroll native Apple clients with a 10-minute, one-time code.
+Durable review uses the fixed `https://nibtool.com` service. Run
+`nib auth login you@example.com` once and open the emailed sign-in link. The CLI
+stores the resulting account session in macOS Keychain. `NIB_AUTH_TOKEN` remains
+an explicit automation override and should not be stored in an app or shell
+profile. Native Apple clients use the same email sign-in flow.
 The CLI publishes the preview and canonical `.nib` together, prints the
 versioned response JSON, and merges returned annotations into the originating
 `.nib` file.

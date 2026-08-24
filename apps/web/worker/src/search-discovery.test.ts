@@ -19,6 +19,7 @@ describe("search and agent discovery", () => {
     expect(response?.headers.get("content-type")).toContain("application/xml");
     const body = await response?.text();
     expect(body).toContain(`<loc>${ORIGIN}/docs</loc>`);
+    expect(body).toContain(`<loc>${ORIGIN}/support</loc>`);
     expect(body).not.toContain("/account");
     expect(body).not.toContain("/mcp");
   });

@@ -13,10 +13,10 @@ use nib_core::{
     Annotation, AnnotationId, AnnotationType, ArrowHead, AssetData, BlurIntensity, Color, Point,
     Region, Severity, StorageError, StrokeStyle, TextAlign,
 };
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Current schema version - increment when schema changes
@@ -47,7 +47,8 @@ pub struct OcrCacheEntry {
 /// A .nib file handle
 pub struct NibFile {
     conn: Connection,
-    path: std::path::PathBuf,
+    path: PathBuf,
+    read_only: bool,
 }
 
 impl NibFile {
@@ -83,6 +84,7 @@ impl NibFile {
         let nib_file = Self {
             conn,
             path: path.to_path_buf(),
+            read_only: false,
         };
 
         nib_file.init_schema()?;
@@ -101,16 +103,76 @@ impl NibFile {
         Ok(nib_file)
     }
 
-    /// Open an existing .nib file
+    /// Open an existing .nib file read-only.
     pub fn open(path: &Path) -> StorageResult<Self> {
         if !path.exists() {
             return Err(StorageError::NotFound(path.display().to_string()));
         }
 
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        let nib_file = Self {
+            conn,
+            path: path.to_path_buf(),
+            read_only: true,
+        };
+
+        nib_file.set_read_pragmas()?;
+        nib_file.validate_schema()?;
+
+        Ok(nib_file)
+    }
+
+    /// Create a writable derivative of an existing .nib file and open that derivative.
+    pub fn open_editable_derivative(source_path: &Path) -> StorageResult<Self> {
+        if !source_path.exists() {
+            return Err(StorageError::NotFound(source_path.display().to_string()));
+        }
+
+        let derivative_path = next_derivative_path(source_path)?;
+        if let Some(parent) = derivative_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let source_sha256 = sha256_file(source_path)?;
+        let source_file_id = file_id(source_path).ok();
+        let source = Connection::open_with_flags(
+            source_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        source.execute(
+            "VACUUM main INTO ?1",
+            params![derivative_path.to_string_lossy()],
+        )?;
+        drop(source);
+
+        let derivative = Self::open_writable_existing(&derivative_path)?;
+        derivative.set_metadata("derived_from_path", &source_path.to_string_lossy())?;
+        derivative.set_metadata("derived_from_sha256", &source_sha256)?;
+        if let Some(file_id) = source_file_id {
+            derivative.set_metadata("derived_from_file_id", &file_id)?;
+        }
+        derivative.save()?;
+
+        Ok(derivative)
+    }
+
+    /// Open a .nib for editing without mutating an original source file.
+    ///
+    /// Every existing .nib is treated as immutable input, including prior
+    /// derivatives. Editing always starts from a fresh derivative copy.
+    pub fn open_editable(path: &Path) -> StorageResult<Self> {
+        Self::open_editable_derivative(path)
+    }
+
+    fn open_writable_existing(path: &Path) -> StorageResult<Self> {
         let conn = Connection::open(path)?;
         let nib_file = Self {
             conn,
             path: path.to_path_buf(),
+            read_only: false,
         };
 
         nib_file.set_pragmas()?;
@@ -124,6 +186,7 @@ impl NibFile {
     ///
     /// With WAL mode, most writes are already durable. This performs a checkpoint.
     pub fn save(&self) -> StorageResult<()> {
+        self.ensure_writable()?;
         self.conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);")?;
         Ok(())
     }
@@ -158,6 +221,7 @@ impl NibFile {
 
     /// Add an annotation and return its ID (e.g., "a1", "a2")
     pub fn add_annotation(&self, annotation: &Annotation) -> StorageResult<String> {
+        self.ensure_writable()?;
         // Get next annotation number
         let max_num: Option<i64> = self
             .conn
@@ -329,6 +393,7 @@ impl NibFile {
 
     /// Update an existing annotation
     pub fn update_annotation(&self, id: &str, annotation: &Annotation) -> StorageResult<()> {
+        self.ensure_writable()?;
         let type_name = annotation.annotation_type.type_name();
         let data_json = serialize_annotation_data(&annotation.annotation_type)?;
         let color_hex = color_to_hex(&annotation.color);
@@ -358,6 +423,7 @@ impl NibFile {
     ///
     /// Returns true if the annotation was deleted, false if it didn't exist
     pub fn delete_annotation(&self, id: &str) -> StorageResult<bool> {
+        self.ensure_writable()?;
         let rows_affected = self
             .conn
             .execute("DELETE FROM annotations WHERE id = ?1", params![id])?;
@@ -374,6 +440,7 @@ impl NibFile {
 
     /// Set the original path metadata
     pub fn set_original_path(&self, path: &str) -> StorageResult<()> {
+        self.ensure_writable()?;
         self.conn.execute(
             "UPDATE image SET original_path = ?1 WHERE id = 1",
             params![path],
@@ -396,6 +463,7 @@ impl NibFile {
 
     /// Set a metadata value
     pub fn set_metadata(&self, key: &str, value: &str) -> StorageResult<()> {
+        self.ensure_writable()?;
         self.conn.execute(
             r#"
             INSERT INTO metadata (key, value) VALUES (?1, ?2)
@@ -408,6 +476,7 @@ impl NibFile {
 
     /// Update session information (for GUI/CLI coordination)
     pub fn update_session(&self, gui_pid: Option<u32>) -> StorageResult<()> {
+        self.ensure_writable()?;
         let now = system_time_to_unix(SystemTime::now());
 
         self.conn.execute(
@@ -425,6 +494,7 @@ impl NibFile {
 
     /// Clear session (GUI closed)
     pub fn clear_session(&self) -> StorageResult<()> {
+        self.ensure_writable()?;
         self.conn.execute("DELETE FROM session WHERE id = 1", [])?;
         Ok(())
     }
@@ -449,6 +519,7 @@ impl NibFile {
 
     /// Cache OCR results for a region (None = full image)
     pub fn cache_ocr(&self, region: Option<&str>, entries: &[OcrCacheEntry]) -> StorageResult<()> {
+        self.ensure_writable()?;
         // Clear existing cache for this region first
         self.clear_ocr_cache(region)?;
 
@@ -526,6 +597,7 @@ impl NibFile {
 
     /// Clear OCR cache (all or specific region)
     pub fn clear_ocr_cache(&self, region: Option<&str>) -> StorageResult<()> {
+        self.ensure_writable()?;
         match region {
             Some(r) => {
                 self.conn
@@ -541,6 +613,7 @@ impl NibFile {
 
     /// Clear all OCR cache entries
     pub fn clear_all_ocr_cache(&self) -> StorageResult<()> {
+        self.ensure_writable()?;
         self.conn.execute("DELETE FROM ocr_cache", [])?;
         Ok(())
     }
@@ -572,6 +645,7 @@ impl NibFile {
         region: Option<&str>,
         metadata: &serde_json::Value,
     ) -> StorageResult<()> {
+        self.ensure_writable()?;
         // Clear existing cache for this spacing/region first
         self.conn.execute(
             r#"
@@ -627,6 +701,7 @@ impl NibFile {
 
     /// Clear grid cache
     pub fn clear_grid_cache(&self) -> StorageResult<()> {
+        self.ensure_writable()?;
         self.conn.execute("DELETE FROM grid_cache", [])?;
         Ok(())
     }
@@ -635,6 +710,7 @@ impl NibFile {
 
     /// Cache rendered image
     pub fn cache_render(&self, data: &[u8], annotations_hash: &str) -> StorageResult<()> {
+        self.ensure_writable()?;
         let now = system_time_to_unix(SystemTime::now());
 
         self.conn.execute(
@@ -710,6 +786,7 @@ impl NibFile {
 
     /// Clear render cache
     pub fn clear_render_cache(&self) -> StorageResult<()> {
+        self.ensure_writable()?;
         self.conn.execute("DELETE FROM render_cache", [])?;
         Ok(())
     }
@@ -726,6 +803,26 @@ impl NibFile {
             PRAGMA cache_size = -2000;
             "#,
         )?;
+        Ok(())
+    }
+
+    fn set_read_pragmas(&self) -> StorageResult<()> {
+        self.conn.execute_batch(
+            r#"
+            PRAGMA query_only = ON;
+            PRAGMA foreign_keys = ON;
+            PRAGMA cache_size = -2000;
+            "#,
+        )?;
+        Ok(())
+    }
+
+    fn ensure_writable(&self) -> StorageResult<()> {
+        if self.read_only {
+            return Err(StorageError::Database(
+                "read-only .nib handle; open an editable derivative before writing".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -948,6 +1045,7 @@ impl NibFile {
     /// Store an asset's bytes, keyed by content hash. Idempotent: storing the
     /// same hash again (identical bytes, by construction) overwrites in place.
     pub fn add_asset(&self, hash: &str, data: &AssetData) -> StorageResult<()> {
+        self.ensure_writable()?;
         self.conn.execute(
             "INSERT OR REPLACE INTO assets (hash, bytes, format, width, height) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![hash, data.bytes, data.format, data.width, data.height],
@@ -1004,6 +1102,7 @@ impl NibFile {
 
     /// Add a message (for toast display in GUI)
     pub fn add_message(&self, content: &str, source: &str) -> StorageResult<i64> {
+        self.ensure_writable()?;
         let now = system_time_to_unix(SystemTime::now());
         self.conn.execute(
             "INSERT INTO messages (content, source, created_at) VALUES (?1, ?2, ?3)",
@@ -1014,6 +1113,7 @@ impl NibFile {
 
     /// Get unread messages and mark them as read
     pub fn get_and_mark_messages_read(&self) -> StorageResult<Vec<(i64, String, String, i64)>> {
+        self.ensure_writable()?;
         let mut stmt = self.conn.prepare(
             "SELECT id, content, source, created_at FROM messages WHERE read = 0 ORDER BY created_at",
         )?;
@@ -1469,7 +1569,8 @@ fn row_to_annotation(row: AnnotationRow) -> StorageResult<Annotation> {
         annotation_type,
         color,
         severity: Severity::None, // Not stored in DB; could be derived from color
-        label: None,              // Not stored separately; embedded in Text annotations
+        page_index: nib_core::AnnotationPageIndex::default(),
+        label: None, // Not stored separately; embedded in Text annotations
         visible: row.visible != 0,
         locked: row.locked != 0,
         z_index: row.z_index,
@@ -1572,6 +1673,58 @@ fn string_to_blur_intensity(s: &str) -> BlurIntensity {
         "pixelate" => BlurIntensity::Pixelate,
         _ => BlurIntensity::Medium,
     }
+}
+
+fn next_derivative_path(source_path: &Path) -> StorageResult<PathBuf> {
+    let parent = source_path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = source_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| {
+            StorageError::InvalidFormat(format!(
+                "Cannot derive editable path from: {}",
+                source_path.display()
+            ))
+        })?;
+
+    let first = parent.join(format!("{stem}.edit.nib"));
+    if !first.exists() {
+        return Ok(first);
+    }
+
+    for attempt in 1.. {
+        let candidate = parent.join(format!("{stem}.edit-{attempt}.nib"));
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    unreachable!("unbounded derivative path search must return");
+}
+
+fn sha256_file(path: &Path) -> StorageResult<String> {
+    let bytes = std::fs::read(path)?;
+    Ok(format!("{:x}", Sha256::digest(&bytes)))
+}
+
+#[cfg(unix)]
+fn file_id(path: &Path) -> StorageResult<String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::metadata(path)?;
+    Ok(format!("{}:{}", metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(unix))]
+fn file_id(path: &Path) -> StorageResult<String> {
+    let metadata = std::fs::metadata(path)?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    Ok(format!("len:{}:modified:{}", metadata.len(), modified))
 }
 
 fn system_time_to_unix(time: SystemTime) -> i64 {
@@ -1766,8 +1919,9 @@ mod tests {
     #[test]
     fn test_pre_assets_schema_file_still_opens_and_migrates() {
         // Simulate a .nib file written before the `assets` table existed:
-        // only `schema_version` (v1) -- `NibFile::open` must still succeed
-        // and the migration must add `assets` so add_asset/get_asset work.
+        // only `schema_version` (v1). Read-only `NibFile::open` must not
+        // migrate in place; the writable path used after derivative copy must
+        // add `assets` so add_asset/get_asset work.
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("pre_assets.nib");
         {
@@ -1781,7 +1935,8 @@ mod tests {
                 .unwrap();
         }
 
-        let nib = NibFile::open(&path).expect("pre-assets .nib file must still open");
+        let nib =
+            NibFile::open_writable_existing(&path).expect("pre-assets derivative must still open");
 
         let has_assets: bool = nib
             .conn
@@ -1813,8 +1968,9 @@ mod tests {
     #[test]
     fn test_pre_group_id_schema_file_still_opens_and_migrates() {
         // Simulate a .nib file written before grouping existed: an `annotations`
-        // table with every pre-Phase-5 column but no `group_id`. `NibFile::open`
-        // must still succeed, migrate() must add the column, and reading back an
+        // table with every pre-Phase-5 column but no `group_id`. Read-only
+        // `NibFile::open` must not migrate in place; the writable path used
+        // after derivative copy must add the column, and reading back an
         // existing row must yield `group_id: None` rather than erroring.
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("pre_group_id.nib");
@@ -1851,7 +2007,8 @@ mod tests {
             .unwrap();
         }
 
-        let nib = NibFile::open(&path).expect("pre-group_id .nib file must still open");
+        let nib = NibFile::open_writable_existing(&path)
+            .expect("pre-group_id derivative must still open");
 
         let has_group_id: bool = nib
             .conn

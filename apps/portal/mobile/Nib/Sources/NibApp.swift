@@ -4,26 +4,67 @@ import SwiftUI
 import UIKit
 import UserNotifications
 import WebKit
+import NibCloud
+import NibDomain
+import NibFeatures
+import NibNotifications
 
 @main
 struct NibApp: App {
     @UIApplicationDelegateAdaptor(NibAppDelegate.self) private var appDelegate
-    @StateObject private var client = NibClient()
-    @AppStorage("nib.baseURL") private var baseURLString = NibDefaults.defaultBaseURLString
+    @StateObject private var client: NibClient
+    @StateObject private var account: NibAccountSession
     @AppStorage("nib.darkMode") private var darkMode = false
+
+    init() {
+        let client = NibClient()
+        _client = StateObject(wrappedValue: client)
+        #if os(visionOS)
+        let platform = "visionos"
+        let deviceName = "Apple Vision"
+        #else
+        let platform = "ios"
+        let deviceName = UIDevice.current.name
+        #endif
+        _account = StateObject(wrappedValue: NibAccountSession(
+            client: client,
+            platform: platform,
+            deviceName: deviceName
+        ))
+    }
 
     var body: some Scene {
         WindowGroup {
-            RequestInboxView(baseURLString: $baseURLString)
-                .environmentObject(client)
+            NibMobileAccountRoot(client: client, account: account)
                 .preferredColorScheme(darkMode ? .dark : .light)
-                .onAppear {
-                    client.configure(baseURLString: baseURLString)
-                }
-                .onChange(of: baseURLString) { _, value in
-                    client.configure(baseURLString: value)
-                }
         }
+    }
+}
+
+private struct NibMobileAccountRoot: View {
+    @ObservedObject var client: NibClient
+    @ObservedObject var account: NibAccountSession
+    @State private var verificationRoute: SafariRoute?
+
+    var body: some View {
+        NibAccountGate(session: account) {
+            RequestInboxView()
+                .environmentObject(client)
+        }
+        .sheet(item: $verificationRoute) { route in
+            SafariView(url: route.url)
+                .ignoresSafeArea()
+        }
+        .onOpenURL(perform: openVerificationLink)
+        .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+            guard let url = activity.webpageURL else { return }
+            openVerificationLink(url)
+        }
+    }
+
+    private func openVerificationLink(_ url: URL) {
+        guard NibAuthURLRouting.isVerificationURL(url, serviceURL: client.baseURL) else { return }
+        verificationRoute = SafariRoute(url: url)
     }
 }
 
@@ -41,6 +82,17 @@ final class NibAppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNU
 
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         NotificationCenter.default.post(name: .nibDeviceRegistrationFailed, object: error.localizedDescription)
+    }
+
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        Task {
+            let changed = await NibNotificationActions.handleRemoteNotification(userInfo: userInfo)
+            completionHandler(changed ? .newData : .noData)
+        }
     }
 
     func userNotificationCenter(
@@ -69,11 +121,11 @@ extension Notification.Name {
     static let nibOpenRequest = Notification.Name("nibOpenRequest")
     static let nibOpenProject = Notification.Name("nibOpenProject")
     static let nibOpenWebURL = Notification.Name("nibOpenWebURL")
+    static let nibRequestsChanged = Notification.Name("nibRequestsChanged")
 }
 
 struct RequestInboxView: View {
     @EnvironmentObject private var client: NibClient
-    @Binding var baseURLString: String
     @State private var projects: [NibProject] = []
     @State private var requests: [NibRequest] = []
     @State private var devices: [NibDevice] = []
@@ -91,6 +143,10 @@ struct RequestInboxView: View {
     @State private var selectedProject: NibProject?
     @State private var safariRoute: SafariRoute?
     @State private var webRoute: WebRoute?
+    @StateObject private var cloudLibrary = NibCloudLibraryAdapter()
+    @State private var historyMode: NibHistoryMode = .requests
+    @State private var selectedLibraryItemID: NibLibraryItem.ID?
+    @State private var authenticated = false
     @GestureState private var sidebarDragTranslation: CGFloat = 0
     @AppStorage("nib.darkMode") private var darkMode = false
 
@@ -133,7 +189,18 @@ struct RequestInboxView: View {
                     .padding(.top, 8)
                     .padding(.bottom, 18)
 
-                    if activeRequests.isEmpty {
+                    if !authenticated {
+                        ContentUnavailableView {
+                            Label("Sign in to Nib", systemImage: "person.crop.circle")
+                        } description: {
+                            Text("Use one Nib account to see your review history on every device.")
+                        } actions: {
+                            Button("Sign In") { showingSettings = true }
+                                .buttonStyle(.borderedProminent)
+                        }
+                        .foregroundStyle(NibTheme.text)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if activeRequests.isEmpty {
                         ContentUnavailableView {
                             Label("Nothing to review", systemImage: "checkmark.circle")
                         } description: {
@@ -216,23 +283,10 @@ struct RequestInboxView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .task {
-                if let server = launchArgument("nib.server") {
-                    baseURLString = server
-                    client.configure(baseURLString: server)
-                }
-                do {
-                    try await client.migrateLegacyCredentialIfNeeded(
-                        name: UIDevice.current.name,
-                        platform: authPlatform
-                    )
-                    if let pairingCode = launchArgument("nib.pairingCode") {
-                        try await enroll(pairingCode: pairingCode)
-                    }
-                } catch {
-                    self.error = error.localizedDescription
-                }
                 await load()
-                if NibEntitlements.hasAPSEnvironment {
+                if authenticated,
+                   NibEntitlements.hasAPSEnvironment,
+                   launchArgument("nib.skipNotificationRegistration") == nil {
                     await registerForNotifications()
                 }
                 if let requestId = launchArgument("nib.openRequest") {
@@ -243,14 +297,15 @@ struct RequestInboxView: View {
                     await consumePendingNotificationRoute()
                 }
             }
-            .task(id: baseURLString) {
-                await consumeRequestEvents()
+            .task(id: authenticated) {
+                if authenticated {
+                    await consumeRequestEvents()
+                }
             }
             .refreshable { await load() }
             .sheet(isPresented: $showingSettings) {
                 NavigationStack {
                     SettingsView(
-                        baseURLString: $baseURLString,
                         notificationStatus: notificationStatus,
                         devices: devices,
                         waitingPanes: waitingPanes,
@@ -321,6 +376,13 @@ struct RequestInboxView: View {
                 NibNotificationActions.clearPendingWebURL(url)
                 webRoute = WebRoute(url: url, title: url.host ?? "nib")
             }
+            .onReceive(NotificationCenter.default.publisher(for: .nibRequestsChanged)) { _ in
+                Task { await load() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .nibAccountChanged)) { _ in
+                error = nil
+                Task { await load() }
+            }
             .onOpenURL { url in
                 open(url: url)
             }
@@ -376,6 +438,32 @@ struct RequestInboxView: View {
     private func load() async {
         loading = true
         defer { loading = false }
+        guard NibCredentialStore.token(for: client.baseURL) != nil else {
+            authenticated = false
+            projects = []
+            requests = []
+            devices = []
+            notificationStatus = nil
+            waitingPanes = []
+            activity = []
+            self.error = nil
+            return
+        }
+        do {
+            _ = try await client.authStatus()
+            authenticated = true
+        } catch {
+            NibCredentialStore.remove(for: client.baseURL)
+            authenticated = false
+            projects = []
+            requests = []
+            devices = []
+            notificationStatus = nil
+            waitingPanes = []
+            activity = []
+            self.error = nil
+            return
+        }
         do {
             async let nextProjects = client.projects()
             async let nextRequests = client.requests()
@@ -393,6 +481,7 @@ struct RequestInboxView: View {
         } catch {
             self.error = error.localizedDescription
         }
+        await loadCloudLibrary()
     }
 
     private func consumeRequestEvents() async {
@@ -547,29 +636,9 @@ struct RequestInboxView: View {
 
     private func open(url: URL) {
         guard let scheme = url.scheme?.lowercased(), ["nib", "http", "https"].contains(scheme) else { return }
-        if scheme == "nib", let server = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-            .queryItems?
-            .first(where: { $0.name == "server" })?
-            .value {
-            baseURLString = server
-            client.configure(baseURLString: server)
-        }
-        if scheme == "nib", url.host == "auth" {
-            guard let pairingCode = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?
-                .first(where: { $0.name == "code" })?
-                .value else {
-                notice = "Pairing link is not valid."
-                return
-            }
-            Task {
-                do {
-                    try await enroll(pairingCode: pairingCode)
-                    await load()
-                } catch {
-                    self.error = error.localizedDescription
-                }
-            }
+        if NibAuthURLRouting.isVerificationURL(url, serviceURL: client.baseURL) {
+            notice = nil
+            webRoute = WebRoute(url: url, title: "Confirm sign-in")
             return
         }
         if scheme == "http" || scheme == "https" {
@@ -581,32 +650,10 @@ struct RequestInboxView: View {
                 return
             }
             Task { await load() }
-            if URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?
-                .contains(where: { $0.name == "server" }) == true {
-                return
-            }
             notice = "Request link is not valid."
             return
         }
         Task { await openRequest(id: requestId) }
-    }
-
-    private var authPlatform: String {
-        #if os(visionOS)
-        "visionos"
-        #else
-        "ios"
-        #endif
-    }
-
-    private func enroll(pairingCode: String) async throws {
-        _ = try await client.redeemPairing(
-            code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines),
-            name: UIDevice.current.name,
-            platform: authPlatform
-        )
-        notice = "This device is paired."
     }
 
     private func openProject(id: String) async {
@@ -675,11 +722,7 @@ struct RequestInboxView: View {
     }
 
     private var serverDisplayName: String {
-        guard let host = URL(string: baseURLString)?.host(), !host.isEmpty else {
-            return "Nib server"
-        }
-        let name = host.split(separator: ".").first.map(String.init) ?? host
-        return name.capitalized
+        "Nib Cloud"
     }
 
     private var sidebarDeviceLine: String {
@@ -701,6 +744,15 @@ struct RequestInboxView: View {
         sidebarDestination = destination
     }
 
+    private func loadCloudLibrary() async {
+        cloudLibrary.configure(baseURL: client.baseURL)
+        if launchArgument("nib.mockCloudLibrary") == "true" {
+            cloudLibrary.applyDeterministicMockState()
+            return
+        }
+        await cloudLibrary.refresh()
+    }
+
     @ViewBuilder
     private func sidebarContent(_ destination: NibSidebarDestination) -> some View {
         switch destination {
@@ -719,26 +771,37 @@ struct RequestInboxView: View {
             SidebarDevicesView(devices: devices, status: notificationStatus)
                 .background(NibTheme.background)
         case .history:
-            if historyRequests.isEmpty {
-                ContentUnavailableView("No history yet", systemImage: "clock.arrow.circlepath")
-                    .background(NibTheme.background)
-            } else {
-                List(historyRequests) { request in
-                    Button {
-                        sidebarDestination = nil
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                            selectedRequest = request
-                        }
-                    } label: {
-                        RequestRow(request: request)
-                            .padding(.vertical, 6)
+            VStack(spacing: 0) {
+                Picker("History", selection: $historyMode) {
+                    ForEach(NibHistoryMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
                     }
-                    .buttonStyle(.plain)
-                    .listRowBackground(NibTheme.surface)
                 }
-                .scrollContentBackground(.hidden)
-                .background(NibTheme.background)
+                .pickerStyle(.segmented)
+                .padding(12)
+
+                switch historyMode {
+                case .requests:
+                    requestHistoryContent
+                case .files:
+                    NibCloudLibraryHistoryView(
+                        library: cloudLibrary,
+                        selectedID: $selectedLibraryItemID,
+                        refresh: { Task { await loadCloudLibrary() } },
+                        createNewNib: { item in
+                            Task {
+                                if let upload = await cloudLibrary.createNewNib(from: item) {
+                                    selectedLibraryItemID = upload.id
+                                }
+                            }
+                        },
+                        openURL: { url in
+                            safariRoute = SafariRoute(url: url)
+                        }
+                    )
+                }
             }
+            .background(NibTheme.background)
         case .activity:
             if activity.isEmpty && waitingPanes.isEmpty {
                 ContentUnavailableView("No recent activity", systemImage: "waveform.path.ecg")
@@ -774,6 +837,44 @@ struct RequestInboxView: View {
         }
     }
 
+    @ViewBuilder
+    private var requestHistoryContent: some View {
+        if historyRequests.isEmpty {
+            ContentUnavailableView("No history yet", systemImage: "clock.arrow.circlepath")
+                .background(NibTheme.background)
+        } else {
+            List(historyRequests) { request in
+                Button {
+                    sidebarDestination = nil
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        selectedRequest = request
+                    }
+                } label: {
+                    RequestRow(request: request)
+                        .padding(.vertical, 6)
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(NibTheme.surface)
+            }
+            .scrollContentBackground(.hidden)
+            .background(NibTheme.background)
+        }
+    }
+
+}
+
+enum NibHistoryMode: String, Identifiable, CaseIterable {
+    case requests
+    case files
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .requests: return "Requests"
+        case .files: return "Files"
+        }
+    }
 }
 
 enum NibSidebarDestination: String, Identifiable, CaseIterable {
@@ -1025,6 +1126,127 @@ struct SidebarDevicesView: View {
             return status?.nativeReady == true ? "APNs ready" : "APNs connected"
         }
         return device.platform.capitalized
+    }
+}
+
+struct NibCloudLibraryHistoryView: View {
+    @ObservedObject var library: NibCloudLibraryAdapter
+    @Binding var selectedID: NibLibraryItem.ID?
+    var refresh: () -> Void
+    var createNewNib: (NibLibraryItem) -> Void
+    var openURL: (URL) -> Void
+
+    private var selectedItem: NibLibraryItem? {
+        guard let selectedID else { return library.items.first }
+        return library.items.first { $0.id == selectedID } ?? library.items.first
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            NibLibraryStatusView(
+                queuedCount: library.queuedCount,
+                availableCount: library.availableCount,
+                isOffline: library.isOffline
+            )
+            if let error = library.errorMessage, !error.isEmpty, !library.items.isEmpty {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(NibTheme.amber)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+            }
+
+            if library.items.isEmpty {
+                if let error = library.errorMessage {
+                    NibLibraryErrorView(message: error)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    NibLibraryEmptyView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                NibLibraryListView(
+                    items: library.items,
+                    selectedID: selectedItem?.id,
+                    select: { item in
+                        selectedID = item.id
+                    }
+                )
+                Divider()
+                NibCloudLibraryActionsView(
+                    item: selectedItem,
+                    library: library,
+                    createNewNib: createNewNib,
+                    openURL: openURL
+                )
+                .frame(minHeight: 260)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            Button(action: refresh) {
+                Image(systemName: library.isRefreshing ? "arrow.triangle.2.circlepath" : "arrow.clockwise")
+                    .frame(width: 36, height: 36)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Refresh files")
+            .disabled(library.isRefreshing)
+            .padding(.trailing, 8)
+            .padding(.top, 4)
+        }
+    }
+}
+
+private struct NibCloudLibraryActionsView: View {
+    var item: NibLibraryItem?
+    @ObservedObject var library: NibCloudLibraryAdapter
+    var createNewNib: (NibLibraryItem) -> Void
+    var openURL: (URL) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            NibLibraryDetailView(item: item)
+
+            if let item {
+                Divider()
+                HStack(spacing: 12) {
+                    Button {
+                        createNewNib(item)
+                    } label: {
+                        Label("Create New Nib", systemImage: "doc.badge.plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    if let preview = library.previewURL(for: item) {
+                        Button {
+                            openURL(preview)
+                        } label: {
+                            Label("Preview", systemImage: "eye")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if let open = library.openURL(for: item) {
+                        Button {
+                            openURL(open)
+                        } label: {
+                            Label("Open", systemImage: "arrow.up.forward.app")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    if let download = library.downloadURL(for: item) {
+                        ShareLink(item: download) {
+                            Label("Download", systemImage: "square.and.arrow.down")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .font(.callout.weight(.semibold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+            }
+        }
     }
 }
 
@@ -2186,13 +2408,27 @@ struct RequestDetailView: View {
         request.visualReviewVideo
     }
 
+    private var reviewPDF: NibRequest.Attachment? {
+        request.visualReviewPDF
+    }
+
+    private var reviewNib: NibRequest.Attachment? {
+        request.attachments.first {
+            $0.name.lowercased().hasSuffix(".nib")
+                || $0.contentType.lowercased() == "application/x-nib"
+                || $0.type.lowercased() == "nib"
+        }
+    }
+
     var body: some View {
         Group {
-            if request.kind == "visual-review", reviewImage != nil || reviewVideo != nil {
+            if request.kind == "visual-review", reviewImage != nil || reviewVideo != nil || reviewPDF != nil || reviewNib != nil {
                 NativeVisualReviewWorkspace(
                     request: request,
                     imageURL: client.absoluteURL(reviewImage?.url),
                     videoURL: client.absoluteURL(reviewVideo?.url),
+                    pdfURL: client.absoluteURL(reviewPDF?.url),
+                    nibURL: client.absoluteURL(reviewNib?.url),
                     sending: sending,
                     uploadReply: { data, name in
                         _ = try await client.uploadResponseVideo(requestId: request.id, name: name, data: data)
@@ -2655,7 +2891,6 @@ struct NativeImageViewer: View {
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var client: NibClient
-    @Binding var baseURLString: String
     var notificationStatus: NibNotificationStatus?
     var devices: [NibDevice]
     var waitingPanes: [NibWaitingPane]
@@ -2663,10 +2898,6 @@ struct SettingsView: View {
     var registerNotifications: () -> Void
     var sendTestNotification: () -> Void
     @AppStorage("nib.darkMode") private var darkMode = false
-    @State private var pairingCode = ""
-    @State private var authState = "Checking"
-    @State private var authError: String?
-    @State private var pairing = false
     @State private var diagnosticsExpanded = false
 
     var body: some View {
@@ -2677,43 +2908,7 @@ struct SettingsView: View {
                 }
             }
 
-            Section {
-                TextField("Server URL", text: $baseURLString)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.URL)
-                    .autocorrectionDisabled()
-            } footer: {
-                Text("Use the same Nib service URL that the CLI and notifications use.")
-            }
-
-            Section {
-                LabeledContent("Status", value: authState)
-                TextField("One-time pairing code", text: $pairingCode)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                Button {
-                    Task { await redeemPairing() }
-                } label: {
-                    if pairing {
-                        HStack {
-                            ProgressView()
-                            Text("Pairing")
-                        }
-                    } else {
-                        Text("Pair device")
-                    }
-                }
-                .disabled(pairing || pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                if let authError {
-                    Text(authError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            } header: {
-                Text("Authentication")
-            } footer: {
-                Text("Create a code with `nib auth pair`. It expires after 10 minutes and works once.")
-            }
+            NibAccountSection(client: client, platform: accountPlatform, deviceName: accountDeviceName)
 
             Section("Advanced") {
                 DisclosureGroup("Diagnostics", isExpanded: $diagnosticsExpanded) {
@@ -2752,7 +2947,6 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
-        .task(id: baseURLString) { await refreshAuthStatus() }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Done") { dismiss() }
@@ -2760,39 +2954,20 @@ struct SettingsView: View {
         }
     }
 
-    private func refreshAuthStatus() async {
-        client.configure(baseURLString: baseURLString)
-        do {
-            let status = try await client.authStatus()
-            authState = status.authenticated ? "Paired" : "Not paired"
-            authError = nil
-        } catch {
-            authState = "Not paired"
-        }
+    private var accountPlatform: String {
+        #if os(visionOS)
+        "visionos"
+        #else
+        "ios"
+        #endif
     }
 
-    private func redeemPairing() async {
-        pairing = true
-        defer { pairing = false }
-        do {
-            let platform: String
-            #if os(visionOS)
-            platform = "visionos"
-            #else
-            platform = "ios"
-            #endif
-            let status = try await client.redeemPairing(
-                code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines),
-                name: UIDevice.current.name,
-                platform: platform
-            )
-            authState = status.authenticated ? "Paired" : "Not paired"
-            pairingCode = ""
-            authError = nil
-        } catch {
-            authError = error.localizedDescription
-            authState = "Not paired"
-        }
+    private var accountDeviceName: String {
+        #if os(visionOS)
+        "Apple Vision Pro"
+        #else
+        UIDevice.current.name
+        #endif
     }
 
     private var apnsState: String {
@@ -2974,16 +3149,7 @@ struct NibPrimaryButtonStyle: ButtonStyle {
 
 enum NibEntitlements {
     static var hasAPSEnvironment: Bool {
-        #if targetEnvironment(simulator)
-        true
-        #else
-        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
-              let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .isoLatin1) else {
-            return false
-        }
-        return text.contains("<key>aps-environment</key>")
-        #endif
+        NibNotificationContract.apnsEnvironment != nil
     }
 }
 

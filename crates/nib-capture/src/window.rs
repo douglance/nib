@@ -1,10 +1,12 @@
 //! Window capture using xcap
 
-use nib_core::{CaptureError, ImageSource, NibImage};
-use std::time::SystemTime;
+use crate::{
+    default_backend, CaptureBackend, CaptureResult, CaptureSession, CaptureTarget, DisplayInfo,
+};
+use nib_core::{CaptureError, NibImage};
 
 /// Information about a capturable window
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WindowInfo {
     pub id: u32,
     pub app_name: String,
@@ -15,123 +17,49 @@ pub struct WindowInfo {
     pub height: u32,
     pub is_minimized: bool,
     pub is_focused: bool,
+    pub display_id: Option<u32>,
 }
 
 /// List all capturable windows (excludes minimized and tiny helper windows)
 pub fn list_windows() -> Result<Vec<WindowInfo>, CaptureError> {
-    let windows = xcap::Window::all()
-        .map_err(|e| CaptureError::CaptureFailed(format!("Failed to list windows: {}", e)))?;
-
-    Ok(windows
-        .into_iter()
-        .filter_map(|w| {
-            let is_minimized = w.is_minimized().unwrap_or(true);
-            let title = w.title().unwrap_or_default();
-            let app_name = w.app_name().unwrap_or_default();
-
-            // Skip minimized windows and windows with no title/app
-            if is_minimized || (title.is_empty() && app_name.is_empty()) {
-                return None;
-            }
-
-            // Skip macOS system UI elements (menu bars, control center, etc.)
-            const SYSTEM_APPS: &[&str] = &[
-                "Window Server",
-                "Control Center",
-                "Notification Center",
-                "SystemUIServer",
-            ];
-            if SYSTEM_APPS.iter().any(|&s| app_name == s) {
-                return None;
-            }
-
-            // Skip very small windows (likely invisible helper windows)
-            let width = w.width().unwrap_or(0);
-            let height = w.height().unwrap_or(0);
-            if width < 50 || height < 50 {
-                return None;
-            }
-
-            Some(WindowInfo {
-                id: w.id().unwrap_or(0),
-                app_name,
-                title,
-                x: w.x().unwrap_or(0),
-                y: w.y().unwrap_or(0),
-                width,
-                height,
-                is_minimized,
-                is_focused: w.is_focused().unwrap_or(false),
-            })
-        })
-        .collect())
+    default_backend().list_windows()
 }
 
 /// Capture a specific window by app name (case-insensitive substring match)
 pub fn capture_by_app(app_name: &str) -> Result<NibImage, CaptureError> {
-    let windows = xcap::Window::all()
-        .map_err(|e| CaptureError::CaptureFailed(format!("Failed to list windows: {}", e)))?;
-
     let app_lower = app_name.to_lowercase();
-
-    let window = windows
+    let window = list_windows()?
         .into_iter()
-        .find(|w| {
-            let name = w.app_name().unwrap_or_default().to_lowercase();
-            let minimized = w.is_minimized().unwrap_or(true);
-            !minimized && name.contains(&app_lower)
-        })
+        .find(|window| window.app_name.to_lowercase().contains(&app_lower))
         .ok_or_else(|| CaptureError::WindowNotFound(app_name.to_string()))?;
 
-    capture_window(&window)
+    capture_by_id(window.id)
 }
 
 /// Capture a specific window by title (case-insensitive substring match)
 pub fn capture_by_title(title: &str) -> Result<NibImage, CaptureError> {
-    let windows = xcap::Window::all()
-        .map_err(|e| CaptureError::CaptureFailed(format!("Failed to list windows: {}", e)))?;
-
     let title_lower = title.to_lowercase();
-
-    let window = windows
+    let window = list_windows()?
         .into_iter()
-        .find(|w| {
-            let t = w.title().unwrap_or_default().to_lowercase();
-            let minimized = w.is_minimized().unwrap_or(true);
-            !minimized && t.contains(&title_lower)
-        })
+        .find(|window| window.title.to_lowercase().contains(&title_lower))
         .ok_or_else(|| CaptureError::WindowNotFound(title.to_string()))?;
 
-    capture_window(&window)
+    capture_by_id(window.id)
 }
 
-fn capture_window(window: &xcap::Window) -> Result<NibImage, CaptureError> {
-    let image = window
-        .capture_image()
-        .map_err(|e| CaptureError::CaptureFailed(format!("Failed to capture window: {}", e)))?;
+pub fn capture_by_id(window_id: u32) -> CaptureResult<NibImage> {
+    default_backend()
+        .capture(CaptureTarget::WindowId(window_id))
+        .map(CaptureSession::into_image)
+}
 
-    let width = image.width();
-    let height = image.height();
+pub fn windows_on_display(display_id: u32) -> Result<Vec<WindowInfo>, CaptureError> {
+    Ok(list_windows()?
+        .into_iter()
+        .filter(|window| window.display_id == Some(display_id))
+        .collect())
+}
 
-    // Convert to PNG bytes
-    let mut png_data = Vec::new();
-    let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
-    image::ImageEncoder::write_image(
-        encoder,
-        image.as_raw(),
-        width,
-        height,
-        image::ExtendedColorType::Rgba8,
-    )
-    .map_err(|e| CaptureError::CaptureFailed(format!("Failed to encode PNG: {}", e)))?;
-
-    Ok(NibImage::new(
-        png_data,
-        width,
-        height,
-        ImageSource::ScreenCapture {
-            display_id: 0,
-            captured_at: SystemTime::now(),
-        },
-    ))
+pub fn displays_for_windows() -> CaptureResult<Vec<DisplayInfo>> {
+    default_backend().list_displays()
 }

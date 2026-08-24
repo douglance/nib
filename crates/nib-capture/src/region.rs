@@ -2,9 +2,8 @@
 //!
 //! Allows user to select a rectangular region of the screen to capture.
 
-use super::CaptureResult;
-use nib_core::{CaptureError, ImageSource, NibImage, Point, Region};
-use std::time::SystemTime;
+use super::{default_backend, CaptureBackend, CaptureResult, CaptureSession, CaptureTarget};
+use nib_core::{NibImage, Point, Region};
 
 /// State for region selection
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -72,45 +71,7 @@ impl RegionSelector {
 
 /// Capture a specific region of the screen
 pub fn capture_region(display_id: u32, region: Region) -> CaptureResult<NibImage> {
-    let screens =
-        screenshots::Screen::all().map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
-
-    let screen = screens
-        .into_iter()
-        .find(|s| s.display_info.id == display_id)
-        .ok_or(CaptureError::DisplayNotFound(display_id))?;
-
-    let image = screen
-        .capture_area(
-            region.x as i32,
-            region.y as i32,
-            region.width as u32,
-            region.height as u32,
-        )
-        .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
-
-    let width = image.width();
-    let height = image.height();
-
-    // Convert to PNG bytes
-    let mut png_data = Vec::new();
-    let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
-    image::ImageEncoder::write_image(
-        encoder,
-        image.as_raw(),
-        width,
-        height,
-        image::ExtendedColorType::Rgba8,
-    )
-    .map_err(|e| CaptureError::CaptureFailed(e.to_string()))?;
-
-    Ok(NibImage::new(
-        png_data,
-        width,
-        height,
-        ImageSource::ScreenCapture {
-            display_id,
-            captured_at: SystemTime::now(),
-        },
-    ))
+    default_backend()
+        .capture(CaptureTarget::Region { display_id, region })
+        .map(CaptureSession::into_image)
 }

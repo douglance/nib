@@ -38,43 +38,15 @@ struct PosterMediaHandler;
 struct TranscribeMediaHandler;
 
 #[derive(Debug, Deserialize, incurs::Args)]
-struct AuthRedeemArgs {
-    /// One-time pairing code.
-    code: String,
-}
-
-#[derive(Debug, Deserialize, incurs::Options)]
-struct AuthPortalOptions {
-    /// Nib service URL; defaults to NIB_PORTAL_URL or the global service.
-    portal: Option<String>,
+struct AuthLoginArgs {
+    /// Email address for the Nib account.
+    email: String,
 }
 
 #[derive(Debug, Deserialize, incurs::Options)]
 struct AuthLoginOptions {
-    /// Nib service URL; defaults to NIB_PORTAL_URL or the global service.
-    portal: Option<String>,
     /// Human-readable name for this CLI credential.
     name: Option<String>,
-}
-
-#[derive(Debug, Deserialize, incurs::Options)]
-struct AuthRedeemOptions {
-    /// Nib service URL; defaults to NIB_PORTAL_URL or the global service.
-    portal: Option<String>,
-    /// Human-readable name for this credential.
-    name: Option<String>,
-    /// Client platform recorded by the service.
-    platform: Option<String>,
-}
-
-#[derive(Debug, Deserialize, incurs::Options)]
-struct AuthIssueOptions {
-    /// Nib service URL; defaults to NIB_PORTAL_URL or the global service.
-    portal: Option<String>,
-    /// Human-readable name for the service credential.
-    name: Option<String>,
-    /// Service platform; defaults to cloudflare-codemode.
-    platform: Option<String>,
 }
 
 struct CompatHandler {
@@ -94,11 +66,8 @@ pub(crate) struct GlobalOptions {
 #[derive(Debug, Deserialize, incurs::Env)]
 #[allow(dead_code)]
 pub(crate) struct NibEnv {
-    /// Portal used for durable human requests.
-    #[incurs(env = "NIB_PORTAL_URL")]
-    pub portal_url: Option<String>,
     /// Portal connection timeout in milliseconds.
-    #[incurs(env = "NIB_PORTAL_CONNECT_TIMEOUT_MS")]
+    #[incurs(env = "NIB_CLOUD_CONNECT_TIMEOUT_MS")]
     pub portal_connect_timeout_ms: Option<u64>,
     /// Bootstrap or automation bearer token; normal credentials use Keychain.
     #[incurs(env = "NIB_AUTH_TOKEN")]
@@ -153,12 +122,6 @@ struct WaitOptions {
     /// Seconds to wait; zero waits indefinitely.
     #[incurs(alias = "t", default = 0)]
     timeout: u64,
-}
-
-#[derive(Debug, Deserialize, incurs::Options)]
-struct ReviewRequestOptions {
-    /// Portal base URL.
-    portal: Option<String>,
 }
 
 #[derive(Debug, Deserialize, incurs::Options)]
@@ -901,12 +864,11 @@ fn typed_request_group() -> Cli {
     }))
     .done();
 
-    let review = CommandDef::typed::<RequestArgs, ReviewRequestOptions, (), Value, _, _>(
+    let review = CommandDef::typed::<RequestArgs, (), (), Value, _, _>(
         "review",
-        |ctx: TypedContext<RequestArgs, ReviewRequestOptions, ()>| async move {
+        |ctx: TypedContext<RequestArgs, (), ()>| async move {
             let args = RequestReviewArgs {
                 request_id: ctx.args.request_id,
-                portal: ctx.options.portal,
             };
             match super::web_feedback::review_request_value(&args).await {
                 Ok(response) => TypedResult::ok(response),
@@ -935,57 +897,45 @@ fn typed_request_group() -> Cli {
 }
 
 fn typed_auth_group() -> Cli {
-    let login = CommandDef::typed::<
-        (),
-        AuthLoginOptions,
-        (),
-        super::auth::AuthStatus,
-        _,
-        _,
-    >(
-        "login",
-        |ctx: TypedContext<(), AuthLoginOptions, ()>| async move {
-            let portal = ctx
-                .options
-                .portal
-                .unwrap_or_else(super::auth::default_portal);
-            let name = ctx.options.name;
-            match tokio::task::spawn_blocking(move || super::auth::login(&portal, name.as_deref()))
+    let login =
+        CommandDef::typed::<AuthLoginArgs, AuthLoginOptions, (), super::auth::AuthStatus, _, _>(
+            "login",
+            |ctx: TypedContext<AuthLoginArgs, AuthLoginOptions, ()>| async move {
+                let email = ctx.args.email;
+                let name = ctx.options.name;
+                match tokio::task::spawn_blocking(move || {
+                    super::auth::login(&email, name.as_deref())
+                })
                 .await
-            {
-                Ok(Ok(status)) => {
-                    let cta = CtaBlock {
-                        commands: vec![CtaEntry::Detailed {
-                            command: "auth status".into(),
-                            description: Some("Verify the stored credential".into()),
-                        }],
-                        description: Some("Authentication is ready:".into()),
-                    };
-                    TypedResult::ok_with_cta(status, cta)
+                {
+                    Ok(Ok(status)) => {
+                        let cta = CtaBlock {
+                            commands: vec![CtaEntry::Detailed {
+                                command: "auth status".into(),
+                                description: Some("Verify the stored credential".into()),
+                            }],
+                            description: Some("Authentication is ready:".into()),
+                        };
+                        TypedResult::ok_with_cta(status, cta)
+                    }
+                    Ok(Err(auth_error)) => TypedResult::error("AUTH_LOGIN_FAILED", auth_error),
+                    Err(join_error) => {
+                        TypedResult::error("AUTH_LOGIN_FAILED", join_error.to_string())
+                    }
                 }
-                Ok(Err(auth_error)) => TypedResult::error("AUTH_LOGIN_FAILED", auth_error),
-                Err(join_error) => {
-                    TypedResult::error("AUTH_LOGIN_FAILED", join_error.to_string())
-                }
-            }
-        },
-    )
-    .description("Exchange a one-time bootstrap credential for a scoped Keychain credential")
-    .hint("NIB_AUTH_TOKEN is an automation override and one-time enrollment path, not normal client storage.")
-    .mcp(mcp_options(Policy {
-        mcp_name: Some("auth_login"),
-        ..EXTERNAL_EFFECT
-    }))
-    .done();
+            },
+        )
+        .description("Email a one-time sign-in link and store the account session in Keychain")
+        .mcp(mcp_options(Policy {
+            mcp_name: Some("auth_login"),
+            ..EXTERNAL_EFFECT
+        }))
+        .done();
 
-    let status = CommandDef::typed::<(), AuthPortalOptions, (), super::auth::AuthStatus, _, _>(
+    let status = CommandDef::typed::<(), (), (), super::auth::AuthStatus, _, _>(
         "status",
-        |ctx: TypedContext<(), AuthPortalOptions, ()>| async move {
-            let portal = ctx
-                .options
-                .portal
-                .unwrap_or_else(super::auth::default_portal);
-            match tokio::task::spawn_blocking(move || super::auth::status(&portal)).await {
+        |_ctx: TypedContext<(), (), ()>| async move {
+            match tokio::task::spawn_blocking(super::auth::status).await {
                 Ok(Ok(status)) => TypedResult::ok(status),
                 Ok(Err(auth_error)) => TypedResult::error("AUTH_STATUS_FAILED", auth_error),
                 Err(join_error) => TypedResult::error("AUTH_STATUS_FAILED", join_error.to_string()),
@@ -1002,14 +952,10 @@ fn typed_auth_group() -> Cli {
     }))
     .done();
 
-    let logout = CommandDef::typed::<(), AuthPortalOptions, (), super::auth::AuthLogout, _, _>(
+    let logout = CommandDef::typed::<(), (), (), super::auth::AuthLogout, _, _>(
         "logout",
-        |ctx: TypedContext<(), AuthPortalOptions, ()>| async move {
-            let portal = ctx
-                .options
-                .portal
-                .unwrap_or_else(super::auth::default_portal);
-            match tokio::task::spawn_blocking(move || super::auth::logout(&portal)).await {
+        |_ctx: TypedContext<(), (), ()>| async move {
+            match tokio::task::spawn_blocking(super::auth::logout).await {
                 Ok(Ok(result)) => TypedResult::ok(result),
                 Ok(Err(auth_error)) => TypedResult::error("AUTH_LOGOUT_FAILED", auth_error),
                 Err(join_error) => TypedResult::error("AUTH_LOGOUT_FAILED", join_error.to_string()),
@@ -1024,108 +970,11 @@ fn typed_auth_group() -> Cli {
     }))
     .done();
 
-    let pair = CommandDef::typed::<(), AuthPortalOptions, (), super::auth::AuthPairing, _, _>(
-        "pair",
-        |ctx: TypedContext<(), AuthPortalOptions, ()>| async move {
-            let portal = ctx
-                .options
-                .portal
-                .unwrap_or_else(super::auth::default_portal);
-            match tokio::task::spawn_blocking(move || super::auth::pair(&portal)).await {
-                Ok(Ok(pairing)) => {
-                    let cta = CtaBlock {
-                        commands: vec![CtaEntry::Detailed {
-                            command: format!("auth redeem {}", pairing.code),
-                            description: Some("Redeem on the device being enrolled".into()),
-                        }],
-                        description: Some("This code expires and works once:".into()),
-                    };
-                    TypedResult::ok_with_cta(pairing, cta)
-                }
-                Ok(Err(auth_error)) => TypedResult::error("AUTH_PAIR_FAILED", auth_error),
-                Err(join_error) => TypedResult::error("AUTH_PAIR_FAILED", join_error.to_string()),
-            }
-        },
-    )
-    .description("Create a short-lived, one-time code for another Nib client")
-    .mcp(mcp_options(Policy {
-        mcp_name: Some("auth_pair"),
-        ..EXTERNAL_EFFECT
-    }))
-    .done();
-
-    let redeem =
-        CommandDef::typed::<AuthRedeemArgs, AuthRedeemOptions, (), super::auth::AuthStatus, _, _>(
-            "redeem",
-            |ctx: TypedContext<AuthRedeemArgs, AuthRedeemOptions, ()>| async move {
-                let portal = ctx
-                    .options
-                    .portal
-                    .unwrap_or_else(super::auth::default_portal);
-                let code = ctx.args.code;
-                let name = ctx.options.name;
-                let platform = ctx.options.platform;
-                match tokio::task::spawn_blocking(move || {
-                    super::auth::redeem(&portal, &code, name.as_deref(), platform.as_deref())
-                })
-                .await
-                {
-                    Ok(Ok(status)) => TypedResult::ok(status),
-                    Ok(Err(auth_error)) => TypedResult::error("AUTH_REDEEM_FAILED", auth_error),
-                    Err(join_error) => {
-                        TypedResult::error("AUTH_REDEEM_FAILED", join_error.to_string())
-                    }
-                }
-            },
-        )
-        .description("Redeem a one-time pairing code and store the scoped credential in Keychain")
-        .mcp(mcp_options(Policy {
-            mcp_name: Some("auth_redeem"),
-            ..EXTERNAL_EFFECT
-        }))
-        .done();
-
-    let issue = CommandDef::typed::<
-        (),
-        AuthIssueOptions,
-        (),
-        super::auth::AuthIssuedCredential,
-        _,
-        _,
-    >(
-        "issue",
-        |ctx: TypedContext<(), AuthIssueOptions, ()>| async move {
-            let portal = ctx
-                .options
-                .portal
-                .unwrap_or_else(super::auth::default_portal);
-            let name = ctx.options.name;
-            let platform = ctx.options.platform;
-            match tokio::task::spawn_blocking(move || {
-                super::auth::issue_service_token(&portal, name.as_deref(), platform.as_deref())
-            })
-            .await
-            {
-                Ok(Ok(credential)) => TypedResult::ok(credential),
-                Ok(Err(auth_error)) => TypedResult::error("AUTH_ISSUE_FAILED", auth_error),
-                Err(join_error) => {
-                    TypedResult::error("AUTH_ISSUE_FAILED", join_error.to_string())
-                }
-            }
-        },
-    )
-    .description("Issue a least-privilege service token without replacing the CLI credential")
-    .hint("The token is shown once. Pipe JSON output directly into the target secret store and do not save it in source control.")
-    .done();
-
     Cli::create("auth")
-        .description("Enroll clients and manage scoped Nib credentials")
+        .description("Sign in to one Nib account")
         .command("login", login)
         .command("status", status)
         .command("logout", logout)
-        .command("pair", pair)
-        .command("redeem", redeem)
-        .command("issue", issue)
 }
 
 fn typed_record_group() -> Cli {
@@ -1334,20 +1183,21 @@ fn typed_media_group() -> Cli {
         .command("transcribe", transcribe)
 }
 
-/// Defers `HttpGenerator::from_env` to call time. Building the command tree
-/// must not fail, so a misconfigured environment surfaces when `generate`
-/// actually runs rather than preventing the CLI from starting at all.
-struct EnvUiGenerator;
+/// Resolves the signed-in Nib account only when `generate_ui` runs so building
+/// the command tree never requires a Keychain lookup.
+struct AccountUiGenerator;
 
 #[async_trait::async_trait]
-impl nib_ui::client::Generator for EnvUiGenerator {
+impl nib_ui::client::Generator for AccountUiGenerator {
     async fn generate(
         &self,
         request: nib_ui::domain::GenerationRequest,
         tenant_id: Option<&str>,
         trial_network: Option<&str>,
     ) -> Result<nib_ui::domain::GenerationResponse, nib_ui::domain::UiError> {
-        nib_ui::client::HttpGenerator::from_env()?
+        let access_token =
+            super::auth::resolved_access_token().map_err(nib_ui::domain::UiError::Service)?;
+        nib_ui::client::HttpGenerator::for_account(&access_token)?
             .generate(request, tenant_id, trial_network)
             .await
     }
@@ -1840,7 +1690,7 @@ pub fn register(cli: Cli) -> Cli {
         )
         .command(
             "generate",
-            nib_ui::catalog::build_generate_command(std::sync::Arc::new(EnvUiGenerator)),
+            nib_ui::catalog::build_generate_command(std::sync::Arc::new(AccountUiGenerator)),
         )
         .group(request)
         .group(record)
@@ -2803,8 +2653,6 @@ mod tests {
             "auth_login",
             "auth_status",
             "auth_logout",
-            "auth_pair",
-            "auth_redeem",
             "add_annotation",
             "read_annotations",
             "remove_annotation",

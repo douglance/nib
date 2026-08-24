@@ -1,4 +1,5 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
+import { generationBillingMode, shouldRecordUsage } from "./entitlement";
 import { MODEL_BY_QUALITY, PLAN_LIMITS, usageCents } from "./rate-card";
 import { trialRequestError } from "./trial-policy";
 import type { BillingMode, Env, GenerationRequest, Plan, ReferenceImage, StoredGenerationRequest } from "./types";
@@ -21,7 +22,7 @@ export async function handleGeneration(request: Request, env: Env): Promise<Resp
 
   const account = await accountFor(tenantId, env);
   const jobId = crypto.randomUUID();
-  const billingMode: BillingMode = env.ENVIRONMENT !== "production" || account.stripeSubscriptionId ? "paid" : "trial";
+  const billingMode: BillingMode = generationBillingMode(env.ENVIRONMENT, account);
   let trialReserved = false;
   if (env.ENVIRONMENT === "production" && billingMode === "trial") {
     const shapeError = trialRequestError(input);
@@ -41,7 +42,7 @@ export async function handleGeneration(request: Request, env: Env): Promise<Resp
     const reserved = await env.DB.prepare(
       `UPDATE accounts
        SET trial_state = 'reserved', trial_job_id = ?, trial_started_at = COALESCE(trial_started_at, unixepoch()), updated_at = unixepoch()
-       WHERE tenant_id = ? AND trial_state = 'available' AND stripe_subscription_id IS NULL`,
+       WHERE account_id = ? AND trial_state = 'available' AND stripe_subscription_id IS NULL`,
     )
       .bind(jobId, tenantId)
       .run();
@@ -80,7 +81,7 @@ export async function handleGeneration(request: Request, env: Env): Promise<Resp
       billingMode,
     };
     await env.DB.prepare(
-      `INSERT INTO jobs(id, tenant_id, status, model, quality, resolution, format, aspect, usage_cents, billing_mode, created_at, updated_at)
+      `INSERT INTO jobs(id, account_id, status, model, quality, resolution, format, aspect, usage_cents, billing_mode, created_at, updated_at)
        VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())`,
     )
       .bind(jobId, tenantId, stored.model, input.quality, input.resolution, input.format, input.aspect, stored.usageCents, billingMode)
@@ -181,9 +182,10 @@ async function performGeneration(input: StoredGenerationRequest, env: Env): Prom
 
 async function recordUsage(input: StoredGenerationRequest, env: Env): Promise<void> {
   const account = await accountFor(input.tenantId, env);
+  if (!shouldRecordUsage(account)) return;
   const identifier = `nib_${input.jobId}`;
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO usage_ledger(identifier, tenant_id, job_id, usage_cents, state, created_at)
+    `INSERT OR IGNORE INTO usage_ledger(identifier, account_id, job_id, usage_cents, state, created_at)
      VALUES (?, ?, ?, ?, 'queued', unixepoch())`,
   )
     .bind(identifier, input.tenantId, input.jobId, input.usageCents)
@@ -200,7 +202,7 @@ async function recordUsage(input: StoredGenerationRequest, env: Env): Promise<vo
 
 async function resumeGeneration(tenantId: string, jobId: string, env: Env): Promise<Response> {
   const row = await env.DB.prepare(
-    "SELECT id, status, model, quality, resolution, format, aspect, usage_cents, billing_mode, artifact_key, error_code FROM jobs WHERE id = ? AND tenant_id = ?",
+    "SELECT id, status, model, quality, resolution, format, aspect, usage_cents, billing_mode, artifact_key, error_code FROM jobs WHERE id = ? AND account_id = ?",
   )
     .bind(jobId, tenantId)
     .first<Record<string, string | number | null>>();
@@ -233,7 +235,7 @@ async function resumeGeneration(tenantId: string, jobId: string, env: Env): Prom
 }
 
 export async function artifactResponse(request: Request, tenantId: string, jobId: string, env: Env): Promise<Response> {
-  const row = await env.DB.prepare("SELECT artifact_key FROM jobs WHERE id = ? AND tenant_id = ? AND status = 'succeeded'")
+  const row = await env.DB.prepare("SELECT artifact_key FROM jobs WHERE id = ? AND account_id = ? AND status = 'succeeded'")
     .bind(jobId, tenantId)
     .first<{ artifact_key: string }>();
   if (!row) return new Response("Not found", { status: 404 });
@@ -249,29 +251,38 @@ export async function artifactResponse(request: Request, tenantId: string, jobId
 async function accountFor(
   tenantId: string,
   env: Env,
-): Promise<{ plan: Plan; stripeCustomerId: string | null; stripeSubscriptionId: string | null; trialState: string }> {
-  const account = await env.DB.prepare("SELECT plan, stripe_customer_id, stripe_subscription_id, trial_state FROM accounts WHERE tenant_id = ?")
+): Promise<{
+  plan: Plan;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  unmeteredAccess: boolean;
+  trialState: string;
+}> {
+  const account = await env.DB.prepare(
+    "SELECT plan, stripe_customer_id, stripe_subscription_id, unmetered_access, trial_state FROM accounts WHERE account_id = ?",
+  )
     .bind(tenantId)
-    .first<{ plan: Plan; stripe_customer_id: string | null; stripe_subscription_id: string | null; trial_state: string }>();
-  if (!account) {
-    await env.DB.prepare(
-      "INSERT OR IGNORE INTO accounts(tenant_id, plan, created_at, updated_at) VALUES (?, 'default', unixepoch(), unixepoch())",
-    )
-      .bind(tenantId)
-      .run();
-  }
+    .first<{
+      plan: Plan;
+      stripe_customer_id: string | null;
+      stripe_subscription_id: string | null;
+      unmetered_access: number;
+      trial_state: string;
+    }>();
+  if (!account) throw new Error("authenticated account was not found");
   return {
-    plan: account?.plan ?? "default",
-    stripeCustomerId: account?.stripe_customer_id ?? null,
-    stripeSubscriptionId: account?.stripe_subscription_id ?? null,
-    trialState: account?.trial_state ?? "available",
+    plan: account.plan,
+    stripeCustomerId: account.stripe_customer_id,
+    stripeSubscriptionId: account.stripe_subscription_id,
+    unmeteredAccess: account.unmetered_access === 1,
+    trialState: account.trial_state,
   };
 }
 
 async function consumeTrial(tenantId: string, jobId: string, env: Env): Promise<void> {
   const consumed = await env.DB.prepare(
     `UPDATE accounts SET trial_state = 'used', updated_at = unixepoch()
-     WHERE tenant_id = ? AND trial_state = 'reserved' AND trial_job_id = ?`,
+     WHERE account_id = ? AND trial_state = 'reserved' AND trial_job_id = ?`,
   )
     .bind(tenantId, jobId)
     .run();
@@ -281,7 +292,7 @@ async function consumeTrial(tenantId: string, jobId: string, env: Env): Promise<
 async function releaseTrial(tenantId: string, jobId: string, env: Env): Promise<void> {
   await env.DB.prepare(
     `UPDATE accounts SET trial_state = 'available', trial_job_id = NULL, updated_at = unixepoch()
-     WHERE tenant_id = ? AND trial_state = 'reserved' AND trial_job_id = ?`,
+     WHERE account_id = ? AND trial_state = 'reserved' AND trial_job_id = ?`,
   )
     .bind(tenantId, jobId)
     .run();
@@ -343,16 +354,16 @@ export async function runMaintenance(env: Env): Promise<void> {
   }
 
   const pending = await env.DB.prepare(
-    `SELECT l.identifier, l.tenant_id, l.usage_cents, a.stripe_customer_id
-     FROM usage_ledger l JOIN accounts a ON a.tenant_id = l.tenant_id
+    `SELECT l.identifier, l.account_id, l.usage_cents, a.stripe_customer_id
+     FROM usage_ledger l JOIN accounts a ON a.account_id = l.account_id
      WHERE l.state = 'queued' AND l.created_at <= unixepoch() - 300 AND a.stripe_customer_id IS NOT NULL
      LIMIT 500`,
-  ).all<{ identifier: string; tenant_id: string; usage_cents: number; stripe_customer_id: string }>();
+  ).all<{ identifier: string; account_id: string; usage_cents: number; stripe_customer_id: string }>();
   await Promise.all(
     pending.results.map((entry) =>
       env.METERING_QUEUE.send({
         identifier: entry.identifier,
-        tenantId: entry.tenant_id,
+        tenantId: entry.account_id,
         stripeCustomerId: entry.stripe_customer_id,
         value: entry.usage_cents,
       }),

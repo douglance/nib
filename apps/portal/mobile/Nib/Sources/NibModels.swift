@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let nibAccountChanged = Notification.Name("nibAccountChanged")
+}
+
 struct NibRequest: Identifiable, Codable, Hashable, Sendable {
     struct Target: Codable, Hashable, Sendable {
         var projectId: String?
@@ -79,6 +83,11 @@ struct NibRequest: Identifiable, Codable, Hashable, Sendable {
         return attachments.first { $0.contentType.lowercased() == "video/mp4" || $0.type == "video" }
     }
 
+    var visualReviewPDF: Attachment? {
+        guard kind == "visual-review" else { return nil }
+        return attachments.first { $0.contentType.lowercased() == "application/pdf" || $0.type == "pdf" }
+    }
+
     func visualReviewDecision(choiceIndex: Int) -> String? {
         guard kind == "visual-review" else { return nil }
         switch choiceIndex {
@@ -117,9 +126,10 @@ struct NibReviewAnnotation: Identifiable, Codable, Hashable {
     var align: String? = nil
     var head: String? = nil
     var timeMs: Double? = nil
+    var pageIndex: Int? = nil
 
     enum CodingKeys: String, CodingKey {
-        case id, type, color, x, y, width, height, points, content, align, head, timeMs
+        case id, type, color, x, y, width, height, points, content, align, head, timeMs, pageIndex
         case startX = "start_x"
         case startY = "start_y"
         case endX = "end_x"

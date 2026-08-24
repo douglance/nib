@@ -1,15 +1,24 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "nib-global",
+  "workers_dev": false,
   "main": "src/index.ts",
   "compatibility_date": "2026-07-31",
   "durable_objects": {
     "bindings": [
-      { "name": "REQUESTS", "class_name": "NibRequestHub" }
+      { "name": "REQUESTS", "class_name": "AccountReviewHub" }
     ]
   },
   "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["NibRequestHub"] }
+    { "tag": "v1", "new_sqlite_classes": ["NibRequestHub"] },
+    {
+      "tag": "v2-account-history",
+      "deleted_classes": ["NibRequestHub"]
+    },
+    {
+      "tag": "v3-account-review-hub",
+      "new_sqlite_classes": ["AccountReviewHub"]
+    }
   ],
   "r2_buckets": [
     { "binding": "MEDIA", "bucket_name": "nib-global-media" }

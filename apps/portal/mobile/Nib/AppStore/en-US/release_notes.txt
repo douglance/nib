@@ -1,0 +1,1 @@
+Nib 0.3 adds one cloud account across Apple platforms, immutable cloud history, native visual review, actionable notifications, and Mac window, display, and region capture.

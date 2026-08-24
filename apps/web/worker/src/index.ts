@@ -1,4 +1,5 @@
-import { verifiedTenant } from "./access";
+import { handleAccountAuth, verifiedAccount } from "./account-auth";
+import { deleteAccount, purgeDeletedAccountArtifacts } from "./account-deletion";
 import {
   artifactResponse,
   GenerationWorkflow,
@@ -47,6 +48,16 @@ export default {
       return Response.json({ ok: true, service: "nib" });
     if (url.pathname === "/billing/webhook" && request.method === "POST")
       return handleStripeWebhook(request, env);
+    const authResponse = await handleAccountAuth(request, env);
+    if (authResponse) return authResponse;
+    if (
+      url.pathname === "/.well-known/apple-app-site-association" &&
+      request.method === "GET"
+    ) {
+      return appleAppSiteAssociation();
+    }
+    if (url.pathname.startsWith("/r/") && request.method === "GET")
+      return reviewLanding(url);
     if (request.method === "GET") {
       const discovery = searchDiscoveryResponse(
         url.pathname,
@@ -62,36 +73,44 @@ export default {
       return new Response("Not found", { status: 404 });
 
     if (url.pathname === "/mcp") {
-      const tenantId = await verifiedTenant(request, env);
-      if (!tenantId) {
+      const account = await verifiedAccount(request, env);
+      if (!account) {
         if (!(await isPublicMcpDiscoveryRequest(request)))
           return new Response("Unauthorized", { status: 401 });
         return mcpResponse(withoutTrustedContext(request), env, ctx);
       }
-      const routed = await withTrustedTenant(request, tenantId, env);
+      const routed = await withTrustedTenant(request, account.id, env);
       return mcpResponse(routed, env, ctx);
     }
 
-    const tenantId = await verifiedTenant(request, env);
-    if (!tenantId) return new Response("Unauthorized", { status: 401 });
+    const account = await verifiedAccount(request, env);
+    if (!account) return new Response("Unauthorized", { status: 401 });
+    const accountId = account.id;
+    if (
+      (url.pathname === "/api/account" && request.method === "DELETE") ||
+      (url.pathname === "/api/account/delete" && request.method === "POST")
+    )
+      return deleteAccount(request, account, env);
+    if (isReviewRoute(url.pathname))
+      return env.REVIEW.fetch(withReviewAccount(request, accountId));
     if (request.method === "GET" && isPrivatePage(url.pathname))
       return siteResponse(request, env, false);
     if (url.pathname === "/billing/checkout" && request.method === "POST")
-      return createCheckout(request, tenantId, env);
+      return createCheckout(request, accountId, env);
     if (url.pathname === "/billing/portal" && request.method === "POST")
-      return createPortal(tenantId, env);
+      return createPortal(accountId, env);
     if (url.pathname === "/billing/plan" && request.method === "POST")
-      return changePlan(request, tenantId, env);
+      return changePlan(request, accountId, env);
     if (url.pathname.startsWith("/artifacts/") && request.method === "GET") {
       return artifactResponse(
         request,
-        tenantId,
+        accountId,
         url.pathname.slice("/artifacts/".length),
         env,
       );
     }
 
-    const routed = await withTrustedTenant(request, tenantId, env);
+    const routed = await withTrustedTenant(request, accountId, env);
     if (url.pathname === "/internal/v1/generate" && request.method === "POST") {
       return handleGeneration(routed, env);
     }
@@ -104,6 +123,7 @@ export default {
 
   async scheduled(_event: ScheduledController, env: Bindings): Promise<void> {
     await runMaintenance(env);
+    await purgeDeletedAccountArtifacts(env);
     try {
       await syncCloudflareUsage(env);
     } catch (error) {
@@ -116,8 +136,68 @@ function withoutTrustedContext(request: Request): Request {
   const headers = new Headers(request.headers);
   headers.delete("cf-access-jwt-assertion");
   headers.delete("x-nib-tenant");
+  headers.delete("x-nib-account-id");
   headers.delete("x-nib-trial-network");
   return new Request(request, { headers });
+}
+
+function withReviewAccount(request: Request, accountId: string): Request {
+  const headers = new Headers(request.headers);
+  headers.delete("authorization");
+  headers.delete("cookie");
+  headers.delete("cf-access-jwt-assertion");
+  headers.delete("x-nib-account-id");
+  headers.delete("x-nib-tenant");
+  headers.set("x-nib-account-id", accountId);
+  return new Request(request, { headers });
+}
+
+function isReviewRoute(pathname: string): boolean {
+  const prefixes = [
+    "/api/requests",
+    "/api/projects",
+    "/api/activity",
+    "/api/waiting",
+    "/api/devices",
+    "/api/notifications",
+    "/api/nib-files",
+    "/api/feedback",
+    "/attachments/",
+  ];
+  return prefixes.some((prefix) =>
+    prefix.endsWith("/") ? pathname.startsWith(prefix) : pathname === prefix || pathname.startsWith(`${prefix}/`),
+  );
+}
+
+function appleAppSiteAssociation(): Response {
+  return Response.json({
+    applinks: {
+      apps: [],
+      details: [
+        {
+          appIDs: [
+            "2AS3V73632.com.douglance.nib",
+            "2AS3V73632.com.douglance.nib.macos",
+          ],
+          components: [{ "/": "/auth/*" }, { "/": "/r/*" }],
+        },
+      ],
+    },
+  }, { headers: { "cache-control": "public, max-age=3600" } });
+}
+
+function reviewLanding(url: URL): Response {
+  const requestId = url.pathname.slice(3).split("/")[0] ?? "";
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
+    return new Response("Not found", { status: 404 });
+  const deepLink = `nib://request/${encodeURIComponent(requestId)}`;
+  return new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Open in Nib</title><style>body{font:16px system-ui;max-width:32rem;margin:15vh auto;padding:1.5rem;color:#171717}a{display:inline-block;padding:.75rem 1rem;background:#171717;color:white;border-radius:.65rem;text-decoration:none}</style><main><h1>Open this review in Nib</h1><p>The review belongs to your Nib account.</p><a href="${deepLink}">Open Nib</a></main></html>`, {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "public, max-age=300",
+      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; navigate-to 'self' nib:; base-uri 'none'; frame-ancestors 'none'",
+    },
+  });
 }
 
 async function withTrustedTenant(

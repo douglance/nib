@@ -7,6 +7,14 @@ use nib_core::{
 
 use super::TEXT_FONT_SIZE;
 
+/// Read-only document state shared by tools. PDF reviews set an active page;
+/// image and video reviews leave it unset.
+#[derive(Debug, Clone, Copy)]
+pub struct ToolDocumentState<'a> {
+    pub annotations: &'a [Annotation],
+    pub active_page_index: Option<u32>,
+}
+
 /// Style option defaults used for newly-created annotations. Grouped into one struct
 /// (rather than separate `EditorView` fields) so every `ToolContext` construction site
 /// copies the same values through a single method instead of repeating each field
@@ -71,7 +79,7 @@ impl StyleState {
         image_size: (u32, u32),
         scale: f32,
         offset: (f32, f32),
-        annotations: &'a [Annotation],
+        document: ToolDocumentState<'a>,
         min_drag_distance: f64,
     ) -> ToolContext<'a> {
         ToolContext {
@@ -87,7 +95,8 @@ impl StyleState {
             image_size,
             scale,
             offset,
-            annotations,
+            annotations: document.annotations,
+            active_page_index: document.active_page_index,
             min_drag_distance,
         }
     }
@@ -126,6 +135,8 @@ pub struct ToolContext<'a> {
     // === Document State (read-only) ===
     /// All existing annotations
     pub annotations: &'a [Annotation],
+    /// Active zero-based PDF page. `None` keeps non-PDF tools document-wide.
+    pub active_page_index: Option<u32>,
 
     // === Configuration ===
     /// Minimum drag distance to create annotation (pixels in image space)
@@ -133,6 +144,11 @@ pub struct ToolContext<'a> {
 }
 
 impl<'a> ToolContext<'a> {
+    fn annotation_is_in_scope(&self, annotation: &Annotation) -> bool {
+        self.active_page_index
+            .is_none_or(|page_index| annotation.page_index() == Some(page_index))
+    }
+
     /// Get the effective color based on style, with `opacity` applied to alpha.
     /// Returns custom_color if style is Custom, otherwise the style's default color.
     pub fn effective_color(&self) -> Color {
@@ -163,8 +179,11 @@ impl<'a> ToolContext<'a> {
     /// for every annotation until z-order is used) still resolve most-recently-created
     /// first, same as before z_index was rendering-significant.
     pub fn annotation_at(&self, point: Point) -> Option<&'a Annotation> {
-        let mut candidates: Vec<&Annotation> =
-            self.annotations.iter().filter(|a| a.visible).collect();
+        let mut candidates: Vec<&Annotation> = self
+            .annotations
+            .iter()
+            .filter(|a| a.visible && self.annotation_is_in_scope(a))
+            .collect();
         candidates.sort_by_key(|a| a.z_index);
         candidates.into_iter().rev().find(|a| {
             let bounds = a.annotation_type.bounds();
@@ -178,7 +197,7 @@ impl<'a> ToolContext<'a> {
         let mut candidates: Vec<&Annotation> = self
             .annotations
             .iter()
-            .filter(|a| a.visible && !a.locked)
+            .filter(|a| a.visible && !a.locked && self.annotation_is_in_scope(a))
             .collect();
         candidates.sort_by_key(|a| a.z_index);
         candidates.into_iter().rev().find(|a| {
@@ -191,6 +210,7 @@ impl<'a> ToolContext<'a> {
     pub fn next_number_value(&self) -> u32 {
         self.annotations
             .iter()
+            .filter(|a| self.annotation_is_in_scope(a))
             .filter_map(|a| match &a.annotation_type {
                 AnnotationType::Number { value, .. } => Some(*value),
                 _ => None,

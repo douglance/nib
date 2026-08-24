@@ -1,3 +1,4 @@
+import NibNotifications
 import SwiftUI
 import UserNotifications
 import WatchKit
@@ -5,19 +6,25 @@ import WatchKit
 @main
 struct NibWatchApp: App {
     @WKApplicationDelegateAdaptor(NibWatchDelegate.self) private var delegate
-    @StateObject private var client = NibClient()
-    @AppStorage("nib.baseURL") private var baseURLString = NibDefaults.defaultBaseURLString
+    @StateObject private var client: NibClient
+    @StateObject private var account: NibAccountSession
+
+    init() {
+        let client = NibClient()
+        _client = StateObject(wrappedValue: client)
+        _account = StateObject(wrappedValue: NibAccountSession(
+            client: client,
+            platform: "watchos",
+            deviceName: WKInterfaceDevice.current().name
+        ))
+    }
 
     var body: some Scene {
         WindowGroup {
-            WatchRequestListView(baseURLString: $baseURLString)
-                .environmentObject(client)
-                .onAppear {
-                    client.configure(baseURLString: baseURLString)
-                }
-                .onChange(of: baseURLString) { _, value in
-                    client.configure(baseURLString: value)
-                }
+            NibAccountGate(session: account, style: .compact) {
+                WatchRequestListView()
+                    .environmentObject(client)
+            }
         }
     }
 }
@@ -37,6 +44,16 @@ final class NibWatchDelegate: NSObject, WKApplicationDelegate, @preconcurrency U
         NotificationCenter.default.post(name: .nibWatchDeviceRegistrationFailed, object: error.localizedDescription)
     }
 
+    func didReceiveRemoteNotification(
+        _ userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (WKBackgroundFetchResult) -> Void
+    ) {
+        Task { @MainActor in
+            let changed = await NibWatchNotificationActions.handleRemoteNotification(userInfo: userInfo)
+            completionHandler(changed ? .newData : .noData)
+        }
+    }
+
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -54,6 +71,7 @@ extension Notification.Name {
     static let nibWatchDeviceRegistrationFailed = Notification.Name("nibWatchDeviceRegistrationFailed")
     static let nibWatchOpenRequest = Notification.Name("nibWatchOpenRequest")
     static let nibWatchOpenProject = Notification.Name("nibWatchOpenProject")
+    static let nibWatchRequestsChanged = Notification.Name("nibWatchRequestsChanged")
 }
 
 enum WatchTheme {
@@ -70,7 +88,6 @@ enum WatchTheme {
 
 struct WatchRequestListView: View {
     @EnvironmentObject private var client: NibClient
-    @Binding var baseURLString: String
     @State private var projects: [NibProject] = []
     @State private var requests: [NibRequest] = []
     @State private var waitingPanes: [NibWaitingPane] = []
@@ -80,6 +97,7 @@ struct WatchRequestListView: View {
     @State private var loading = false
     @State private var navigationPath: [NibRequest] = []
     @State private var selectedProject: NibProject?
+    @StateObject private var cloudLibrary = NibWatchCloudLibrary()
 
     private var activeRequests: [NibRequest] {
         requests.filter(\.isActive)
@@ -100,7 +118,7 @@ struct WatchRequestListView: View {
                             projectCount: projects.count,
                             waitingCount: waitingPanes.count,
                             waitingPane: waitingPanes.first,
-                            server: client.baseURL.host() ?? client.baseURL.absoluteString,
+                            server: "Nib Cloud",
                             loading: loading,
                             refresh: { Task { await load() } },
                             register: { Task { await registerForNotifications() } },
@@ -132,6 +150,12 @@ struct WatchRequestListView: View {
                             }
                         }
 
+                        WatchCloudLibrarySection(
+                            library: cloudLibrary,
+                            baseURL: client.baseURL
+                        )
+                        .padding(.top, 2)
+
                         if !activeRequests.isEmpty {
                             Text("Requests")
                                 .font(.caption.weight(.semibold))
@@ -156,26 +180,6 @@ struct WatchRequestListView: View {
                 WatchRequestDetailView(request: request)
             }
             .task {
-                if let server = launchArgument("nib.server") {
-                    baseURLString = server
-                    client.configure(baseURLString: server)
-                }
-                do {
-                    try await client.migrateLegacyCredentialIfNeeded(
-                        name: WKInterfaceDevice.current().name,
-                        platform: "watchos"
-                    )
-                    if let pairingCode = launchArgument("nib.pairingCode") {
-                        _ = try await client.redeemPairing(
-                            code: pairingCode,
-                            name: WKInterfaceDevice.current().name,
-                            platform: "watchos"
-                        )
-                        notice = "Watch paired."
-                    }
-                } catch {
-                    self.error = error.localizedDescription
-                }
                 await load()
                 if NibEntitlements.hasAPSEnvironment {
                     await registerForNotifications()
@@ -189,7 +193,7 @@ struct WatchRequestListView: View {
                 }
             }
             .sheet(isPresented: $showingSettings) {
-                WatchSettingsView(baseURLString: $baseURLString)
+                WatchSettingsView()
             }
             .sheet(item: $selectedProject) { project in
                 NavigationStack {
@@ -213,6 +217,9 @@ struct WatchRequestListView: View {
                 NibWatchNotificationActions.clearPendingProjectId(projectId)
                 Task { await openProject(id: projectId) }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .nibWatchRequestsChanged)) { _ in
+                Task { await load() }
+            }
             .onOpenURL { url in
                 open(url: url)
             }
@@ -229,6 +236,7 @@ struct WatchRequestListView: View {
             requests = try await nextRequests
             projects = try await nextProjects
             waitingPanes = try await nextWaiting
+            await cloudLibrary.refresh(baseURL: client.baseURL)
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -260,7 +268,7 @@ struct WatchRequestListView: View {
                 token: token,
                 platform: "watchos",
                 apnsTopic: Bundle.main.bundleIdentifier,
-                capabilities: ["alert", "actions", "text", "open", "projects", "routes", "recheck", "kill"]
+                capabilities: ["alert", "actions", "text", "open", "projects", "routes", "recheck", "kill", "cloud-library", "cloud-download"]
             )
             NibDefaults.rememberRegisteredDevice(device)
             notice = "Watch registered."
@@ -306,31 +314,6 @@ struct WatchRequestListView: View {
 
     private func open(url: URL) {
         guard url.scheme == "nib" else { return }
-        if url.host == "auth" {
-            let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            if let server = components?.queryItems?.first(where: { $0.name == "server" })?.value {
-                baseURLString = server
-                client.configure(baseURLString: server)
-            }
-            guard let code = components?.queryItems?.first(where: { $0.name == "code" })?.value else {
-                notice = "Pairing link is not valid."
-                return
-            }
-            Task {
-                do {
-                    _ = try await client.redeemPairing(
-                        code: code,
-                        name: WKInterfaceDevice.current().name,
-                        platform: "watchos"
-                    )
-                    notice = "Watch paired."
-                    await load()
-                } catch {
-                    self.error = error.localizedDescription
-                }
-            }
-            return
-        }
         if let requestId = requestId(from: url) {
             Task { await openRequest(id: requestId) }
             return
@@ -565,16 +548,7 @@ struct WatchIconButtonStyle: ButtonStyle {
 
 enum NibEntitlements {
     static var hasAPSEnvironment: Bool {
-        #if targetEnvironment(simulator)
-        true
-        #else
-        guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
-              let data = try? Data(contentsOf: url),
-              let text = String(data: data, encoding: .isoLatin1) else {
-            return false
-        }
-        return text.contains("<key>aps-environment</key>")
-        #endif
+        NibNotificationContract.apnsEnvironment != nil
     }
 }
 
@@ -1214,33 +1188,17 @@ struct WatchDangerButtonStyle: ButtonStyle {
 struct WatchSettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var client: NibClient
-    @Binding var baseURLString: String
-    @State private var pairingCode = ""
-    @State private var authState = "Checking"
-    @State private var authError: String?
-    @State private var pairing = false
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Server URL", text: $baseURLString)
-                    .textInputAutocapitalization(.never)
-                Text(authState)
-                    .foregroundStyle(.secondary)
-                TextField("Pairing code", text: $pairingCode)
-                    .textInputAutocapitalization(.never)
-                Button(pairing ? "Pairing..." : "Pair") {
-                    Task { await redeemPairing() }
-                }
-                .disabled(pairing || pairingCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                if let authError {
-                    Text(authError)
-                        .font(.caption2)
-                        .foregroundStyle(.red)
-                }
+                NibAccountSection(
+                    client: client,
+                    platform: "watchos",
+                    deviceName: WKInterfaceDevice.current().name
+                )
             }
-            .navigationTitle("Server")
-            .task { await refreshAuthStatus() }
+            .navigationTitle("Account")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -1249,114 +1207,20 @@ struct WatchSettingsView: View {
         }
     }
 
-    private func refreshAuthStatus() async {
-        client.configure(baseURLString: baseURLString)
-        do {
-            let status = try await client.authStatus()
-            authState = status.authenticated ? "Paired" : "Not paired"
-        } catch {
-            authState = "Not paired"
-        }
-    }
-
-    private func redeemPairing() async {
-        pairing = true
-        defer { pairing = false }
-        client.configure(baseURLString: baseURLString)
-        do {
-            let status = try await client.redeemPairing(
-                code: pairingCode.trimmingCharacters(in: .whitespacesAndNewlines),
-                name: WKInterfaceDevice.current().name,
-                platform: "watchos"
-            )
-            authState = status.authenticated ? "Paired" : "Not paired"
-            pairingCode = ""
-            authError = nil
-        } catch {
-            authState = "Not paired"
-            authError = error.localizedDescription
-        }
-    }
 }
 
 @MainActor
 enum NibWatchNotificationActions {
-    static let open = "NIB_OPEN"
-    static let choice0 = "NIB_CHOICE_0"
-    static let choice1 = "NIB_CHOICE_1"
-    static let choice2 = "NIB_CHOICE_2"
-    static let text = "NIB_TEXT_REPLY"
+    static let open = NibNotificationIdentifiers.open
+    static let choice0 = NibNotificationIdentifiers.choice0
+    static let choice1 = NibNotificationIdentifiers.choice1
+    static let choice2 = NibNotificationIdentifiers.choice2
+    static let text = NibNotificationIdentifiers.text
     private static let pendingRequestKey = "nib.pendingNotification.requestId"
     private static let pendingProjectKey = "nib.pendingNotification.projectId"
 
     static func register() {
-        let openAction = UNNotificationAction(identifier: open, title: "Open", options: [.foreground])
-        let firstAction = UNNotificationAction(identifier: choice0, title: "First", options: [])
-        let secondAction = UNNotificationAction(identifier: choice1, title: "Second", options: [])
-        let thirdAction = UNNotificationAction(identifier: choice2, title: "Third", options: [])
-        let textAction = UNTextInputNotificationAction(
-            identifier: text,
-            title: "Reply",
-            options: [],
-            textInputButtonTitle: "Send",
-            textInputPlaceholder: "Reply"
-        )
-        var categories = [
-            UNNotificationCategory(identifier: "NIB_OPEN", actions: [openAction], intentIdentifiers: []),
-            choiceCategory("NIB_APPROVAL", "Approve", "Hold", openAction),
-            UNNotificationCategory(identifier: "NIB_CHOICE", actions: [firstAction, secondAction, thirdAction, textAction, openAction], intentIdentifiers: []),
-            UNNotificationCategory(identifier: "NIB_TEXT", actions: [textAction, openAction], intentIdentifiers: [])
-        ]
-        categories.append(contentsOf: choiceCategories(openAction: openAction))
-        UNUserNotificationCenter.current().setNotificationCategories(Set(categories))
-    }
-
-    private static func choiceCategories(openAction: UNNotificationAction) -> [UNNotificationCategory] {
-        [
-            threeChoiceCategory("NIB_SHIP_HOLD_REVISE", "Ship", "Hold", "Revise", openAction),
-            choiceCategory("NIB_APPROVE_HOLD", "Approve", "Hold", openAction),
-            choiceCategory("NIB_APPROVE_REJECT", "Approve", "Reject", openAction),
-            choiceCategory("NIB_ALLOW_DENY", "Allow", "Deny", openAction),
-            choiceCategory("NIB_YES_NO", "Yes", "No", openAction),
-            choiceCategory("NIB_SHIP_HOLD", "Ship", "Hold", openAction),
-            choiceCategory("NIB_USE_REVISE", "Use it", "Revise", openAction)
-        ]
-    }
-
-    private static func choiceCategory(
-        _ identifier: String,
-        _ firstTitle: String,
-        _ secondTitle: String,
-        _ openAction: UNNotificationAction
-    ) -> UNNotificationCategory {
-        UNNotificationCategory(
-            identifier: identifier,
-            actions: [
-                UNNotificationAction(identifier: choice0, title: firstTitle, options: []),
-                UNNotificationAction(identifier: choice1, title: secondTitle, options: []),
-                openAction
-            ],
-            intentIdentifiers: []
-        )
-    }
-
-    private static func threeChoiceCategory(
-        _ identifier: String,
-        _ firstTitle: String,
-        _ secondTitle: String,
-        _ thirdTitle: String,
-        _ openAction: UNNotificationAction
-    ) -> UNNotificationCategory {
-        UNNotificationCategory(
-            identifier: identifier,
-            actions: [
-                UNNotificationAction(identifier: choice0, title: firstTitle, options: []),
-                UNNotificationAction(identifier: choice1, title: secondTitle, options: []),
-                UNNotificationAction(identifier: choice2, title: thirdTitle, options: []),
-                openAction
-            ],
-            intentIdentifiers: []
-        )
+        UNUserNotificationCenter.current().setNotificationCategories(NibNotificationContract.categories())
     }
 
     static func handle(response: UNNotificationResponse) async {
@@ -1364,48 +1228,46 @@ enum NibWatchNotificationActions {
         if let deviceId = payload["deviceId"] as? String, !deviceId.isEmpty {
             NibDefaults.rememberRegisteredDeviceID(deviceId)
         }
-        if response.actionIdentifier == UNNotificationDefaultActionIdentifier || response.actionIdentifier == open {
-            guard let requestId = payload["requestId"] as? String else {
+        let text = (response as? UNTextInputNotificationResponse)?.userText
+        guard let route = NibNotificationContract.resolve(
+            actionIdentifier: response.actionIdentifier,
+            userInfo: response.notification.request.content.userInfo,
+            text: text
+        ) else {
+            if response.actionIdentifier == UNNotificationDefaultActionIdentifier
+                || response.actionIdentifier == open {
                 await openPayload(payload)
-                return
             }
+            return
+        }
+        switch route {
+        case .openRequest(let requestId):
             storePendingRequestId(requestId)
             await markClicked(requestId: requestId)
-            await MainActor.run {
-                NotificationCenter.default.post(name: .nibWatchOpenRequest, object: requestId)
-            }
-            return
-        }
-        guard let requestId = payload["requestId"] as? String else {
+            NotificationCenter.default.post(name: .nibWatchOpenRequest, object: requestId)
+        case .openProject:
             await openPayload(payload)
-            return
-        }
-        let deviceId = payload["deviceId"] as? String ?? "watch-notification"
-        let isVisualReview = payload["type"] as? String == "visual-review"
-        if response.actionIdentifier == choice0 {
-            let body: [String: Any] = isVisualReview
-                ? ["decision": "approve", "annotations": [], "deviceId": deviceId, "notificationResponse": true]
-                : ["choiceIndex": 0, "deviceId": deviceId, "notificationResponse": true]
-            await respond(requestId: requestId, body: body)
-            return
-        }
-        if response.actionIdentifier == choice1 {
-            let body: [String: Any] = isVisualReview
-                ? ["decision": "reject", "annotations": [], "deviceId": deviceId, "notificationResponse": true]
-                : ["choiceIndex": 1, "deviceId": deviceId, "notificationResponse": true]
-            await respond(requestId: requestId, body: body)
-            return
-        }
-        if response.actionIdentifier == choice2 {
+        case .openURL:
+            break
+        case .respondChoice(let requestId, let choiceIndex):
+            let deviceId = payload["deviceId"] as? String ?? "watch-notification"
+            let isVisualReview = payload["type"] as? String == "visual-review"
+            let body: [String: Any] = isVisualReview && choiceIndex < 2
+                ? [
+                    "decision": choiceIndex == 0 ? "approve" : "reject",
+                    "annotations": [],
+                    "deviceId": deviceId,
+                    "notificationResponse": true
+                ]
+                : ["choiceIndex": choiceIndex, "deviceId": deviceId, "notificationResponse": true]
             await respond(
                 requestId: requestId,
-                body: ["choiceIndex": 2, "deviceId": deviceId, "notificationResponse": true]
+                body: body,
+                idempotencyKey: notificationIdempotencyKey(response, requestId: requestId)
             )
-            return
-        }
-        if response.actionIdentifier == text, let textResponse = response as? UNTextInputNotificationResponse {
-            let value = textResponse.userText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !value.isEmpty else { return }
+        case .respondText(let requestId, let value):
+            let deviceId = payload["deviceId"] as? String ?? "watch-notification"
+            let isVisualReview = payload["type"] as? String == "visual-review"
             let body: [String: Any] = isVisualReview
                 ? [
                     "decision": "comment",
@@ -1415,7 +1277,11 @@ enum NibWatchNotificationActions {
                     "notificationResponse": true
                 ]
                 : ["text": value, "deviceId": deviceId, "notificationResponse": true]
-            await respond(requestId: requestId, body: body)
+            await respond(
+                requestId: requestId,
+                body: body,
+                idempotencyKey: notificationIdempotencyKey(response, requestId: requestId)
+            )
         }
     }
 
@@ -1446,18 +1312,28 @@ enum NibWatchNotificationActions {
         clearPendingString(pendingProjectKey, matching: projectId)
     }
 
-    private static func nibPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
-        if let payload = userInfo["nib"] as? [String: Any] {
-            return payload
+    static func handleRemoteNotification(userInfo: [AnyHashable: Any]) async -> Bool {
+        guard let requestId = NibNotificationContract.resolvedRequestID(from: userInfo) else {
+            return false
         }
-        if let payload = userInfo["nib"] as? NSDictionary {
-            return payload as? [String: Any] ?? [:]
-        }
-        return userInfo.reduce(into: [String: Any]()) { result, item in
-            if let key = item.key as? String {
-                result[key] = item.value
+        await clearDeliveredNotifications(requestId: requestId)
+        NotificationCenter.default.post(name: .nibWatchRequestsChanged, object: requestId)
+        return true
+    }
+
+    private static func clearDeliveredNotifications(requestId: String) async {
+        let center = UNUserNotificationCenter.current()
+        let identifiers = await center.deliveredNotifications()
+            .filter { notification in
+                nibPayload(from: notification.request.content.userInfo)["requestId"] as? String == requestId
             }
-        }
+            .map(\.request.identifier)
+        guard !identifiers.isEmpty else { return }
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+
+    private static func nibPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
+        NibNotificationContract.payload(from: userInfo)
     }
 
     private static func markClicked(requestId: String) async {
@@ -1476,7 +1352,7 @@ enum NibWatchNotificationActions {
         _ = try? await URLSession.shared.data(for: request)
     }
 
-    private static func respond(requestId: String, body: [String: Any]) async {
+    private static func respond(requestId: String, body: [String: Any], idempotencyKey: String) async {
         guard let url = endpoint("/api/requests/\(requestId)/respond"),
               JSONSerialization.isValidJSONObject(body),
               let data = try? JSONSerialization.data(withJSONObject: body)
@@ -1486,13 +1362,22 @@ enum NibWatchNotificationActions {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(idempotencyKey, forHTTPHeaderField: "idempotency-key")
         request.httpBody = data
         authorize(&request)
         _ = try? await URLSession.shared.data(for: request)
     }
 
+    private static func notificationIdempotencyKey(_ response: UNNotificationResponse, requestId: String) -> String {
+        NibNotificationContract.idempotencyKey(
+            requestID: requestId,
+            notificationIdentifier: response.notification.request.identifier,
+            actionIdentifier: response.actionIdentifier
+        )
+    }
+
     private static func endpoint(_ path: String) -> URL? {
-        let base = UserDefaults.standard.string(forKey: "nib.baseURL") ?? NibDefaults.defaultBaseURLString
+        let base = NibDefaults.defaultBaseURLString
         return URL(string: path, relativeTo: URL(string: base))?.absoluteURL
     }
 

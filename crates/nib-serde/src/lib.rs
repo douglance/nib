@@ -23,6 +23,8 @@ pub struct SerializedAnnotation {
     #[serde(flatten)]
     pub geometry: AnnotationGeometry,
     pub color: String,
+    #[serde(rename = "pageIndex", default, skip_serializing_if = "Option::is_none")]
+    pub page_index: Option<u32>,
     /// Style fields not covered by `geometry`/`color`. Optional and flattened so
     /// old sidecar files (written before this field existed) still deserialize:
     /// every field defaults to `None`, and `deserialize_annotation` falls back to
@@ -425,6 +427,7 @@ pub fn serialize_annotation(annotation: &Annotation) -> SerializedAnnotation {
         annotation_type,
         geometry,
         color: color_to_hex(&annotation.color),
+        page_index: annotation.page_index(),
         style: serialize_style(annotation),
     }
 }
@@ -598,7 +601,8 @@ pub fn deserialize_annotation(serialized: &SerializedAnnotation) -> Option<Annot
     Some(
         Annotation::new(annotation_type)
             .with_color(color)
-            .with_group_id(style.group_id),
+            .with_group_id(style.group_id)
+            .with_page_index(serialized.page_index),
     )
 }
 
@@ -645,6 +649,25 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_preserves_pdf_page_index_with_contract_casing() {
+        let original = Annotation::new(AnnotationType::Box {
+            region: Region::new(1.0, 2.0, 3.0, 4.0),
+            stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
+            filled: false,
+            corner_radius: 0.0,
+        })
+        .with_page_index(Some(12));
+
+        let serialized = serialize_annotation(&original);
+        let json = serde_json::to_string(&serialized).expect("serialize to json");
+        assert!(json.contains("\"pageIndex\":12"));
+
+        let restored = deserialize_annotation(&serialized).expect("deserialize annotation");
+        assert_eq!(restored.page_index(), Some(12));
+    }
+
+    #[test]
     fn old_sidecar_json_without_group_id_field_parses_as_ungrouped() {
         // Simulates a sidecar file written before grouping existed: no
         // `group_id` key at all in the style block.
@@ -652,6 +675,7 @@ mod tests {
         let parsed: SerializedAnnotation = serde_json::from_str(json).expect("parse json");
         let restored = deserialize_annotation(&parsed).expect("deserialize annotation");
         assert_eq!(restored.group_id, None);
+        assert_eq!(restored.page_index(), None);
     }
 
     #[test]

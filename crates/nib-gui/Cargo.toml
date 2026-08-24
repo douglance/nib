@@ -21,6 +21,7 @@ gpui.workspace = true
 # Image processing
 image.workspace = true
 arboard.workspace = true
+pdfium-bundled = { version = "0.1.1", features = ["bundled"] }
 
 # Serialization
 serde.workspace = true
@@ -52,3 +53,4 @@ objc2-quartz-core = "0.3.2"
 
 [dev-dependencies]
 tempfile.workspace = true
+lopdf.workspace = true

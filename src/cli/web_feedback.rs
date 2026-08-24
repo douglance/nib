@@ -10,33 +10,26 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fmt;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-const DEFAULT_PORTAL_URL: &str = "https://nib-global.doug-lance.workers.dev";
+const DEFAULT_PORTAL_URL: &str = "https://nibtool.com";
 
 #[derive(Debug)]
 pub struct WebFeedbackError {
     message: String,
-    fallback_allowed: bool,
 }
 
 impl WebFeedbackError {
-    pub fn allows_local_fallback(&self) -> bool {
-        self.fallback_allowed
-    }
-
     fn before_publish(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            fallback_allowed: true,
         }
     }
 
     fn after_publish(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            fallback_allowed: false,
         }
     }
 }
@@ -125,15 +118,19 @@ async fn finish_published_value(
     let response = wait_for_request(&published.request_id, args.timeout)
         .await
         .map_err(|error| WebFeedbackError::after_publish(error.to_string()))?;
-    let visual = visual_response(&response).map_err(WebFeedbackError::after_publish)?;
+    let mut visual = visual_response(&response).map_err(WebFeedbackError::after_publish)?;
     if published
         .file
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("nib"))
     {
-        merge_annotations(&published.file, &visual.annotations)
-            .map_err(WebFeedbackError::after_publish)?;
+        if !visual.annotations.is_empty() {
+            visual.derivative_file = Some(
+                merge_annotations(&published.file, &visual.annotations)
+                    .map_err(WebFeedbackError::after_publish)?,
+            );
+        }
     }
     serde_json::to_value(visual).map_err(|error| WebFeedbackError::after_publish(error.to_string()))
 }
@@ -143,17 +140,24 @@ pub(crate) fn create_review_request(
     message: Option<&str>,
     annotations: Option<&str>,
 ) -> Result<PublishedFeedback, WebFeedbackError> {
-    if file
+    let extension = file
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"))
-    {
+        .unwrap_or_default();
+    if extension.eq_ignore_ascii_case("mp4") {
         if annotations.is_some() {
             return Err(WebFeedbackError::before_publish(
                 "video prompt annotations must be added through the paused-frame reviewer",
             ));
         }
         create_video_review_request(file, message)
+    } else if extension.eq_ignore_ascii_case("pdf") {
+        if annotations.is_some() {
+            return Err(WebFeedbackError::before_publish(
+                "E_PDF_PROMPT_ANNOTATIONS_UNSUPPORTED: add PDF annotations in the page reviewer so each annotation has a pageIndex anchor",
+            ));
+        }
+        create_pdf_review_request(file, message)
     } else {
         create_feedback_request(file, message, annotations)
     }
@@ -197,12 +201,7 @@ pub async fn run_request_review(args: &RequestReviewArgs) -> crate::core::Result
 }
 
 pub(crate) async fn review_request_value(args: &RequestReviewArgs) -> crate::core::Result<Value> {
-    let base_url = args
-        .portal
-        .clone()
-        .unwrap_or_else(portal_url)
-        .trim_end_matches('/')
-        .to_string();
+    let base_url = portal_url();
     let request_id = args.request_id.clone();
     let base_url_for_download = base_url.clone();
     let downloaded = tokio::task::spawn_blocking(move || {
@@ -339,6 +338,8 @@ fn safe_cache_name(name: &str, content_type: &str) -> String {
         .unwrap_or_else(|| {
             if content_type == "video/mp4" {
                 "review.mp4"
+            } else if content_type == "application/pdf" {
+                "review.pdf"
             } else {
                 "review.png"
             }
@@ -366,11 +367,12 @@ pub(crate) fn create_feedback_request(
 ) -> Result<PublishedFeedback, WebFeedbackError> {
     let nib_path = ensure_feedback_nib(file)
         .map_err(|error| WebFeedbackError::after_publish(error.to_string()))?;
+    let nib_path = apply_prompt_annotations(&nib_path, annotations)
+        .map_err(WebFeedbackError::after_publish)?;
     let base_url = portal_url();
     let agent = portal_agent();
     let request = create_request(&agent, &base_url, message, &nib_path)
         .map_err(WebFeedbackError::before_publish)?;
-    apply_prompt_annotations(&nib_path, annotations).map_err(WebFeedbackError::after_publish)?;
     let preview = render_preview(&nib_path).map_err(WebFeedbackError::after_publish)?;
     let canonical = std::fs::read(&nib_path).map_err(|error| {
         WebFeedbackError::after_publish(format!("Failed to read {}: {error}", nib_path.display()))
@@ -494,6 +496,76 @@ fn create_video_review_request(
     })
 }
 
+fn create_pdf_review_request(
+    file: &Path,
+    message: Option<&str>,
+) -> Result<PublishedFeedback, WebFeedbackError> {
+    let document = crate::pdf::inspect_pdf(file)
+        .map_err(|error| WebFeedbackError::before_publish(error.to_string()))?;
+    let base_url = portal_url();
+    let agent = portal_agent();
+    let file_name = file
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("review.pdf");
+    let title = file
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("PDF review");
+    let request: PortalRequest = send_json(
+        authorize(agent.post(&format!("{base_url}/api/requests"))),
+        &json!({
+            "kind": "visual-review",
+            "title": title,
+            "prompt": message.unwrap_or("Review this PDF"),
+            "source": request_source(),
+            "metadata": {"contract":"nib.review/v3","fileName":file_name},
+            "notify": false
+        }),
+    )
+    .map_err(WebFeedbackError::before_publish)?;
+    let pdf = upload_file(
+        &agent,
+        &base_url,
+        &request.id,
+        file_name,
+        "application/pdf",
+        "primary",
+        file,
+    )
+    .map_err(WebFeedbackError::before_publish)?;
+    let first_page = document
+        .pages
+        .first()
+        .ok_or_else(|| WebFeedbackError::before_publish("PDF must contain at least one page"))?;
+    let subject = json!({
+        "contract": "nib.review/v3",
+        "primary": {
+            "attachmentId": pdf.id,
+            "kind": "pdf",
+            "contentType": "application/pdf",
+            "width": first_page.width,
+            "height": first_page.height,
+            "pageCount": document.page_count,
+            "pages": document.pages,
+            "sha256": document.sha256
+        }
+    });
+    let _: PortalRequest = send_json(
+        authorize(agent.patch(&format!("{base_url}/api/requests/{}", request.id))),
+        &json!({"metadata":{"subject":subject}}),
+    )
+    .map_err(WebFeedbackError::before_publish)?;
+    publish_request(&agent, &base_url, &request.id).map_err(WebFeedbackError::before_publish)?;
+
+    Ok(PublishedFeedback {
+        url: request_url(&base_url, &request.id),
+        request_id: request.id,
+        file: file.to_path_buf(),
+        status: "open",
+    })
+}
+
 fn print_wait_handle(request: &PublishedFeedback) {
     let _ = writeln!(
         std::io::stderr(),
@@ -509,14 +581,11 @@ fn print_wait_handle(request: &PublishedFeedback) {
 }
 
 fn portal_url() -> String {
-    std::env::var("NIB_PORTAL_URL")
-        .unwrap_or_else(|_| DEFAULT_PORTAL_URL.to_string())
-        .trim_end_matches('/')
-        .to_string()
+    DEFAULT_PORTAL_URL.to_string()
 }
 
 fn portal_agent() -> ureq::Agent {
-    let connect_timeout = std::env::var("NIB_PORTAL_CONNECT_TIMEOUT_MS")
+    let connect_timeout = std::env::var("NIB_CLOUD_CONNECT_TIMEOUT_MS")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(1500);
@@ -535,7 +604,7 @@ fn authorize(request: ureq::Request) -> ureq::Request {
 }
 
 fn portal_auth_token() -> Option<String> {
-    super::auth::resolved_access_token(&portal_url()).ok()
+    super::auth::resolved_access_token().ok()
 }
 
 fn create_request(
@@ -821,23 +890,27 @@ fn render_preview(nib_path: &Path) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())
 }
 
-fn apply_prompt_annotations(nib_path: &Path, raw: Option<&str>) -> Result<(), String> {
+fn apply_prompt_annotations(nib_path: &Path, raw: Option<&str>) -> Result<PathBuf, String> {
     let Some(raw) = raw else {
-        return Ok(());
+        return Ok(nib_path.to_path_buf());
     };
     let inputs = super::annotation_json::parse_annotations(raw)?;
-    let nib = NibFile::open(nib_path).map_err(|error| error.to_string())?;
+    if inputs.is_empty() {
+        return Ok(nib_path.to_path_buf());
+    }
+    let nib = NibFile::open_editable(nib_path).map_err(|error| error.to_string())?;
     for input in inputs {
         let annotation =
             crate::collab::operation::data_to_annotation(0, &input.to_annotation_data());
         nib.add_annotation(&annotation)
             .map_err(|error| error.to_string())?;
     }
-    Ok(())
+    nib.save().map_err(|error| error.to_string())?;
+    Ok(nib.path().to_path_buf())
 }
 
-fn merge_annotations(nib_path: &Path, annotations: &[Value]) -> Result<(), String> {
-    let nib = NibFile::open(nib_path).map_err(|error| error.to_string())?;
+fn merge_annotations(nib_path: &Path, annotations: &[Value]) -> Result<PathBuf, String> {
+    let nib = NibFile::open_editable(nib_path).map_err(|error| error.to_string())?;
     for value in annotations {
         let serialized: crate::SerializedAnnotation = serde_json::from_value(value.clone())
             .map_err(|error| format!("Invalid image annotation: {error}"))?;
@@ -850,7 +923,8 @@ fn merge_annotations(nib_path: &Path, annotations: &[Value]) -> Result<(), Strin
         nib.add_annotation(&annotation)
             .map_err(|error| error.to_string())?;
     }
-    Ok(())
+    nib.save().map_err(|error| error.to_string())?;
+    Ok(nib.path().to_path_buf())
 }
 
 fn request_source() -> String {
@@ -929,6 +1003,12 @@ pub(crate) struct VisualResponse {
     attachments: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     transcript: Option<Value>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        rename = "derivativeFile"
+    )]
+    derivative_file: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -961,7 +1041,7 @@ mod tests {
     }
 
     #[test]
-    fn returned_annotations_are_merged_into_the_originating_nib() {
+    fn returned_annotations_create_a_derivative_without_mutating_the_source() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("review.nib");
         NibFile::create(&path, b"image", "png", 100, 80).unwrap();
@@ -976,11 +1056,39 @@ mod tests {
         }))
         .unwrap();
 
-        merge_annotations(&path, &[annotation]).unwrap();
+        let derivative_path = merge_annotations(&path, &[annotation]).unwrap();
 
-        let annotations = NibFile::open(&path).unwrap().list_annotations().unwrap();
+        assert_ne!(derivative_path, path);
+        assert_eq!(NibFile::open(&path).unwrap().annotation_count().unwrap(), 0);
+        let annotations = NibFile::open(&derivative_path)
+            .unwrap()
+            .list_annotations()
+            .unwrap();
         assert_eq!(annotations.len(), 1);
         assert_eq!(annotations[0].annotation_type.type_name(), "box");
+    }
+
+    #[test]
+    fn prompt_annotations_create_a_derivative_without_mutating_the_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("prompt.nib");
+        NibFile::create(&path, b"image", "png", 100, 80).unwrap();
+
+        let derivative_path = apply_prompt_annotations(
+            &path,
+            Some(r#"[{"type":"rectangle","at":[10,12],"size":[30,20]}]"#),
+        )
+        .unwrap();
+
+        assert_ne!(derivative_path, path);
+        assert_eq!(NibFile::open(&path).unwrap().annotation_count().unwrap(), 0);
+        assert_eq!(
+            NibFile::open(&derivative_path)
+                .unwrap()
+                .annotation_count()
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]

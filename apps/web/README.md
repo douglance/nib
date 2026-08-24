@@ -2,7 +2,7 @@
 
 Nib gives AI agents one missing capability: generate a user-interface image from a text brief and up to three reference images. Use it when an agent can describe a dashboard, settings screen, mobile app, landing page, or another interface but cannot create the image itself.
 
-The public production site is live at <https://nib.doug-lance.workers.dev>. OpenAPI, the remote MCP endpoint, and the installable skill are public. Protected generation and billing fail closed until scalable customer authentication is implemented. The existing Cloudflare Zero Trust seat is appropriate for owner/admin access, not customer identity. See [`docs/deployment.md`](docs/deployment.md).
+The canonical production origin is <https://nibtool.com>. OpenAPI, remote MCP discovery, and the installable skill are public. Generation, review history, devices, and billing use one passwordless email account. See [`docs/deployment.md`](docs/deployment.md).
 
 It does not review, score, compare, capture, annotate, or approve an existing interface. The Rust CLI is the source of truth. Incurs projects the same command into CLI, Streamable HTTP MCP, HTTP, OpenAPI, and an installable skill.
 
@@ -11,10 +11,10 @@ It does not review, score, compare, capture, annotate, or approve an existing in
 Paste this prompt into Codex, Claude Code, Gemini CLI, or another coding agent:
 
 ```text
-Install Nib for me. Follow https://nib.doug-lance.workers.dev/install-agent.md exactly. Configure it globally for this agent, install the Nib UI image skill globally, add the managed Nib instruction to this agent's global instruction file, preserve my existing settings, and verify that the generate_ui tool is available without generating an image.
+Install Nib for me. Follow https://nibtool.com/install-agent.md exactly. Configure it globally for this agent, install the Nib UI image skill globally, add the managed Nib instruction to this agent's global instruction file, preserve my existing settings, and verify that the generate_ui tool is available without generating an image.
 ```
 
-[`/install-agent.md`](https://nib.doug-lance.workers.dev/install-agent.md) is the canonical host-aware installation contract. It configures only the active agent, installs the remote-MCP skill at user scope, adds one idempotent managed block to the host's global instruction file, and verifies `tools/list` without consuming the free image. The separate generated CLI skill remains available at `/.well-known/skills/generate/SKILL.md` for installations that include the `nib` binary.
+[`/install-agent.md`](https://nibtool.com/install-agent.md) is the canonical host-aware installation contract. It configures only the active agent, installs the remote-MCP skill at user scope, adds one idempotent managed block to the host's global instruction file, and verifies `tools/list` without consuming the free image. The separate generated CLI skill remains available at `/.well-known/skills/generate/SKILL.md` for installations that include the `nib` binary.
 
 ```sh
 nib generate "A compact dark analytics dashboard for a fleet operator" \
@@ -85,14 +85,12 @@ npm run dev
 Run stdio MCP:
 
 ```sh
-cloudflared access login https://nib.doug-lance.workers.dev/internal/v1/generate
-export NIB_ACCESS_TOKEN="$(cloudflared access token -app=https://nib.doug-lance.workers.dev/internal/v1/generate)"
+nib auth login you@example.com
+nib auth status
 nib --mcp
 ```
 
-This token represents the verified end user and is valid for the Access session duration. Headless operator deployments may instead set both `NIB_ACCESS_CLIENT_ID` and `NIB_ACCESS_CLIENT_SECRET` to a private service token; never distribute that credential as the customer trial path.
-
-See [Cloudflare's CLI Access flow](https://developers.cloudflare.com/cloudflare-one/tutorials/cli/) and [coding-agent authentication guidance](https://developers.cloudflare.com/cloudflare-one/access-controls/authenticate-agents/).
+The account session is revocable and persists in the system Keychain until sign-out. Account settings on the web and Apple clients can permanently delete billing access, stored product data, sessions, and the account.
 
 Use `nib --llms-full`, the public `/openapi.json`, and the public `/.well-known/skills/index.json` for machine-readable discovery.
 
@@ -104,7 +102,6 @@ Use `nib --llms-full`, the public `/openapi.json`, and the public `/.well-known/
 - [`docs/deployment.md`](docs/deployment.md): Cloudflare, AI Gateway, Access, Stripe, migrations, rollout, and rollback
 - [`docs/security.md`](docs/security.md): trust boundaries, prompt/reference handling, retention, and abuse controls
 - [`docs/operations.md`](docs/operations.md): observability, failures, queues, cleanup, and canaries
-- [`docs/dogfood.md`](docs/dogfood.md): generate the first sales-page visual through Nib itself
 
 ## Upstream seam
 
@@ -123,6 +120,4 @@ The local Rust CLI pins Incurs 0.5.1, which carries the declarative MCP image pr
 - [Topcoat Wasm support merge](https://github.com/tokio-rs/topcoat/pull/191)
 - [Cloudflare stateless remote MCP](https://developers.cloudflare.com/agents/model-context-protocol/guides/remote-mcp-server/)
 - [Cloudflare Workflows Workers API](https://developers.cloudflare.com/workflows/build/workers-api/)
-- [Cloudflare Access JWT validation](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/)
-- [Cloudflare Access service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/)
 - [Stripe meter event API](https://docs.stripe.com/api/billing/meter-event/create)

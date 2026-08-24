@@ -1,0 +1,14 @@
+Nib keeps your visual review work with you across iPhone, Apple Watch, Mac, and Apple Vision Pro.
+
+Sign in with the same Nib account you use on the web or from your agent. Review incoming requests, inspect images, video, PDFs, and Nib files, respond to decisions, and browse your cloud history. On Mac, capture a display, window, or region and create a new Nib file in the cloud.
+
+Highlights:
+
+- One account and one cloud history on every device
+- Native visual review and annotation
+- Actionable push notifications
+- Apple Watch request decisions
+- Mac display, window, and region capture
+- Permanent account deletion from Settings
+
+Nib is a free companion app for the paid Nib web service. The app contains no purchase flow and no link to purchase outside the app.

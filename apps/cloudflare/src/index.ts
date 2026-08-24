@@ -1,10 +1,15 @@
 import { DurableObject } from "cloudflare:workers";
+import { apnsReadiness, sendApnsFanout, type ApnsPayload } from "./apns";
+import { NibFileBackend } from "./nib-files";
+import { purgeReviewAccount } from "./account-data";
+import { commitFirstResponse, responseChoiceValue } from "./response-coordinator";
 
 interface Env {
-  REQUESTS: DurableObjectNamespace<NibRequestHub>;
+  REQUESTS: DurableObjectNamespace<AccountReviewHub>;
   MEDIA: R2Bucket;
-  NIB_AUTH_TOKEN?: string;
-  NIB_TENANT_ID?: string;
+  NIB_APNS_TEAM_ID?: string;
+  NIB_APNS_KEY_ID?: string;
+  NIB_APNS_PRIVATE_KEY?: string;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -31,39 +36,8 @@ interface RequestResponse {
   deviceId?: string;
   attachments?: RequestAttachment[];
   transcript?: JsonObject;
+  idempotencyKey?: string;
   createdAt: string;
-}
-
-interface AuthTokenRecord {
-  id: string;
-  name: string;
-  platform: string;
-  scopes: string[];
-  createdAt: string;
-  lastUsedAt: string;
-  revokedAt: string | null;
-}
-
-interface PairingRecord {
-  id: string;
-  createdBy: string;
-  createdAt: string;
-  expiresAt: string;
-  redeemedAt: string | null;
-}
-
-interface RateLimitRecord {
-  windowStartedAt: number;
-  attempts: number;
-}
-
-interface AuthContext {
-  kind: "bootstrap" | "token";
-  subject: string;
-  name: string;
-  platform: string;
-  scopes: string[];
-  tokenHash?: string;
 }
 
 interface DeviceRecord {
@@ -72,7 +46,8 @@ interface DeviceRecord {
   platform: string;
   pushKind: string;
   token: string;
-  apnsTopic: string | null;
+  apnsTopic: string;
+  apnsEnvironment: "sandbox" | "production";
   capabilities: string[];
   lastSuccessAt: string | null;
   lastError: string | null;
@@ -122,77 +97,45 @@ export default {
       return json({ applinks: { apps: [], details: [{ appID: "2AS3V73632.com.douglance.nib", paths: ["/r/*"] }] } });
     }
     if (url.pathname.startsWith("/r/") && request.method === "GET") {
-      return requestPage(url.pathname.split("/")[2] ?? "", url.origin);
+      return requestPage(url.pathname.split("/")[2] ?? "");
     }
-    const tenant = env.NIB_TENANT_ID?.trim() || "primary";
-    const stub = env.REQUESTS.get(env.REQUESTS.idFromName(tenant));
-
-    if (url.pathname === "/api/auth/exchange" && request.method === "POST") {
-      if (!bootstrapAuthorized(request, env)) return unauthorized();
-      return stub.fetch(request);
-    }
-    if (url.pathname === "/api/auth/pairings/redeem" && request.method === "POST") {
-      const headers = new Headers(request.headers);
-      headers.set("x-nib-client-key", await sha256(request.headers.get("cf-connecting-ip") || "unknown"));
-      return stub.fetch(new Request(request, { headers }));
-    }
-
-    const auth = await authenticate(request, env, stub);
+    const accountId = trustedAccountId(request);
+    if (!accountId) return unauthorized();
+    const stub = env.REQUESTS.get(env.REQUESTS.idFromName(`account:${accountId}`));
     if (url.pathname.startsWith("/attachments/") && request.method === "GET") {
-      return attachmentResponse(url.pathname.split("/")[2] ?? "", request, env, Boolean(auth));
-    }
-    if (!auth) return unauthorized();
-    const requiredScope = scopeFor(request.method, url.pathname);
-    if (requiredScope && !hasScope(auth, requiredScope)) return forbidden(requiredScope);
-
-    if (url.pathname === "/api/auth/status" && request.method === "GET") {
-      return json({
-        authenticated: true,
-        kind: auth.kind,
-        subject: auth.subject,
-        name: auth.name,
-        platform: auth.platform,
-        scopes: auth.scopes
-      });
-    }
-    if (url.pathname === "/api/auth/logout" && request.method === "POST") {
-      if (auth.kind === "bootstrap" || !auth.tokenHash) return json({ revoked: false, bootstrap: true });
-      return stub.fetch(new Request(new URL("/internal/auth/revoke", request.url), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tokenHash: auth.tokenHash })
-      }));
-    }
-    if (url.pathname === "/api/auth/pairings" && request.method === "POST") {
-      const headers = new Headers(request.headers);
-      headers.set("x-nib-auth-subject", auth.subject);
-      return stub.fetch(new Request(request, { headers }));
+      return attachmentResponse(accountId, url.pathname.split("/")[2] ?? "", env);
     }
     const headers = new Headers(request.headers);
-    headers.set("x-nib-auth-subject", auth.subject);
+    headers.set("x-nib-auth-subject", accountId);
+    headers.set("x-nib-account-id", accountId);
     return stub.fetch(new Request(request, { headers }));
   }
 };
 
-export class NibRequestHub extends DurableObject<Env> {
+export class AccountReviewHub extends DurableObject<Env> {
   private sockets = new Set<WebSocket>();
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    if (url.pathname === "/internal/auth/verify" && request.method === "POST") {
-      return this.verifyToken(await request.json<JsonObject>());
+    if (url.pathname === "/api/account" && request.method === "DELETE") {
+      const accountId = request.headers.get("x-nib-account-id");
+      if (!accountId) return unauthorized();
+      return json({ deleted: true, ...(await purgeReviewAccount(
+        accountId,
+        this.ctx.storage,
+        this.env.MEDIA,
+      )) });
     }
-    if (url.pathname === "/internal/auth/revoke" && request.method === "POST") {
-      return this.revokeToken(await request.json<JsonObject>());
+    if (await this.ctx.storage.get("account:deleted")) {
+      return json({ error: "Account deleted" }, 410);
     }
-    if (url.pathname === "/api/auth/exchange" && request.method === "POST") {
-      return this.issueToken(await request.json<JsonObject>());
-    }
-    if (url.pathname === "/api/auth/pairings" && request.method === "POST") {
-      return this.createPairing(request.headers.get("x-nib-auth-subject") || "bootstrap");
-    }
-    if (url.pathname === "/api/auth/pairings/redeem" && request.method === "POST") {
-      return this.redeemPairing(await request.json<JsonObject>(), request.headers.get("x-nib-client-key") || "unknown");
+    if (url.pathname === "/api/nib-files" || url.pathname.startsWith("/api/nib-files/")) {
+      const fileResponse = await new NibFileBackend({
+        tenantId: request.headers.get("x-nib-account-id") || "invalid",
+        storage: this.ctx.storage,
+        media: this.env.MEDIA
+      }).fetch(request);
+      if (fileResponse) return fileResponse;
     }
     if (url.pathname === "/api/projects" && request.method === "GET") {
       return json({ projects: [] });
@@ -214,26 +157,28 @@ export class NibRequestHub extends DurableObject<Env> {
     }
     if (url.pathname === "/api/notifications/status" && request.method === "GET") {
       const devices = await this.listDevices();
+      const readiness = apnsReadiness(this.env);
+      const apnsDevices = devices.filter((device) => device.pushKind === "apns");
       return json({
         subscriptionCount: 0,
         deviceCount: devices.length,
         webPushDeviceCount: 0,
-        apnsDeviceCount: devices.filter((device) => device.pushKind === "apns").length,
-        apnsHealthyDeviceCount: devices.filter((device) => device.pushKind === "apns" && !device.lastError).length,
-        apnsLastError: null,
-        apnsConfigured: false,
-        apnsEnvironment: null,
-        apnsTopic: null,
-        apnsKeyConfigured: false,
-        apnsKeyReadable: false,
-        apnsMissing: ["APNs delivery is not configured on nib-global"],
-        apnsIssues: [],
+        apnsDeviceCount: apnsDevices.length,
+        apnsHealthyDeviceCount: apnsDevices.filter((device) => !device.lastError).length,
+        apnsLastError: apnsDevices.find((device) => device.lastError)?.lastError || null,
+        ...readiness,
         webReady: false,
-        nativeReady: false
+        nativeReady: readiness.apnsConfigured && apnsDevices.length > 0
       });
     }
     if (url.pathname === "/api/notifications/test" && request.method === "POST") {
-      return json({ sent: 0, requestId: null, feedbackId: null, type: "test" });
+      const sent = await this.deliver({
+        type: "test",
+        title: "Nib notifications are ready",
+        body: "This device can receive Nib requests.",
+        tag: `test:${crypto.randomUUID()}`
+      });
+      return json({ sent, requestId: null, feedbackId: null, type: "test" });
     }
     if (/^\/api\/feedback\/[^/]+\/notification-click$/.test(url.pathname) && request.method === "POST") {
       return json({ recorded: true });
@@ -241,7 +186,7 @@ export class NibRequestHub extends DurableObject<Env> {
     if (url.pathname === "/api/requests/socket") return this.openSocket(request);
     if (url.pathname === "/api/requests") {
       if (request.method === "GET") return json(await this.list());
-      if (request.method === "POST") return json(await this.create(await request.json<JsonObject>()), 201);
+      if (request.method === "POST") return json(await this.create(await request.json<JsonObject>(), url.origin), 201);
     }
     const match = url.pathname.match(/^\/api\/requests\/([^/]+)(?:\/(respond|publish|attachments|response-attachments|notification-click))?$/);
     if (!match) return json({ error: "Not found" }, 404);
@@ -249,8 +194,15 @@ export class NibRequestHub extends DurableObject<Env> {
     const action = match[2];
     if (!action && request.method === "GET") return this.itemResponse(id);
     if (!action && request.method === "PATCH") return this.patch(id, await request.json<JsonObject>());
-    if (action === "publish" && request.method === "POST") return this.publish(id);
-    if (action === "respond" && request.method === "POST") return this.respond(id, await request.json<JsonObject>());
+    if (action === "publish" && request.method === "POST") return this.publish(id, url.origin);
+    if (action === "respond" && request.method === "POST") {
+      return this.respond(
+        id,
+        await request.json<JsonObject>(),
+        request.headers.get("idempotency-key") || "",
+        url.origin
+      );
+    }
     if ((action === "attachments" || action === "response-attachments") && request.method === "POST") {
       return this.attach(id, request, action === "response-attachments");
     }
@@ -275,123 +227,6 @@ export class NibRequestHub extends DurableObject<Env> {
     await this.ctx.storage.put(`request:${item.id}`, item);
   }
 
-  private async issueToken(input: JsonObject): Promise<Response> {
-    const name = text(input.name).slice(0, 120) || "Nib client";
-    const platform = normalizedPlatform(input.platform);
-    const requestedScopes = normalizedScopes(input.scopes);
-    const issued = await this.createToken(name, platform, requestedScopes);
-    await this.revokeMatchingTokens(name, platform, issued.id as string);
-    return json(issued, 201);
-  }
-
-  private async createToken(name: string, platform: string, scopes: string[]): Promise<JsonObject> {
-    const token = randomToken("nib");
-    const tokenHash = await sha256(token);
-    const now = new Date().toISOString();
-    const record: AuthTokenRecord = {
-      id: crypto.randomUUID(),
-      name,
-      platform,
-      scopes,
-      createdAt: now,
-      lastUsedAt: now,
-      revokedAt: null
-    };
-    await this.ctx.storage.put(`auth:token:${tokenHash}`, record);
-    return { token, tokenType: "Bearer", ...record };
-  }
-
-  private async verifyToken(input: JsonObject): Promise<Response> {
-    const tokenHash = text(input.tokenHash);
-    if (!/^[0-9a-f]{64}$/.test(tokenHash)) return json({ authenticated: false }, 401);
-    const record = await this.ctx.storage.get<AuthTokenRecord>(`auth:token:${tokenHash}`);
-    if (!record || record.revokedAt) return json({ authenticated: false }, 401);
-    const now = new Date();
-    if (now.getTime() - new Date(record.lastUsedAt).getTime() >= 60 * 60 * 1000) {
-      record.lastUsedAt = now.toISOString();
-      await this.ctx.storage.put(`auth:token:${tokenHash}`, record);
-    }
-    return json({ authenticated: true, tokenHash, ...record });
-  }
-
-  private async revokeToken(input: JsonObject): Promise<Response> {
-    const tokenHash = text(input.tokenHash);
-    const key = `auth:token:${tokenHash}`;
-    const record = await this.ctx.storage.get<AuthTokenRecord>(key);
-    if (!record) return json({ revoked: true });
-    record.revokedAt ??= new Date().toISOString();
-    await this.ctx.storage.put(key, record);
-    return json({ revoked: true, id: record.id });
-  }
-
-  private async createPairing(createdBy: string): Promise<Response> {
-    const code = randomToken("pair");
-    const codeHash = await sha256(code);
-    const createdAt = new Date();
-    const pairing: PairingRecord = {
-      id: crypto.randomUUID(),
-      createdBy,
-      createdAt: createdAt.toISOString(),
-      expiresAt: new Date(createdAt.getTime() + 10 * 60 * 1000).toISOString(),
-      redeemedAt: null
-    };
-    await this.ctx.storage.put(`auth:pairing:${codeHash}`, pairing);
-    return json({
-      code,
-      expiresAt: pairing.expiresAt,
-      url: `nib://auth/pair?server=${encodeURIComponent("https://nib-global.doug-lance.workers.dev")}&code=${encodeURIComponent(code)}`
-    }, 201);
-  }
-
-  private async redeemPairing(input: JsonObject, clientKey: string): Promise<Response> {
-    if (!await this.allowPairingAttempt(clientKey)) {
-      return json({ error: "Too many pairing attempts" }, 429, { "retry-after": "300" });
-    }
-    const code = text(input.code);
-    if (!/^pair_[A-Za-z0-9_-]{40,80}$/.test(code)) return json({ error: "Invalid or expired pairing code" }, 401);
-    const key = `auth:pairing:${await sha256(code)}`;
-    const pairing = await this.ctx.storage.get<PairingRecord>(key);
-    if (!pairing || pairing.redeemedAt || new Date(pairing.expiresAt).getTime() <= Date.now()) {
-      return json({ error: "Invalid or expired pairing code" }, 401);
-    }
-    pairing.redeemedAt = new Date().toISOString();
-    await this.ctx.storage.put(key, pairing);
-    const platform = normalizedPlatform(input.platform);
-    const scopes = platform === "cloudflare-codemode"
-      ? ["requests:read", "requests:write"]
-      : DEFAULT_SCOPES;
-    const name = text(input.name).slice(0, 120) || "Nib device";
-    const issued = await this.createToken(
-      name,
-      platform,
-      scopes
-    );
-    await this.revokeMatchingTokens(name, platform, issued.id as string);
-    return json(issued, 201);
-  }
-
-  private async revokeMatchingTokens(name: string, platform: string, exceptID: string): Promise<void> {
-    const stored = await this.ctx.storage.list<AuthTokenRecord>({ prefix: "auth:token:" });
-    const updates: Promise<void>[] = [];
-    for (const [key, record] of stored) {
-      if (record.id === exceptID || record.revokedAt || record.name !== name || record.platform !== platform) continue;
-      record.revokedAt = new Date().toISOString();
-      updates.push(this.ctx.storage.put(key, record));
-    }
-    await Promise.all(updates);
-  }
-
-  private async allowPairingAttempt(clientKey: string): Promise<boolean> {
-    const key = `auth:rate:${clientKey}`;
-    const now = Date.now();
-    const current = await this.ctx.storage.get<RateLimitRecord>(key);
-    const record = !current || now - current.windowStartedAt >= 5 * 60 * 1000
-      ? { windowStartedAt: now, attempts: 1 }
-      : { ...current, attempts: current.attempts + 1 };
-    await this.ctx.storage.put(key, record);
-    return record.attempts <= 10;
-  }
-
   private async itemResponse(id: string): Promise<Response> {
     const item = await this.get(id);
     return item ? json(item) : json({ error: "Request not found" }, 404);
@@ -409,6 +244,10 @@ export class NibRequestHub extends DurableObject<Env> {
     if (!["ios", "visionos", "watchos", "macos"].includes(platform)) {
       return json({ error: "Unsupported device platform" }, 400);
     }
+    const apnsTopic = text(input.apnsTopic);
+    if (!apnsTopic) return json({ error: "APNs topic is required" }, 400);
+    const apnsEnvironment = normalizedApnsEnvironment(input.apnsEnvironment);
+    if (!apnsEnvironment) return json({ error: "APNs environment must be sandbox or production" }, 400);
     const key = `device:${await sha256(`${platform}:${token}`)}`;
     const previous = await this.ctx.storage.get<DeviceRecord>(key);
     const device: DeviceRecord = {
@@ -417,7 +256,8 @@ export class NibRequestHub extends DurableObject<Env> {
       platform,
       pushKind: text(input.pushKind) || "apns",
       token,
-      apnsTopic: nullableText(input.apnsTopic),
+      apnsTopic,
+      apnsEnvironment,
       capabilities: Array.isArray(input.capabilities)
         ? [...new Set(input.capabilities.map(text).filter(Boolean))].slice(0, 32)
         : [],
@@ -430,7 +270,7 @@ export class NibRequestHub extends DurableObject<Env> {
     return json(device, previous ? 200 : 201);
   }
 
-  private async create(input: JsonObject): Promise<RequestRecord> {
+  private async create(input: JsonObject, origin: string): Promise<RequestRecord> {
     const now = new Date().toISOString();
     const prompt = text(input.prompt) || text(input.title) || "Human input requested";
     const choices = Array.isArray(input.choices) ? input.choices.map(text).filter(Boolean) : [];
@@ -464,7 +304,16 @@ export class NibRequestHub extends DurableObject<Env> {
       metadata: object(input.metadata)
     };
     await this.put(item);
-    if (item.publishedAt) this.broadcast("created", item);
+    if (item.publishedAt) {
+      this.broadcast("created", item);
+      const sent = await this.deliver(requestNotificationPayload(item, origin));
+      if (sent > 0) {
+        item.notifiedAt = new Date().toISOString();
+        item.updatedAt = item.notifiedAt;
+        await this.put(item);
+        this.broadcast("updated", item);
+      }
+    }
     return item;
   }
 
@@ -514,8 +363,13 @@ export class NibRequestHub extends DurableObject<Env> {
     if (responseAttachment) metadata.role = "response";
     if (!bytes.byteLength) return json({ error: "Attachment is empty" }, 400);
     if (bytes.byteLength > MAX_ATTACHMENT_BYTES) return json({ error: "Attachment exceeds 96 MiB" }, 413);
+    if (contentType === "application/pdf" && !hasPdfHeader(bytes)) {
+      return json({ error: "PDF attachment is not a PDF file" }, 400);
+    }
     const attachmentId = crypto.randomUUID();
-    const objectKey = `attachments/${attachmentId}`;
+    const accountId = request.headers.get("x-nib-account-id");
+    if (!accountId) return unauthorized();
+    const objectKey = `accounts/${accountId}/attachments/${attachmentId}`;
     const mediaToken = randomToken("media");
     await this.env.MEDIA.put(objectKey, bytes, {
       httpMetadata: { contentType },
@@ -541,7 +395,7 @@ export class NibRequestHub extends DurableObject<Env> {
     return json(attachment, 201);
   }
 
-  private async publish(id: string): Promise<Response> {
+  private async publish(id: string, origin: string): Promise<Response> {
     const item = await this.get(id);
     if (!item) return json({ error: "Request not found" }, 404);
     if (item.publishedAt) return json(item);
@@ -551,10 +405,26 @@ export class NibRequestHub extends DurableObject<Env> {
       const preview = item.attachments.some((entry) => entry.contentType.startsWith("image/") && entry.metadata.role === "preview");
       const canonical = item.attachments.some((entry) => entry.contentType === "application/x-nib" && entry.metadata.role === "canonical");
       if (!preview || !canonical) return json({ error: "Image review requires preview and canonical attachments" }, 400);
-    } else if (contract === "nib.review/v2") {
-      const primaryId = text(object(item.metadata.subject).primary && object(object(item.metadata.subject).primary).attachmentId);
-      if (!primaryId || !item.attachments.some((entry) => entry.id === primaryId)) {
-        return json({ error: "Review v2 requires a valid primary attachment" }, 400);
+    } else if (contract === "nib.review/v2" || contract === "nib.review/v3") {
+      const subject = object(item.metadata.subject);
+      const primary = object(subject.primary);
+      const primaryId = text(primary.attachmentId);
+      const attachment = item.attachments.find((entry) => entry.id === primaryId);
+      if (text(subject.contract) !== contract || !attachment) {
+        return json({ error: `${contract} requires a matching subject and primary attachment` }, 400);
+      }
+      if (text(primary.kind) === "pdf") {
+        const pageCount = primary.pageCount;
+        const pages = primary.pages;
+        if (contract !== "nib.review/v3" || attachment.contentType !== "application/pdf") {
+          return json({ error: "PDF reviews require nib.review/v3 and application/pdf" }, 400);
+        }
+        if (!Number.isInteger(pageCount) || Number(pageCount) <= 0 || !Array.isArray(pages) || pages.length !== pageCount) {
+          return json({ error: "PDF review pages must match a positive pageCount" }, 400);
+        }
+        if (pages.some((page) => !validPdfPage(object(page)))) {
+          return json({ error: "PDF review contains invalid page geometry" }, 400);
+        }
       }
     } else {
       return json({ error: "Unsupported visual review contract" }, 400);
@@ -563,22 +433,50 @@ export class NibRequestHub extends DurableObject<Env> {
     item.updatedAt = item.publishedAt;
     await this.put(item);
     this.broadcast("published", item);
+    const sent = await this.deliver(requestNotificationPayload(item, origin));
+    if (sent > 0) {
+      item.notifiedAt = new Date().toISOString();
+      item.updatedAt = item.notifiedAt;
+      await this.put(item);
+      this.broadcast("updated", item);
+    }
     return json(item);
   }
 
-  private async respond(id: string, input: JsonObject): Promise<Response> {
+  private async respond(id: string, input: JsonObject, headerIdempotencyKey: string, origin: string): Promise<Response> {
     const item = await this.get(id);
     if (!item) return json({ error: "Request not found" }, 404);
-    if (item.responses.length) return json({ error: "Request already has a response" }, 409);
+    const idempotencyKey = (headerIdempotencyKey || text(input.idempotencyKey)).slice(0, 200);
+    if (item.responses.length) {
+      return idempotencyKey && item.responses[0].idempotencyKey === idempotencyKey
+        ? json(item)
+        : json({ error: "Request already has a response", request: item }, 409);
+    }
     if (item.kind === "visual-review" && !item.publishedAt) return json({ error: "Visual review is not published" }, 409);
     const now = new Date().toISOString();
-    const decision = text(input.decision) || text(input.choice);
+    const decision = responseChoiceValue(
+      input,
+      item.kind === "visual-review" ? ["approve", "reject"] : item.choices
+    );
     const comment = text(input.comment) || text(input.text);
+    const annotations = Array.isArray(input.annotations) ? input.annotations : [];
+    const subject = object(item.metadata.subject);
+    const primary = object(subject.primary);
+    if (text(primary.kind) === "pdf") {
+      const pageCount = Number(primary.pageCount);
+      const invalid = annotations.some((annotation) => {
+        const pageIndex = object(annotation).pageIndex;
+        return !Number.isInteger(pageIndex) || Number(pageIndex) < 0 || Number(pageIndex) >= pageCount;
+      });
+      if (invalid) return json({ error: "PDF review annotations require an in-range pageIndex anchor" }, 400);
+    }
     const visualData = item.kind === "visual-review" ? {
-      contract: "nib.review-response/v1",
+      contract: text(item.metadata.contract).startsWith("nib.review/")
+        ? text(item.metadata.contract)
+        : "nib.review-response/v1",
       decision: decision || "comment",
       comment: comment || null,
-      annotations: Array.isArray(input.annotations) ? input.annotations : []
+      annotations
     } : null;
     const responseAttachments = item.attachments.filter((entry) => entry.metadata.role === "response");
     const response: RequestResponse = {
@@ -591,16 +489,59 @@ export class NibRequestHub extends DurableObject<Env> {
       deviceId: text(input.deviceId) || undefined,
       attachments: responseAttachments.length ? responseAttachments : undefined,
       transcript: input.transcript && Object.keys(object(input.transcript)).length ? object(input.transcript) : undefined,
+      idempotencyKey: idempotencyKey || undefined,
       createdAt: now
     };
-    item.responses = [response];
-    item.status = input.acted === true ? "acted" : "answered";
-    item.answeredAt = now;
-    item.actedAt = input.acted === true ? now : null;
-    item.updatedAt = now;
-    await this.put(item);
-    this.broadcast("responded", item);
-    return json(item);
+    const committed = await commitFirstResponse<RequestResponse, RequestRecord>({
+      runTransaction: (callback) => this.ctx.storage.transaction(async (transaction) => callback(transaction)),
+      storageKey: `request:${id}`,
+      response,
+      idempotencyKey,
+      acted: input.acted === true,
+      now
+    });
+    if (committed.outcome === "missing") return json({ error: "Request not found" }, 404);
+    if (committed.outcome === "conflict") {
+      return json({ error: "Request already has a response", request: committed.item }, 409);
+    }
+    if (committed.outcome === "retry") return json(committed.item);
+    const accepted = committed.item;
+    this.broadcast("responded", accepted);
+    this.scheduleDelivery({
+      type: "request-resolved",
+      requestId: accepted.id,
+      status: accepted.status,
+      responseId: response.id,
+      tag: `request:${accepted.id}`,
+      url: `${origin}/r/${encodeURIComponent(accepted.id)}`
+    });
+    return json(accepted);
+  }
+
+  private scheduleDelivery(payload: ApnsPayload): void {
+    this.ctx.waitUntil(this.deliver(payload).catch((error: unknown) => {
+      console.error("Nib APNs delivery failed", error);
+    }));
+  }
+
+  private async deliver(payload: ApnsPayload): Promise<number> {
+    const devices = (await this.listDevices()).filter((device) => device.pushKind === "apns");
+    const results = await sendApnsFanout(this.env, devices, payload);
+    const now = new Date().toISOString();
+    await Promise.all(devices.map(async (device) => {
+      const result = results.find((entry) => entry.deviceId === device.id);
+      if (!result) return;
+      device.lastSuccessAt = result.sent ? now : device.lastSuccessAt;
+      device.lastError = result.error;
+      device.updatedAt = now;
+      const key = `device:${await sha256(`${device.platform}:${device.token}`)}`;
+      if (result.invalidToken) {
+        await this.ctx.storage.delete(key);
+      } else {
+        await this.ctx.storage.put(key, device);
+      }
+    }));
+    return results.filter((result) => result.sent).length;
   }
 
   private openSocket(request: Request): Response {
@@ -628,15 +569,10 @@ export class NibRequestHub extends DurableObject<Env> {
   }
 }
 
-async function attachmentResponse(id: string, request: Request, env: Env, authorized: boolean): Promise<Response> {
+async function attachmentResponse(accountId: string, id: string, env: Env): Promise<Response> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "Attachment not found" }, 404);
-  const object = await env.MEDIA.get(`attachments/${id}`);
+  const object = await env.MEDIA.get(`accounts/${accountId}/attachments/${id}`);
   if (!object) return json({ error: "Attachment not found" }, 404);
-  const access = new URL(request.url).searchParams.get("access") || "";
-  const capabilityAuthorized = Boolean(
-    access && object.customMetadata?.accessHash && constantTimeEqual(await sha256(access), object.customMetadata.accessHash)
-  );
-  if (!authorized && !capabilityAuthorized) return unauthorized();
   const headers = new Headers(corsHeaders());
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);
@@ -644,60 +580,15 @@ async function attachmentResponse(id: string, request: Request, env: Env, author
   return new Response(object.body, { headers });
 }
 
-function bootstrapAuthorized(request: Request, env: Env): boolean {
-  if (!env.NIB_AUTH_TOKEN) return ["localhost", "127.0.0.1", "::1"].includes(new URL(request.url).hostname);
-  const supplied = bearerToken(request);
-  return constantTimeEqual(supplied, env.NIB_AUTH_TOKEN);
-}
-
-async function authenticate(
-  request: Request,
-  env: Env,
-  stub: DurableObjectStub<NibRequestHub>
-): Promise<AuthContext | null> {
-  const supplied = bearerToken(request);
-  if (!supplied) return null;
-  if (env.NIB_AUTH_TOKEN && constantTimeEqual(supplied, env.NIB_AUTH_TOKEN)) {
-    return { kind: "bootstrap", subject: "bootstrap", name: "Bootstrap administrator", platform: "worker", scopes: ["*"] };
-  }
-  const tokenHash = await sha256(supplied);
-  const response = await stub.fetch(new Request(new URL("/internal/auth/verify", request.url), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ tokenHash })
-  }));
-  if (!response.ok) return null;
-  const record = await response.json<AuthTokenRecord & { authenticated: boolean }>();
-  if (!record.authenticated) return null;
-  return {
-    kind: "token",
-    subject: record.id,
-    name: record.name,
-    platform: record.platform,
-    scopes: record.scopes,
-    tokenHash
-  };
-}
-
-function bearerToken(request: Request): string {
-  return request.headers.get("authorization")?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || "";
+function trustedAccountId(request: Request): string | null {
+  const accountId = request.headers.get("x-nib-account-id")?.trim() ?? "";
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(accountId)
+    ? accountId
+    : null;
 }
 
 function unauthorized(): Response {
   return json({ error: "Unauthorized" }, 401, { "www-authenticate": "Bearer realm=\"nib-global\"" });
-}
-
-function forbidden(scope: string): Response {
-  return json({ error: "Forbidden", requiredScope: scope }, 403);
-}
-
-const DEFAULT_SCOPES = ["requests:read", "requests:write", "auth:pair"];
-
-function normalizedScopes(value: unknown): string[] {
-  if (!Array.isArray(value)) return [...DEFAULT_SCOPES];
-  const allowed = new Set(["requests:read", "requests:write", "auth:pair"]);
-  const scopes = value.map(text).filter((scope) => allowed.has(scope));
-  return scopes.length ? [...new Set(scopes)] : [...DEFAULT_SCOPES];
 }
 
 function normalizedPlatform(value: unknown): string {
@@ -707,15 +598,9 @@ function normalizedPlatform(value: unknown): string {
     : "unknown";
 }
 
-function scopeFor(method: string, path: string): string | null {
-  if (path === "/api/auth/pairings") return "auth:pair";
-  if (path.startsWith("/api/auth/")) return null;
-  if (path.startsWith("/api/requests")) return method === "GET" ? "requests:read" : "requests:write";
-  return method === "GET" ? "requests:read" : "requests:write";
-}
-
-function hasScope(auth: AuthContext, scope: string): boolean {
-  return auth.scopes.includes("*") || auth.scopes.includes(scope);
+function normalizedApnsEnvironment(value: unknown): "sandbox" | "production" | null {
+  const environment = text(value).toLowerCase();
+  return environment === "sandbox" || environment === "production" ? environment : null;
 }
 
 function randomToken(prefix: string): string {
@@ -730,17 +615,38 @@ async function sha256(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function constantTimeEqual(left: string, right: string): boolean {
-  let difference = left.length ^ right.length;
-  const length = Math.max(left.length, right.length);
-  for (let index = 0; index < length; index += 1) difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
-  return difference === 0;
-}
 
-function requestPage(id: string, origin: string): Response {
-  const native = `nib://request/${encodeURIComponent(id)}?server=${encodeURIComponent(origin)}`;
+function requestPage(id: string): Response {
+  const native = `nib://request/${encodeURIComponent(id)}`;
   const html = `<!doctype html><meta name="viewport" content="width=device-width"><title>Nib review</title><style>body{font:16px system-ui;max-width:42rem;margin:10vh auto;padding:2rem;color:#171717}a{display:inline-block;padding:.8rem 1rem;background:#18181b;color:white;border-radius:.6rem;text-decoration:none}</style><h1>Nib review</h1><p>Open this request in the installed Nib app.</p><a href="${native}">Open Nib</a>`;
   return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", ...corsHeaders() } });
+}
+
+function requestNotificationPayload(item: RequestRecord, origin: string): ApnsPayload {
+  const rich = item.attachments.find((attachment) => attachment.type === "image" && attachment.url);
+  return {
+    type: item.kind,
+    requestId: item.id,
+    title: item.title,
+    body: item.body || item.prompt,
+    request: item.prompt,
+    choices: item.choices,
+    allowText: item.allowText,
+    projectId: text(item.target.projectId) || undefined,
+    projectName: text(item.target.projectName) || undefined,
+    url: `${origin}/r/${encodeURIComponent(item.id)}`,
+    responseUrl: `${origin}/api/requests/${encodeURIComponent(item.id)}/respond`,
+    tag: `request:${item.id}`,
+    priority: item.priority,
+    createdAt: item.createdAt,
+    richAttachment: rich ? {
+      id: rich.id,
+      name: rich.name,
+      type: rich.type,
+      contentType: rich.contentType,
+      url: new URL(rich.url, origin).toString()
+    } : undefined
+  };
 }
 
 function json(value: unknown, status = 200, extra: Record<string, string> = {}): Response {
@@ -750,8 +656,8 @@ function json(value: unknown, status = 200, extra: Record<string, string> = {}):
 function corsHeaders(): Record<string, string> {
   return {
     "access-control-allow-origin": "*",
-    "access-control-allow-methods": "GET,POST,PATCH,OPTIONS",
-    "access-control-allow-headers": "authorization,content-type,x-nib-filename,x-nib-metadata"
+    "access-control-allow-methods": "GET,POST,PUT,PATCH,OPTIONS",
+    "access-control-allow-headers": "authorization,content-type,idempotency-key,range,x-nib-filename,x-nib-metadata"
   };
 }
 
@@ -789,4 +695,24 @@ function decodeBase64(value: string): ArrayBuffer {
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
   return bytes.buffer;
+}
+
+function hasPdfHeader(value: ArrayBuffer): boolean {
+  const bytes = new Uint8Array(value, 0, Math.min(5, value.byteLength));
+  return bytes.length === 5
+    && bytes[0] === 0x25
+    && bytes[1] === 0x50
+    && bytes[2] === 0x44
+    && bytes[3] === 0x46
+    && bytes[4] === 0x2d;
+}
+
+function validPdfPage(page: JsonObject): boolean {
+  return typeof page.width === "number"
+    && Number.isFinite(page.width)
+    && page.width > 0
+    && typeof page.height === "number"
+    && Number.isFinite(page.height)
+    && page.height > 0
+    && [0, 90, 180, 270].includes(Number(page.rotation));
 }

@@ -6,13 +6,14 @@ export async function createCheckout(request: Request, tenantId: string, env: En
     ? String((await request.formData()).get("plan")) as Plan
     : (await request.json<{ plan: Plan }>()).plan;
   if (plan !== "default" && plan !== "high") return Response.json({ error: "invalid plan" }, { status: 400 });
-  const account = await env.DB.prepare("SELECT stripe_customer_id FROM accounts WHERE tenant_id = ?")
+  const account = await env.DB.prepare("SELECT email, stripe_customer_id FROM accounts WHERE account_id = ?")
     .bind(tenantId)
-    .first<{ stripe_customer_id: string | null }>();
+    .first<{ email: string; stripe_customer_id: string | null }>();
+  if (!account) return Response.json({ error: "account not found" }, { status: 404 });
   const response = await stripeRequest(
     "/v1/checkout/sessions",
     env,
-    buildCheckoutForm(plan, tenantId, env, account?.stripe_customer_id ?? null),
+    buildCheckoutForm(plan, tenantId, env, account.stripe_customer_id, account.email),
   );
   return maybeBrowserRedirect(request, response);
 }
@@ -22,6 +23,7 @@ export function buildCheckoutForm(
   tenantId: string,
   env: Env,
   customerId: string | null,
+  email?: string,
 ): URLSearchParams {
   const recurringPrice = plan === "high" ? env.HIGH_PRICE_ID : env.DEFAULT_PRICE_ID;
   const form = new URLSearchParams({
@@ -33,9 +35,9 @@ export function buildCheckoutForm(
     "automatic_tax[enabled]": "true",
     "tax_id_collection[enabled]": "true",
     "name_collection[individual][enabled]": "true",
-    "metadata[tenant_id]": tenantId,
+    "metadata[account_id]": tenantId,
     "metadata[plan]": plan,
-    "subscription_data[metadata][tenant_id]": tenantId,
+    "subscription_data[metadata][account_id]": tenantId,
     "subscription_data[metadata][plan]": plan,
     "line_items[0][price]": recurringPrice,
     "line_items[0][quantity]": "1",
@@ -45,14 +47,14 @@ export function buildCheckoutForm(
     form.set("customer", customerId);
     form.set("customer_update[address]", "auto");
     form.set("customer_update[name]", "auto");
-  } else if (tenantId.includes("@")) {
-    form.set("customer_email", tenantId);
+  } else if (email) {
+    form.set("customer_email", email);
   }
   return form;
 }
 
 export async function createPortal(tenantId: string, env: Env): Promise<Response> {
-  const account = await env.DB.prepare("SELECT stripe_customer_id FROM accounts WHERE tenant_id = ?")
+  const account = await env.DB.prepare("SELECT stripe_customer_id FROM accounts WHERE account_id = ?")
     .bind(tenantId)
     .first<{ stripe_customer_id: string | null }>();
   if (!account?.stripe_customer_id) return Response.json({ error: "billing account not found" }, { status: 404 });
@@ -72,7 +74,7 @@ async function maybeBrowserRedirect(request: Request, response: Response): Promi
 export async function changePlan(request: Request, tenantId: string, env: Env): Promise<Response> {
   const { plan } = await request.json<{ plan: Plan }>();
   if (plan !== "default" && plan !== "high") return Response.json({ error: "invalid plan" }, { status: 400 });
-  const account = await env.DB.prepare("SELECT stripe_subscription_id, stripe_recurring_item_id FROM accounts WHERE tenant_id = ?")
+  const account = await env.DB.prepare("SELECT stripe_subscription_id, stripe_recurring_item_id FROM accounts WHERE account_id = ?")
     .bind(tenantId)
     .first<{ stripe_subscription_id: string | null; stripe_recurring_item_id: string | null }>();
   if (!account?.stripe_subscription_id || !account.stripe_recurring_item_id) {
@@ -90,7 +92,7 @@ export async function changePlan(request: Request, tenantId: string, env: Env): 
     }),
   );
   if (response.ok) {
-    await env.DB.prepare("UPDATE accounts SET plan = ?, updated_at = unixepoch() WHERE tenant_id = ?").bind(plan, tenantId).run();
+    await env.DB.prepare("UPDATE accounts SET plan = ?, updated_at = unixepoch() WHERE account_id = ?").bind(plan, tenantId).run();
   }
   return response;
 }
@@ -113,8 +115,9 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
   try {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
-      const tenantId = String(
+      const accountReference = String(
         session.client_reference_id ??
+          (session.metadata as Record<string, string> | undefined)?.account_id ??
           (session.metadata as Record<string, string> | undefined)?.tenant_id ??
           "",
       );
@@ -124,18 +127,17 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
         ) === "high"
           ? "high"
           : "default";
-      if (tenantId) {
+      const accountId = await resolveAccountId(accountReference, env);
+      if (accountId) {
         await env.DB.prepare(
-          `INSERT INTO accounts(tenant_id, plan, stripe_customer_id, stripe_subscription_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, unixepoch(), unixepoch())
-           ON CONFLICT(tenant_id) DO UPDATE SET plan = excluded.plan, stripe_customer_id = excluded.stripe_customer_id,
-             stripe_subscription_id = excluded.stripe_subscription_id, updated_at = unixepoch()`,
+          `UPDATE accounts SET plan = ?, stripe_customer_id = ?, stripe_subscription_id = ?, updated_at = unixepoch()
+           WHERE account_id = ?`,
         )
           .bind(
-            tenantId,
             plan,
             String(session.customer ?? ""),
             String(session.subscription ?? ""),
+            accountId,
           )
           .run();
       }
@@ -146,24 +148,23 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
     ) {
       const subscription = event.data.object;
       const entitlement = subscriptionEntitlement(subscription, env);
-      if (entitlement.tenantId) {
+      const accountId = await resolveAccountId(entitlement.tenantId ?? "", env);
+      if (accountId) {
         await env.DB.prepare(
-          `INSERT INTO accounts(
-             tenant_id, plan, stripe_customer_id, stripe_subscription_id, stripe_recurring_item_id, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, ?, unixepoch(), unixepoch())
-           ON CONFLICT(tenant_id) DO UPDATE SET
-             plan = excluded.plan,
-             stripe_customer_id = COALESCE(excluded.stripe_customer_id, accounts.stripe_customer_id),
-             stripe_subscription_id = excluded.stripe_subscription_id,
-             stripe_recurring_item_id = excluded.stripe_recurring_item_id,
-             updated_at = unixepoch()`,
+          `UPDATE accounts SET
+             plan = ?,
+             stripe_customer_id = COALESCE(?, stripe_customer_id),
+             stripe_subscription_id = ?,
+             stripe_recurring_item_id = ?,
+             updated_at = unixepoch()
+           WHERE account_id = ?`,
         )
           .bind(
-            entitlement.tenantId,
             entitlement.plan,
             entitlement.customerId,
             entitlement.subscriptionId,
             entitlement.recurringItemId,
+            accountId,
           )
           .run();
       }
@@ -171,12 +172,12 @@ export async function handleStripeWebhook(request: Request, env: Env): Promise<R
     if (event.type === "customer.subscription.deleted") {
       const subscription = event.data.object;
       const metadata = subscription.metadata as Record<string, string> | undefined;
-      const tenantId = metadata?.tenant_id;
-      if (tenantId) {
+      const accountId = await resolveAccountId(metadata?.account_id ?? metadata?.tenant_id ?? "", env);
+      if (accountId) {
         await env.DB.prepare(
-          "UPDATE accounts SET stripe_subscription_id = NULL, stripe_recurring_item_id = NULL, updated_at = unixepoch() WHERE tenant_id = ?",
+          "UPDATE accounts SET stripe_subscription_id = NULL, stripe_recurring_item_id = NULL, updated_at = unixepoch() WHERE account_id = ?",
         )
-          .bind(tenantId)
+          .bind(accountId)
           .run();
       } else {
         await env.DB.prepare(
@@ -233,12 +234,21 @@ export function subscriptionEntitlement(
   const active = isActiveSubscriptionStatus(String(subscription.status ?? ""));
   const customerId = String(subscription.customer ?? "").trim() || null;
   return {
-    tenantId: metadata?.tenant_id,
+    tenantId: metadata?.account_id ?? metadata?.tenant_id,
     plan,
     customerId,
     subscriptionId: active ? String(subscription.id ?? "") || null : null,
     recurringItemId: active ? recurringItem?.id ?? null : null,
   };
+}
+
+async function resolveAccountId(reference: string, env: Env): Promise<string | null> {
+  const value = reference.trim();
+  if (!value) return null;
+  const account = await env.DB.prepare(
+    "SELECT account_id FROM accounts WHERE account_id = ? OR email = lower(?) LIMIT 1",
+  ).bind(value, value).first<{ account_id: string }>();
+  return account?.account_id ?? null;
 }
 
 export async function consumeMetering(batch: MessageBatch<MeterEvent>, env: Env): Promise<void> {

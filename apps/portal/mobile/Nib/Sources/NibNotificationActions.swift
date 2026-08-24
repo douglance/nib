@@ -1,85 +1,20 @@
 import Foundation
+import NibNotifications
 import UIKit
 import UserNotifications
 
 enum NibNotificationActions {
-    static let open = "NIB_OPEN"
-    static let choice0 = "NIB_CHOICE_0"
-    static let choice1 = "NIB_CHOICE_1"
-    static let choice2 = "NIB_CHOICE_2"
-    static let text = "NIB_TEXT_REPLY"
+    static let open = NibNotificationIdentifiers.open
+    static let choice0 = NibNotificationIdentifiers.choice0
+    static let choice1 = NibNotificationIdentifiers.choice1
+    static let choice2 = NibNotificationIdentifiers.choice2
+    static let text = NibNotificationIdentifiers.text
     private static let pendingRequestKey = "nib.pendingNotification.requestId"
     private static let pendingProjectKey = "nib.pendingNotification.projectId"
     private static let pendingURLKey = "nib.pendingNotification.url"
 
     static func register() {
-        let openAction = UNNotificationAction(identifier: open, title: "Open", options: [.foreground])
-        let firstAction = UNNotificationAction(identifier: choice0, title: "First", options: [])
-        let secondAction = UNNotificationAction(identifier: choice1, title: "Second", options: [])
-        let thirdAction = UNNotificationAction(identifier: choice2, title: "Third", options: [])
-        let textAction = UNTextInputNotificationAction(
-            identifier: text,
-            title: "Reply",
-            options: [],
-            textInputButtonTitle: "Send",
-            textInputPlaceholder: "Reply"
-        )
-        var categories = [
-            UNNotificationCategory(identifier: "NIB_OPEN", actions: [openAction], intentIdentifiers: []),
-            choiceCategory("NIB_APPROVAL", "Approve", "Hold", openAction),
-            UNNotificationCategory(identifier: "NIB_CHOICE", actions: [firstAction, secondAction, thirdAction, textAction, openAction], intentIdentifiers: []),
-            UNNotificationCategory(identifier: "NIB_TEXT", actions: [textAction, openAction], intentIdentifiers: [])
-        ]
-        categories.append(contentsOf: choiceCategories(openAction: openAction))
-        UNUserNotificationCenter.current().setNotificationCategories(Set(categories))
-    }
-
-    private static func choiceCategories(openAction: UNNotificationAction) -> [UNNotificationCategory] {
-        [
-            threeChoiceCategory("NIB_SHIP_HOLD_REVISE", "Ship", "Hold", "Revise", openAction),
-            choiceCategory("NIB_APPROVE_HOLD", "Approve", "Hold", openAction),
-            choiceCategory("NIB_APPROVE_REJECT", "Approve", "Reject", openAction),
-            choiceCategory("NIB_ALLOW_DENY", "Allow", "Deny", openAction),
-            choiceCategory("NIB_YES_NO", "Yes", "No", openAction),
-            choiceCategory("NIB_SHIP_HOLD", "Ship", "Hold", openAction),
-            choiceCategory("NIB_USE_REVISE", "Use it", "Revise", openAction)
-        ]
-    }
-
-    private static func choiceCategory(
-        _ identifier: String,
-        _ firstTitle: String,
-        _ secondTitle: String,
-        _ openAction: UNNotificationAction
-    ) -> UNNotificationCategory {
-        UNNotificationCategory(
-            identifier: identifier,
-            actions: [
-                UNNotificationAction(identifier: choice0, title: firstTitle, options: []),
-                UNNotificationAction(identifier: choice1, title: secondTitle, options: []),
-                openAction
-            ],
-            intentIdentifiers: []
-        )
-    }
-
-    private static func threeChoiceCategory(
-        _ identifier: String,
-        _ firstTitle: String,
-        _ secondTitle: String,
-        _ thirdTitle: String,
-        _ openAction: UNNotificationAction
-    ) -> UNNotificationCategory {
-        UNNotificationCategory(
-            identifier: identifier,
-            actions: [
-                UNNotificationAction(identifier: choice0, title: firstTitle, options: []),
-                UNNotificationAction(identifier: choice1, title: secondTitle, options: []),
-                UNNotificationAction(identifier: choice2, title: thirdTitle, options: []),
-                openAction
-            ],
-            intentIdentifiers: []
-        )
+        UNUserNotificationCenter.current().setNotificationCategories(NibNotificationContract.categories())
     }
 
     @MainActor
@@ -88,56 +23,40 @@ enum NibNotificationActions {
         if let deviceId = payload["deviceId"] as? String, !deviceId.isEmpty {
             NibDefaults.rememberRegisteredDeviceID(deviceId)
         }
-        if response.actionIdentifier == UNNotificationDefaultActionIdentifier || response.actionIdentifier == open {
-            guard let requestId = payload["requestId"] as? String else {
+        let text = (response as? UNTextInputNotificationResponse)?.userText
+        guard let route = NibNotificationContract.resolve(
+            actionIdentifier: response.actionIdentifier,
+            userInfo: response.notification.request.content.userInfo,
+            text: text
+        ) else {
+            if response.actionIdentifier == UNNotificationDefaultActionIdentifier
+                || response.actionIdentifier == open {
                 await openPayload(payload)
-                return
             }
+            return
+        }
+        switch route {
+        case .openRequest(let requestId):
             storePendingRequestId(requestId)
             await markClicked(requestId: requestId)
-            await MainActor.run {
-                NotificationCenter.default.post(name: .nibOpenRequest, object: requestId)
-            }
-            return
-        }
-        guard let requestId = payload["requestId"] as? String else {
+            NotificationCenter.default.post(name: .nibOpenRequest, object: requestId)
+        case .openProject, .openURL:
             await openPayload(payload)
-            return
-        }
-        let deviceId = payload["deviceId"] as? String ?? "ios-notification"
-        if response.actionIdentifier == choice0 {
+        case .respondChoice(let requestId, let choiceIndex):
+            let deviceId = payload["deviceId"] as? String ?? "ios-notification"
             if await respond(
                 requestId: requestId,
-                body: ["choiceIndex": 0, "deviceId": deviceId, "notificationResponse": true]
+                body: ["choiceIndex": choiceIndex, "deviceId": deviceId, "notificationResponse": true],
+                idempotencyKey: notificationIdempotencyKey(response, requestId: requestId)
             ) {
                 clearDeliveredNotification(identifier: response.notification.request.identifier)
             }
-            return
-        }
-        if response.actionIdentifier == choice1 {
+        case .respondText(let requestId, let value):
+            let deviceId = payload["deviceId"] as? String ?? "ios-notification"
             if await respond(
                 requestId: requestId,
-                body: ["choiceIndex": 1, "deviceId": deviceId, "notificationResponse": true]
-            ) {
-                clearDeliveredNotification(identifier: response.notification.request.identifier)
-            }
-            return
-        }
-        if response.actionIdentifier == choice2 {
-            if await respond(
-                requestId: requestId,
-                body: ["choiceIndex": 2, "deviceId": deviceId, "notificationResponse": true]
-            ) {
-                clearDeliveredNotification(identifier: response.notification.request.identifier)
-            }
-            return
-        }
-        if response.actionIdentifier == text, let textResponse = response as? UNTextInputNotificationResponse {
-            let value = textResponse.userText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !value.isEmpty else { return }
-            if await respond(
-                requestId: requestId,
-                body: ["text": value, "deviceId": deviceId, "notificationResponse": true]
+                body: ["text": value, "deviceId": deviceId, "notificationResponse": true],
+                idempotencyKey: notificationIdempotencyKey(response, requestId: requestId)
             ) {
                 clearDeliveredNotification(identifier: response.notification.request.identifier)
             }
@@ -201,18 +120,20 @@ enum NibNotificationActions {
         center.removeDeliveredNotifications(withIdentifiers: identifiers)
     }
 
+    @MainActor
+    static func handleRemoteNotification(userInfo: [AnyHashable: Any]) async -> Bool {
+        guard let requestId = NibNotificationContract.resolvedRequestID(from: userInfo) else {
+            return false
+        }
+        await clearDeliveredNotifications(requestId: requestId)
+        await MainActor.run {
+            NotificationCenter.default.post(name: .nibRequestsChanged, object: requestId)
+        }
+        return true
+    }
+
     private static func nibPayload(from userInfo: [AnyHashable: Any]) -> [String: Any] {
-        if let payload = userInfo["nib"] as? [String: Any] {
-            return payload
-        }
-        if let payload = userInfo["nib"] as? NSDictionary {
-            return payload as? [String: Any] ?? [:]
-        }
-        return userInfo.reduce(into: [String: Any]()) { result, item in
-            if let key = item.key as? String {
-                result[key] = item.value
-            }
-        }
+        NibNotificationContract.payload(from: userInfo)
     }
 
     private static func markClicked(requestId: String) async {
@@ -231,7 +152,7 @@ enum NibNotificationActions {
         _ = try? await URLSession.shared.data(for: request)
     }
 
-    private static func respond(requestId: String, body: [String: Any]) async -> Bool {
+    private static func respond(requestId: String, body: [String: Any], idempotencyKey: String) async -> Bool {
         guard let url = endpoint("/api/requests/\(requestId)/respond"),
               JSONSerialization.isValidJSONObject(body),
               let data = try? JSONSerialization.data(withJSONObject: body)
@@ -241,6 +162,7 @@ enum NibNotificationActions {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.setValue(idempotencyKey, forHTTPHeaderField: "idempotency-key")
         request.httpBody = data
         authorize(&request)
         guard let (_, response) = try? await URLSession.shared.data(for: request),
@@ -251,12 +173,20 @@ enum NibNotificationActions {
         return (200..<300).contains(httpResponse.statusCode)
     }
 
+    private static func notificationIdempotencyKey(_ response: UNNotificationResponse, requestId: String) -> String {
+        NibNotificationContract.idempotencyKey(
+            requestID: requestId,
+            notificationIdentifier: response.notification.request.identifier,
+            actionIdentifier: response.actionIdentifier
+        )
+    }
+
     private static func clearDeliveredNotification(identifier: String) {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier])
     }
 
     private static func endpoint(_ path: String) -> URL? {
-        let base = UserDefaults.standard.string(forKey: "nib.baseURL") ?? NibDefaults.defaultBaseURLString
+        let base = NibDefaults.defaultBaseURLString
         return URL(string: path, relativeTo: URL(string: base))?.absoluteURL
     }
 

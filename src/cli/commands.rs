@@ -268,13 +268,6 @@ pub fn run_gui(args: &GuiArgs) -> Result<()> {
                     tracing::warn!("Failed to register session in registry: {}", e);
                 }
             }
-
-            // Update session in .nib file itself
-            if let Ok(nib) = NibFile::open(path) {
-                if let Err(e) = nib.update_session(Some(pid)) {
-                    tracing::warn!("Failed to update session in .nib file: {}", e);
-                }
-            }
         }
     }
 
@@ -295,13 +288,6 @@ pub fn run_gui(args: &GuiArgs) -> Result<()> {
             if let Ok(mut registry) = SessionRegistry::load() {
                 if let Err(e) = registry.unregister(path) {
                     tracing::warn!("Failed to unregister session from registry: {}", e);
-                }
-            }
-
-            // Clear session in .nib file itself
-            if let Ok(nib) = NibFile::open(path) {
-                if let Err(e) = nib.clear_session() {
-                    tracing::warn!("Failed to clear session in .nib file: {}", e);
                 }
             }
         }
@@ -553,7 +539,7 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
 
     if is_nib_file {
         // Handle .nib SQLite format
-        let nib = NibFile::open(&args.file)?;
+        let nib = NibFile::open_editable(&args.file)?;
 
         // Create the annotation type based on args
         let annotation_type = match args.annotation_type.as_str() {
@@ -650,7 +636,7 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
             args.x,
             args.y
         );
-        println!("Saved to: {}", args.file.display());
+        println!("Saved to: {}", nib.path().display());
 
         return Ok(());
     }
@@ -660,7 +646,7 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
 
     // Open existing .nib or create new one from the image
     let nib = if nib_path.exists() {
-        NibFile::open(&nib_path)?
+        NibFile::open_editable(&nib_path)?
     } else {
         // Create new .nib file from image
         let image_data = std::fs::read(&args.file)?;
@@ -776,7 +762,7 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
         args.x,
         args.y
     );
-    println!("Saved to: {}", nib_path.display());
+    println!("Saved to: {}", nib.path().display());
 
     Ok(())
 }
@@ -981,7 +967,7 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
 
         // Open existing .nib or create new one from the image
         let nib = if nib_path.exists() {
-            NibFile::open(&nib_path)?
+            NibFile::open_editable(&nib_path)?
         } else {
             // Create new .nib file from image
             let image_data = std::fs::read(&args.file)?;
@@ -1020,7 +1006,7 @@ pub fn run_find_text(args: &FindTextArgs) -> Result<()> {
         println!(
             "Added {} highlight annotation(s) to: {}",
             results.len(),
-            nib_path.display()
+            nib.path().display()
         );
     }
 
@@ -1189,8 +1175,8 @@ pub fn run_annotation_remove(args: &AnnotationRemoveArgs) -> Result<()> {
         )));
     }
 
-    // Open the .nib file
-    let nib = NibFile::open(&nib_path)?;
+    // Open a writable derivative of the .nib file
+    let nib = NibFile::open_editable(&nib_path)?;
 
     // Delete the annotation
     let deleted = nib.delete_annotation(&args.id)?;
@@ -1207,6 +1193,7 @@ pub fn run_annotation_remove(args: &AnnotationRemoveArgs) -> Result<()> {
     let remaining = nib.annotation_count()?;
     println!("Removed annotation [{}]", args.id);
     println!("Remaining annotations: {}", remaining);
+    println!("Saved to: {}", nib.path().display());
 
     Ok(())
 }
@@ -1237,8 +1224,8 @@ pub fn run_annotation_clear(args: &AnnotationClearArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Open the .nib file
-    let nib = NibFile::open(&nib_path)?;
+    // Open a writable derivative of the .nib file
+    let nib = NibFile::open_editable(&nib_path)?;
 
     // Get count before clearing
     let annotations = nib.list_annotations()?;
@@ -1253,6 +1240,7 @@ pub fn run_annotation_clear(args: &AnnotationClearArgs) -> Result<()> {
     nib.save()?;
 
     println!("Cleared {} annotation(s)", removed_count);
+    println!("Saved to: {}", nib.path().display());
 
     Ok(())
 }
@@ -2724,11 +2712,13 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
     tracing::info!(?args, "Running feedback");
     validate_feedback_options(args)?;
 
-    let video = args
+    let extension = args
         .file
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"));
+        .unwrap_or_default();
+    let video = extension.eq_ignore_ascii_case("mp4");
+    let pdf = extension.eq_ignore_ascii_case("pdf");
     if video {
         let unsupported = match args.ui {
             FeedbackUi::Terminal => Some("E_VIDEO_TERMINAL_UNSUPPORTED"),
@@ -2740,6 +2730,12 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
                 args.file.display()
             )));
         }
+    }
+    if pdf && args.ui == FeedbackUi::Terminal {
+        return Err(crate::core::NibError::Other(format!(
+            "E_PDF_TERMINAL_UNSUPPORTED: PDF review requires a visual surface; run: nib feedback {} --ui web",
+            args.file.display()
+        )));
     }
 
     match args.ui {
@@ -2754,19 +2750,9 @@ pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
                 .await
                 .map_err(|error| crate::core::NibError::Other(error.to_string()))
         }
-        FeedbackUi::Auto => match super::web_feedback::run(args).await {
-            Ok(()) => Ok(()),
-            Err(error) if error.allows_local_fallback() => {
-                tracing::warn!("Web review unavailable; using a local reviewer: {error}");
-                if std::env::var_os("TMUX").is_some() && nib_tui::TerminalReport::detect().is_ok() {
-                    return run_terminal_feedback(args).await;
-                }
-                let value = run_native_feedback_value(args).await?;
-                println!("{}", serde_json::to_string(&value).unwrap_or_default());
-                Ok(())
-            }
-            Err(error) => Err(crate::core::NibError::Other(error.to_string())),
-        },
+        FeedbackUi::Auto => super::web_feedback::run(args)
+            .await
+            .map_err(|error| crate::core::NibError::Other(error.to_string())),
     }
 }
 
@@ -2802,10 +2788,11 @@ pub(crate) async fn run_native_feedback_value(
     let is_image = matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif");
     let is_nib = extension == "nib";
     let is_video = extension == "mp4";
+    let is_pdf = extension == "pdf";
 
-    if !is_image && !is_nib && !is_video {
+    if !is_image && !is_nib && !is_video && !is_pdf {
         return Err(crate::core::NibError::Other(format!(
-            "Unsupported file type: {}. Expected .nib, MP4/H.264, or image (.png, .jpg, .webp)",
+            "Unsupported file type: {}. Expected .nib, PDF, MP4/H.264, or image (.png, .jpg, .webp)",
             args.file.display()
         )));
     }
@@ -2818,9 +2805,18 @@ pub(crate) async fn run_native_feedback_value(
             ));
         }
     }
+    if is_pdf {
+        crate::pdf::inspect_pdf(&args.file).map_err(crate::core::NibError::Other)?;
+        if args.annotations.is_some() {
+            return Err(crate::core::NibError::Other(
+                "E_PDF_PROMPT_ANNOTATIONS_UNSUPPORTED: add PDF annotations in the page reviewer so each annotation has a pageIndex anchor"
+                    .into(),
+            ));
+        }
+    }
 
-    // Images use their canonical .nib session. Videos use the media path itself
-    // as the deterministic collaboration-session identity.
+    // Images use their canonical .nib session. Videos and PDFs use the media path
+    // itself as the deterministic collaboration-session identity.
     let session_path = if is_image {
         let nib_path = args.file.with_extension("nib");
         if !nib_path.exists() {
@@ -2832,6 +2828,9 @@ pub(crate) async fn run_native_feedback_value(
             NibFile::create(&nib_path, &image_data, &extension, width, height)?;
         }
         nib_path
+    } else if is_nib {
+        let nib = NibFile::open_editable(&args.file)?;
+        nib.path().to_path_buf()
     } else {
         args.file.clone()
     };
@@ -2917,6 +2916,10 @@ pub(crate) async fn run_native_feedback_value(
             })?;
             if is_video {
                 value["contract"] = serde_json::json!("nib.review/v2");
+                return Ok(value);
+            }
+            if is_pdf {
+                value["contract"] = serde_json::json!("nib.review/v3");
                 return Ok(value);
             }
 

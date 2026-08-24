@@ -4,7 +4,6 @@
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",
-    "dogfood:mcp": "node scripts/dogfood-mcp.mjs",
     "site:build": "cargo run --manifest-path site/Cargo.toml -- --export site/dist",
     "site:worker:build": "cd site && worker-build --release --no-panic-recovery",
     "deploy:site": "wrangler deploy --config site/wrangler.jsonc",

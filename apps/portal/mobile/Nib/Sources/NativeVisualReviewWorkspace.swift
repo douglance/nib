@@ -1,6 +1,7 @@
 import AVFoundation
 import AVKit
 import PhotosUI
+import PDFKit
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -99,39 +100,6 @@ private extension View {
     }
 }
 
-enum NativeReviewTool: String, Identifiable {
-    case select
-    case pan
-    case arrow
-    case rectangle
-    case text
-    case path
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .select: return "Select"
-        case .pan: return "Pan"
-        case .arrow: return "Arrow"
-        case .rectangle: return "Rectangle"
-        case .text: return "Text"
-        case .path: return "Freehand"
-        }
-    }
-
-    var systemImage: String {
-        switch self {
-        case .select: return "cursorarrow"
-        case .pan: return "arrow.up.and.down.and.arrow.left.and.right"
-        case .arrow: return "arrow.up.right"
-        case .rectangle: return "square"
-        case .text: return "textformat.size"
-        case .path: return "scribble"
-        }
-    }
-}
-
 // Mirrors design/motion.json for the native renderer.
 private enum NibReviewMotion {
     enum Mode: String { case full, reduced, off }
@@ -160,23 +128,29 @@ struct NativeVisualReviewWorkspace: View {
     var request: NibRequest
     var imageURL: URL?
     var videoURL: URL? = nil
+    var pdfURL: URL? = nil
+    var nibURL: URL? = nil
     var sending: Bool
     var uploadReply: (Data, String) async throws -> Void
     var submit: (String, String?, [NibReviewAnnotation]) async -> Void
 
     @State private var image: UIImage?
     @State private var videoFrame: UIImage?
+    @State private var pdfDocument: PDFDocument?
+    @State private var pdfPageImage: UIImage?
+    @State private var pdfPageIndex = 0
+    @State private var pdfSearchText = ""
+    @State private var pdfSearchStatus: String?
     @State private var player: AVPlayer?
     @State private var currentTimeMs = 0.0
     @State private var durationMs = 0.0
     @State private var isPlaying = false
     @State private var replyVideo: PhotosPickerItem?
     @State private var replyStatus: String?
+    @State private var derivativeStatus: String?
     @State private var loadError: String?
     @State private var tool: NativeReviewTool = .select
-    @State private var color = "#0A84FF"
-    @State private var annotations: [NibReviewAnnotation] = []
-    @State private var redoAnnotations: [NibReviewAnnotation] = []
+    @State private var reviewState = NativeReviewDocumentState()
     @State private var zoom = 1.0
     @State private var panOffset: CGSize = .zero
     @State private var comment = ""
@@ -206,10 +180,10 @@ struct NativeVisualReviewWorkspace: View {
                         .accessibilityLabel(request.title)
                 } else {
                     NativeReviewCanvas(
-                        image: videoURL == nil ? image : videoFrame ?? image,
+                        image: displayImage,
                         loadError: loadError,
                         tool: tool,
-                        color: color,
+                        style: reviewState.style,
                         zoom: zoom,
                         panOffset: $panOffset,
                         annotations: visibleAnnotations,
@@ -235,10 +209,25 @@ struct NativeVisualReviewWorkspace: View {
                     .padding(.top, 10)
             }
 
+
+            if pdfURL != nil {
+                pdfControls
+                    .padding(.horizontal, 18)
+                    .padding(.top, 10)
+            }
+
             annotationToolbar
                 .padding(.horizontal, 18)
                 .padding(.top, 14)
                 .reviewChromeMotion(scaleX: chromeScaleX, opacity: chromeOpacity, blur: chromeBlur)
+
+            if let derivativeStatus {
+                Text(derivativeStatus)
+                    .font(.caption)
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .padding(.horizontal, 18)
+                    .padding(.top, 6)
+            }
 
             replyMediaControl
                 .padding(.horizontal, 18)
@@ -261,6 +250,7 @@ struct NativeVisualReviewWorkspace: View {
         .preferredColorScheme(.dark)
         .task(id: imageURL) { await loadImage() }
         .task(id: videoURL) { await loadVideo() }
+        .task(id: pdfURL) { await loadPDF() }
         .task(id: replyVideo) { await uploadSelectedReply() }
         .task(id: isPlaying) {
             while isPlaying, let player {
@@ -270,7 +260,7 @@ struct NativeVisualReviewWorkspace: View {
         }
         .task { await materializeChrome() }
         .fullScreenCover(isPresented: $showingExpandedImage) {
-            ExpandedReviewImage(image: videoURL == nil ? image : videoFrame ?? image, annotations: visibleAnnotations.wrappedValue)
+            ExpandedReviewImage(image: displayImage, annotations: visibleAnnotations.wrappedValue)
         }
         .alert("Add text annotation", isPresented: $showingTextPrompt) {
             TextField("Annotation", text: $textAnnotation)
@@ -323,7 +313,7 @@ struct NativeVisualReviewWorkspace: View {
             }
             try? await Task.sleep(for: .milliseconds(120))
         }
-        await submit(decision, normalizedComment, annotations)
+        await submit(decision, normalizedComment, reviewState.annotations)
         chromeScaleX = 1
         chromeOpacity = 1
         chromeBlur = 0
@@ -332,37 +322,47 @@ struct NativeVisualReviewWorkspace: View {
     private var visibleAnnotations: Binding<[NibReviewAnnotation]> {
         Binding(
             get: {
-                guard videoURL != nil else { return annotations }
-                return annotations.filter { annotation in
-                    guard let timeMs = annotation.timeMs else { return false }
-                    return abs(timeMs - currentTimeMs) <= 75
-                }
+                NibDocumentReviewAdapter.visibleAnnotations(
+                    in: reviewState,
+                    pageIndex: pdfURL == nil ? nil : pdfPageIndex,
+                    timeMs: videoURL == nil ? nil : currentTimeMs
+                )
             },
             set: { updated in
-                guard videoURL != nil else {
-                    annotations = updated
+                if videoURL != nil {
+                    reviewState.annotations.removeAll { annotation in
+                        guard let timeMs = annotation.timeMs else { return false }
+                        return abs(timeMs - currentTimeMs) <= 75
+                    }
+                    reviewState.annotations.append(contentsOf: updated.map { annotation in
+                        var anchored = annotation
+                        anchored.timeMs = currentTimeMs
+                        return anchored
+                    })
                     return
                 }
-                annotations.removeAll { annotation in
-                    guard let timeMs = annotation.timeMs else { return false }
-                    return abs(timeMs - currentTimeMs) <= 75
+                if pdfURL != nil {
+                    reviewState.annotations.removeAll { $0.pageIndex == pdfPageIndex }
+                    reviewState.annotations.append(contentsOf: updated.map { annotation in
+                        var anchored = annotation
+                        anchored.pageIndex = pdfPageIndex
+                        return anchored
+                    })
+                    return
                 }
-                annotations.append(contentsOf: updated.map { annotation in
-                    var anchored = annotation
-                    anchored.timeMs = currentTimeMs
-                    return anchored
-                })
+                reviewState.annotations = updated
             }
         )
     }
 
     private var visibleRedoAnnotations: Binding<[NibReviewAnnotation]> {
         Binding(
-            get: { redoAnnotations },
+            get: { reviewState.redoAnnotations },
             set: { updated in
-                redoAnnotations = updated.map { annotation in
+                reviewState.redoAnnotations = updated.map { annotation in
                     var anchored = annotation
                     if videoURL != nil { anchored.timeMs = currentTimeMs }
+                    if pdfURL != nil { anchored.pageIndex = pdfPageIndex }
                     return anchored
                 }
             }
@@ -404,6 +404,107 @@ struct NativeVisualReviewWorkspace: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .nibGlassSurface(tint: Color.white.opacity(0.20), cornerRadius: 12, reduceTransparency: reduceTransparency)
+    }
+
+    private var displayImage: UIImage? {
+        if pdfURL != nil { return pdfPageImage }
+        return videoURL == nil ? image : videoFrame ?? image
+    }
+
+    private var pdfControls: some View {
+        HStack(spacing: 10) {
+            Button {
+                showPDFPage(pdfPageIndex - 1)
+            } label: {
+                Image(systemName: "chevron.left").frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .disabled(pdfPageIndex == 0)
+            .accessibilityLabel("Previous PDF page")
+
+            Text("Page \(pdfPageIndex + 1) of \(pdfDocument?.pageCount ?? 0)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Button {
+                showPDFPage(pdfPageIndex + 1)
+            } label: {
+                Image(systemName: "chevron.right").frame(width: 34, height: 34)
+            }
+            .buttonStyle(.plain)
+            .disabled(pdfPageIndex + 1 >= (pdfDocument?.pageCount ?? 0))
+            .accessibilityLabel("Next PDF page")
+
+            TextField("Find text", text: $pdfSearchText)
+                .textFieldStyle(.plain)
+                .submitLabel(.search)
+                .onSubmit { findPDFText() }
+                .accessibilityLabel("Find text in PDF")
+
+            Button("Find") { findPDFText() }
+                .buttonStyle(.plain)
+                .disabled(pdfSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            if let pdfSearchStatus {
+                Text(pdfSearchStatus).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .nibGlassSurface(tint: Color.white.opacity(0.20), cornerRadius: 12, reduceTransparency: reduceTransparency)
+    }
+
+    @MainActor
+    private func loadPDF() async {
+        pdfDocument = nil
+        pdfPageImage = nil
+        pdfPageIndex = 0
+        pdfSearchStatus = nil
+        guard let pdfURL else { return }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: pdfURL)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode),
+                  let document = PDFDocument(data: data),
+                  document.pageCount > 0
+            else {
+                throw NSError(domain: "Nib", code: 3, userInfo: [NSLocalizedDescriptionKey: "PDF preview unavailable"])
+            }
+            pdfDocument = document
+            showPDFPage(0)
+        } catch {
+            loadError = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    private func showPDFPage(_ requestedIndex: Int) {
+        guard let pdfDocument, pdfDocument.pageCount > 0 else { return }
+        let index = min(max(0, requestedIndex), pdfDocument.pageCount - 1)
+        guard let page = pdfDocument.page(at: index) else { return }
+        pdfPageIndex = index
+        pdfPageImage = page.thumbnail(of: CGSize(width: 2_048, height: 2_048), for: .cropBox)
+        zoom = 1
+        panOffset = .zero
+    }
+
+    @MainActor
+    private func findPDFText() {
+        let query = pdfSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let pdfDocument, !query.isEmpty else { return }
+        let selections = pdfDocument.findString(query, withOptions: [.caseInsensitive])
+        guard !selections.isEmpty else {
+            pdfSearchStatus = "No matches"
+            return
+        }
+        let next = selections.first { selection in
+            guard let page = selection.pages.first else { return false }
+            return pdfDocument.index(for: page) > pdfPageIndex
+        } ?? selections[0]
+        if let page = next.pages.first {
+            showPDFPage(pdfDocument.index(for: page))
+        }
+        pdfSearchStatus = "\(selections.count) match\(selections.count == 1 ? "" : "es")"
     }
 
     @MainActor
@@ -491,7 +592,7 @@ struct NativeVisualReviewWorkspace: View {
 
                 panArrowMenu
 
-                ForEach([NativeReviewTool.rectangle, .text, .path]) { item in
+                ForEach([NativeReviewTool.rectangle, .line, .ellipse, .highlight, .blur, .text, .number, .crop, .path, .image]) { item in
                     ReviewToolButton(tool: item, selected: tool == item) {
                         pauseVideo()
                         tool = item
@@ -500,10 +601,14 @@ struct NativeVisualReviewWorkspace: View {
 
                 toolbarDivider
 
-                toolbarButton("Undo", systemImage: "arrow.uturn.backward", disabled: annotations.isEmpty) {
+                toolbarButton("Create New Nib", systemImage: "doc.badge.plus", disabled: nibURL == nil) {
+                    Task { await createNewNib() }
+                }
+
+                toolbarButton("Undo", systemImage: "arrow.uturn.backward", disabled: reviewState.annotations.isEmpty) {
                     undo()
                 }
-                toolbarButton("Redo", systemImage: "arrow.uturn.forward", disabled: redoAnnotations.isEmpty) {
+                toolbarButton("Redo", systemImage: "arrow.uturn.forward", disabled: reviewState.redoAnnotations.isEmpty) {
                     redo()
                 }
 
@@ -528,10 +633,99 @@ struct NativeVisualReviewWorkspace: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Annotation color")
+
+                Menu {
+                    Picker("Width", selection: $reviewState.style.strokeWidth) {
+                        Text("Thin").tag(2.0)
+                        Text("Medium").tag(4.0)
+                        Text("Heavy").tag(8.0)
+                        Text("Bold").tag(12.0)
+                    }
+                    Picker("Line Style", selection: $reviewState.style.strokeStyle) {
+                        ForEach(NativeReviewStrokeStyle.allCases, id: \.self) { style in
+                            Text(style.rawValue.capitalized).tag(style)
+                        }
+                    }
+                    Toggle("Fill", isOn: $reviewState.style.filled)
+                    Picker("Arrow Head", selection: $reviewState.style.arrowHead) {
+                        ForEach(NativeReviewArrowHead.allCases, id: \.self) { head in
+                            Text(head.rawValue.capitalized).tag(head)
+                        }
+                    }
+                    Picker("Blur", selection: $reviewState.style.blurIntensity) {
+                        ForEach(NativeReviewBlurIntensity.allCases, id: \.self) { intensity in
+                            Text(intensity.rawValue.capitalized).tag(intensity)
+                        }
+                    }
+                    Picker("Text Align", selection: $reviewState.style.textAlignment) {
+                        ForEach(NativeReviewTextAlignment.allCases, id: \.self) { align in
+                            Text(align.rawValue.capitalized).tag(align)
+                        }
+                    }
+                    Stepper("Corner \(Int(reviewState.style.cornerRadius))", value: $reviewState.style.cornerRadius, in: 0...48, step: 2)
+                    Stepper("Font \(Int(reviewState.style.fontSize))", value: $reviewState.style.fontSize, in: 10...96, step: 2)
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(Color.white.opacity(0.92))
+                        .frame(width: 34, height: 34)
+                }
+                .accessibilityLabel("Style controls")
+
+                layerMenu
             }
             .padding(5)
         }
         .nibGlassSurface(tint: Color.white.opacity(0.20), cornerRadius: 13, reduceTransparency: reduceTransparency)
+    }
+
+    private var layerMenu: some View {
+        Menu {
+            if reviewState.annotations.isEmpty {
+                Text("No layers")
+            } else {
+                ForEach(reviewState.annotations.reversed()) { annotation in
+                    let layer = reviewState.layers[annotation.id, default: NativeReviewLayerState()]
+                    Button {
+                        reviewState.selectedIDs = [annotation.id]
+                    } label: {
+                        Label(annotation.type.capitalized, systemImage: reviewState.selectedIDs.contains(annotation.id) ? "checkmark.circle.fill" : "circle")
+                    }
+                    Button {
+                        reviewState.layers[annotation.id, default: NativeReviewLayerState()].visible.toggle()
+                    } label: {
+                        Label(layer.visible ? "Hide \(annotation.type)" : "Show \(annotation.type)", systemImage: layer.visible ? "eye.slash" : "eye")
+                    }
+                    Button {
+                        reviewState.layers[annotation.id, default: NativeReviewLayerState()].locked.toggle()
+                    } label: {
+                        Label(layer.locked ? "Unlock \(annotation.type)" : "Lock \(annotation.type)", systemImage: layer.locked ? "lock.open" : "lock")
+                    }
+                }
+                Divider()
+                Button("Group Selected") {
+                    let groupID = UUID().uuidString
+                    for id in reviewState.selectedIDs {
+                        reviewState.layers[id, default: NativeReviewLayerState()].groupID = groupID
+                    }
+                }
+                Button("Ungroup Selected") {
+                    for id in reviewState.selectedIDs {
+                        reviewState.layers[id, default: NativeReviewLayerState()].groupID = nil
+                    }
+                }
+                Button("Delete Selected", role: .destructive) {
+                    NibDocumentReviewAdapter.deleteSelected(in: &reviewState)
+                }
+                .disabled(reviewState.selectedIDs.isEmpty)
+            }
+        } label: {
+            Image(systemName: "square.3.layers.3d")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.92))
+                .frame(width: 34, height: 34)
+        }
+        .accessibilityLabel("Layers")
     }
 
     private var toolbarDivider: some View {
@@ -704,30 +898,57 @@ struct NativeVisualReviewWorkspace: View {
     }
 
     private func undo() {
-        if videoURL != nil,
-           let index = annotations.lastIndex(where: { annotation in
-               guard let timeMs = annotation.timeMs else { return false }
-               return abs(timeMs - currentTimeMs) <= 75
-           }) {
-            redoAnnotations.append(annotations.remove(at: index))
+        NibDocumentReviewAdapter.undo(
+            in: &reviewState,
+            pageIndex: pdfURL == nil ? nil : pdfPageIndex,
+            timeMs: videoURL == nil ? nil : currentTimeMs
+        )
+    }
+
+    @MainActor
+    private func createNewNib() async {
+        guard let nibURL else {
+            derivativeStatus = "Create New Nib requires an opened .nib file."
             return
         }
-        guard let last = annotations.popLast() else { return }
-        redoAnnotations.append(last)
+        derivativeStatus = "Creating derivative..."
+        do {
+            let sourceURL = try await materializedNibSource(from: nibURL)
+            let destination = try NibDocumentReviewAdapter.exportDerivative(from: sourceURL)
+            derivativeStatus = "Created \(destination.lastPathComponent)"
+        } catch {
+            derivativeStatus = error.localizedDescription
+        }
+    }
+
+    private func materializedNibSource(from url: URL) async throws -> URL {
+        if url.isFileURL { return url }
+        let (data, response) = try await URLSession.shared.data(from: url)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode), !data.isEmpty else {
+            throw NSError(domain: "Nib", code: 4, userInfo: [NSLocalizedDescriptionKey: "Nib file unavailable"])
+        }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("NibDerivatives", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension("nib")
+        try data.write(to: source, options: .atomic)
+        return source
     }
 
     private func redo() {
-        guard let last = redoAnnotations.popLast() else { return }
-        annotations.append(last)
+        NibDocumentReviewAdapter.redo(
+            in: &reviewState,
+            pageIndex: pdfURL == nil ? nil : pdfPageIndex,
+            timeMs: videoURL == nil ? nil : currentTimeMs
+        )
     }
 
     private func cycleColor() {
         let colors = ["#0A84FF", "#FFD60A", "#FF453A", "#30D158"]
-        guard let index = colors.firstIndex(of: color) else {
-            color = colors[0]
+        guard let index = colors.firstIndex(of: reviewState.style.color) else {
+            reviewState.style.color = colors[0]
             return
         }
-        color = colors[(index + 1) % colors.count]
+        reviewState.style.color = colors[(index + 1) % colors.count]
     }
 
     private func addTextAnnotation() {
@@ -737,16 +958,16 @@ struct NativeVisualReviewWorkspace: View {
         var annotation = NibReviewAnnotation(
             id: UUID().uuidString,
             type: "text",
-            color: color,
+            color: reviewState.style.color,
             x: point.x,
             y: point.y,
             content: content,
-            fontSize: 20,
-            align: "left"
+            fontSize: reviewState.style.fontSize,
+            align: reviewState.style.textAlignment.rawValue
         )
         if videoURL != nil { annotation.timeMs = currentTimeMs }
-        annotations.append(annotation)
-        redoAnnotations = []
+        if pdfURL != nil { annotation.pageIndex = pdfPageIndex }
+        NibDocumentReviewAdapter.add(annotation, to: &reviewState)
         textPoint = nil
     }
 
@@ -754,7 +975,7 @@ struct NativeVisualReviewWorkspace: View {
         image = nil
         loadError = nil
         guard let imageURL else {
-            loadError = "Preview unavailable"
+            if pdfURL == nil && videoURL == nil { loadError = "Preview unavailable" }
             return
         }
         do {
@@ -853,7 +1074,7 @@ struct NativeReviewCanvas: View {
     var image: UIImage?
     var loadError: String?
     var tool: NativeReviewTool
-    var color: String
+    var style: NativeReviewStyle
     var zoom: Double
     @Binding var panOffset: CGSize
     @Binding var annotations: [NibReviewAnnotation]
@@ -936,7 +1157,7 @@ struct NativeReviewCanvas: View {
                     )
                     return
                 }
-                guard [.arrow, .rectangle, .path].contains(tool) else { return }
+                guard tool.drawsFromDrag else { return }
                 let point = imagePoint(value.location, canvasSize: canvasSize)
                 if dragStart == nil {
                     dragStart = point
@@ -956,41 +1177,35 @@ struct NativeReviewCanvas: View {
                     requestText(end)
                     return
                 }
+                if tool == .number,
+                   let annotation = NibDocumentReviewAdapter.makeAnnotation(
+                    tool: .number,
+                    start: end,
+                    end: end,
+                    points: [],
+                    style: style,
+                    pageIndex: nil,
+                    timeMs: nil,
+                    nextNumber: nextNumberValue()
+                   ) {
+                    annotations.append(annotation)
+                    redoAnnotations = []
+                    return
+                }
                 let start = dragStart ?? imagePoint(value.startLocation, canvasSize: canvasSize)
                 let distance = hypot(end.x - start.x, end.y - start.y)
                 guard distance >= 4 else { return }
-                if tool == .arrow {
-                    annotations.append(NibReviewAnnotation(
-                        id: UUID().uuidString,
-                        type: "arrow",
-                        color: color,
-                        startX: start.x,
-                        startY: start.y,
-                        endX: end.x,
-                        endY: end.y,
-                        strokeWidth: 12,
-                        head: "end"
-                    ))
-                } else if tool == .rectangle {
-                    annotations.append(NibReviewAnnotation(
-                        id: UUID().uuidString,
-                        type: "rectangle",
-                        color: color,
-                        x: min(start.x, end.x),
-                        y: min(start.y, end.y),
-                        width: abs(end.x - start.x),
-                        height: abs(end.y - start.y),
-                        strokeWidth: 4
-                    ))
-                } else if tool == .path {
-                    let points = dragPoints.count > 1 ? dragPoints : [start, end]
-                    annotations.append(NibReviewAnnotation(
-                        id: UUID().uuidString,
-                        type: "path",
-                        color: color,
-                        points: points.map { [$0.x, $0.y] },
-                        strokeWidth: 4
-                    ))
+                if let annotation = NibDocumentReviewAdapter.makeAnnotation(
+                    tool: tool,
+                    start: start,
+                    end: end,
+                    points: dragPoints,
+                    style: style,
+                    pageIndex: nil,
+                    timeMs: nil,
+                    nextNumber: nextNumberValue()
+                ) {
+                    annotations.append(annotation)
                 }
                 redoAnnotations = []
             }
@@ -1006,41 +1221,38 @@ struct NativeReviewCanvas: View {
 
     private func draftAnnotation() -> NibReviewAnnotation? {
         guard let start = dragStart, let end = dragCurrent else { return nil }
-        if tool == .arrow {
-            return NibReviewAnnotation(
-                id: "draft",
-                type: "arrow",
-                color: color,
-                startX: start.x,
-                startY: start.y,
-                endX: end.x,
-                endY: end.y,
-                strokeWidth: 12,
-                head: "end"
-            )
-        }
-        if tool == .rectangle {
-            return NibReviewAnnotation(
-                id: "draft",
-                type: "rectangle",
-                color: color,
-                x: min(start.x, end.x),
-                y: min(start.y, end.y),
-                width: abs(end.x - start.x),
-                height: abs(end.y - start.y),
-                strokeWidth: 4
-            )
-        }
         if tool == .path, dragPoints.count > 1 {
-            return NibReviewAnnotation(
+            return NibDocumentReviewAdapter.apply(
+                style: style,
+                to: NibReviewAnnotation(
                 id: "draft",
                 type: "path",
-                color: color,
-                points: dragPoints.map { [$0.x, $0.y] },
-                strokeWidth: 4
+                color: style.color,
+                points: dragPoints.map { [$0.x, $0.y] }
+                ),
+                pageIndex: nil,
+                timeMs: nil
             )
         }
-        return nil
+        return NibDocumentReviewAdapter.makeAnnotation(
+            tool: tool,
+            id: "draft",
+            start: start,
+            end: end,
+            points: dragPoints,
+            style: style,
+            pageIndex: nil,
+            timeMs: nil,
+            nextNumber: nextNumberValue()
+        )
+    }
+
+    private func nextNumberValue() -> Int {
+        annotations
+            .filter { $0.type == "number" }
+            .compactMap { $0.content.flatMap(Int.init) }
+            .max()
+            .map { $0 + 1 } ?? 1
     }
 
     private func resetDraft() {
@@ -1067,7 +1279,7 @@ struct NativeAnnotationOverlay: View {
             for annotation in annotations {
                 let annotationColor = Color(nibHex: annotation.color)
                 let lineWidth = (annotation.strokeWidth ?? 4) * min(scaleX, scaleY)
-                if annotation.type == "arrow",
+                if ["arrow", "line"].contains(annotation.type),
                    let startX = annotation.startX,
                    let startY = annotation.startY,
                    let endX = annotation.endX,
@@ -1078,14 +1290,40 @@ struct NativeAnnotationOverlay: View {
                     line.move(to: start)
                     line.addLine(to: end)
                     context.stroke(line, with: .color(annotationColor), lineWidth: lineWidth)
-                    drawArrowHead(context: &context, start: start, end: end, color: annotationColor, lineWidth: lineWidth)
-                } else if annotation.type == "rectangle",
+                    if annotation.type == "arrow" {
+                        drawArrowHead(context: &context, start: start, end: end, color: annotationColor, lineWidth: lineWidth)
+                    }
+                } else if ["rectangle", "highlight", "blur", "crop", "image"].contains(annotation.type),
                           let x = annotation.x,
                           let y = annotation.y,
                           let width = annotation.width,
                           let height = annotation.height {
                     let rect = CGRect(x: x * scaleX, y: y * scaleY, width: width * scaleX, height: height * scaleY)
-                    context.stroke(Path(rect), with: .color(annotationColor), lineWidth: lineWidth)
+                    switch annotation.type {
+                    case "highlight":
+                        context.fill(Path(roundedRect: rect, cornerRadius: 6), with: .color(annotationColor.opacity(0.28)))
+                        context.stroke(Path(roundedRect: rect, cornerRadius: 6), with: .color(annotationColor), lineWidth: max(1, lineWidth * 0.5))
+                    case "blur":
+                        context.fill(Path(roundedRect: rect, cornerRadius: 6), with: .color(.white.opacity(0.22)))
+                        context.stroke(Path(roundedRect: rect, cornerRadius: 6), with: .color(annotationColor.opacity(0.86)), lineWidth: max(1, lineWidth * 0.5))
+                        context.draw(Text("Blur").font(.caption.weight(.bold)).foregroundStyle(annotationColor), at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
+                    case "crop":
+                        context.stroke(Path(rect), with: .color(annotationColor), style: StrokeStyle(lineWidth: lineWidth, dash: [10, 6]))
+                        drawCropCorners(context: &context, rect: rect, color: annotationColor, lineWidth: lineWidth)
+                    case "image":
+                        context.fill(Path(roundedRect: rect, cornerRadius: 6), with: .color(.black.opacity(0.28)))
+                        context.stroke(Path(roundedRect: rect, cornerRadius: 6), with: .color(annotationColor), lineWidth: lineWidth)
+                        context.draw(Image(systemName: "photo"), at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
+                    default:
+                        context.stroke(Path(rect), with: .color(annotationColor), lineWidth: lineWidth)
+                    }
+                } else if annotation.type == "ellipse",
+                          let x = annotation.x,
+                          let y = annotation.y,
+                          let width = annotation.width,
+                          let height = annotation.height {
+                    let rect = CGRect(x: x * scaleX, y: y * scaleY, width: width * scaleX, height: height * scaleY)
+                    context.stroke(Path(ellipseIn: rect), with: .color(annotationColor), lineWidth: lineWidth)
                 } else if annotation.type == "path", let points = annotation.points, points.count > 1 {
                     var path = Path()
                     path.move(to: CGPoint(x: points[0][0] * scaleX, y: points[0][1] * scaleY))
@@ -1104,9 +1342,52 @@ struct NativeAnnotationOverlay: View {
                         at: CGPoint(x: x * scaleX, y: y * scaleY),
                         anchor: .topLeading
                     )
+                } else if annotation.type == "number",
+                          let x = annotation.x,
+                          let y = annotation.y {
+                    let value = annotation.content ?? "1"
+                    let point = CGPoint(x: x * scaleX, y: y * scaleY)
+                    let radius = max(12, (annotation.fontSize ?? 20) * min(scaleX, scaleY) * 0.75)
+                    let rect = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
+                    context.fill(Path(ellipseIn: rect), with: .color(annotationColor))
+                    context.stroke(Path(ellipseIn: rect), with: .color(.white), lineWidth: max(1, lineWidth * 0.45))
+                    context.draw(
+                        Text(value)
+                            .font(.system(size: radius, weight: .bold))
+                            .foregroundStyle(.white),
+                        at: point,
+                        anchor: .center
+                    )
                 }
             }
         }
+    }
+
+    private func drawCropCorners(
+        context: inout GraphicsContext,
+        rect: CGRect,
+        color: Color,
+        lineWidth: Double
+    ) {
+        let length = min(rect.width, rect.height, 28)
+        var corners = Path()
+        corners.move(to: rect.origin)
+        corners.addLine(to: CGPoint(x: rect.minX + length, y: rect.minY))
+        corners.move(to: rect.origin)
+        corners.addLine(to: CGPoint(x: rect.minX, y: rect.minY + length))
+        corners.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+        corners.addLine(to: CGPoint(x: rect.maxX - length, y: rect.minY))
+        corners.move(to: CGPoint(x: rect.maxX, y: rect.minY))
+        corners.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + length))
+        corners.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        corners.addLine(to: CGPoint(x: rect.minX + length, y: rect.maxY))
+        corners.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        corners.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - length))
+        corners.move(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        corners.addLine(to: CGPoint(x: rect.maxX - length, y: rect.maxY))
+        corners.move(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        corners.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - length))
+        context.stroke(corners, with: .color(color), style: StrokeStyle(lineWidth: lineWidth, lineCap: .square))
     }
 
     private func drawArrowHead(

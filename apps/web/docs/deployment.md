@@ -1,15 +1,14 @@
 # Deployment
 
-The production Worker is deployed at `https://nib.doug-lance.workers.dev` in the `doug-lance.workers.dev` Cloudflare account. The site, OpenAPI, skill discovery, and remote MCP discovery are live. Customer generation and checkout remain closed until scalable customer authentication is implemented and canaried.
+The canonical production origin is `https://nibtool.com`. Nib has one passwordless account system and no legacy customer migration path.
 
 | Launch requirement | Current state | Required result |
 | --- | --- | --- |
-| Owner/admin authentication | One Cloudflare Zero Trust Standard seat is available. Protected routes currently fail closed with `401` because the Worker Access variables are empty. | Configure Access for owner/admin dogfood only. |
-| Customer authentication | Not implemented. A Zero Trust seat is consumed by each Access user, so the single Standard seat cannot be the customer identity system. | Implement and canary customer signup plus revocable Worker credentials before accepting customers. |
-| Stripe API key | A temporary Stripe CLI live key is deployed. | Replace `STRIPE_SECRET_KEY` with a durable live restricted key before accepting customers. |
+| Account authentication | Passwordless email challenge, PKCE, revocable sessions, and UUID account ownership are deployed. | Keep the email sender and rate-limit secret configured. |
+| Stripe API key | A live restricted key is deployed. | Verify checkout whenever the key or price configuration changes. |
 | Billable Usage API | Optional: restricted alpha; current Wrangler OAuth grant has no billing permission. | Add a read-only API token only when Cloudflare grants account access. Customer billing does not depend on it. |
 
-Do not onboard customers or run a live checkout until customer authentication and the Stripe key have the required result. Publishing the pricing page and public agent-discovery surfaces is safe while protected execution fails closed.
+Protected execution fails closed without a valid Nib account session.
 
 ## 1. Cloudflare resources
 
@@ -36,9 +35,9 @@ The current model input shapes come from Cloudflare's [Nano Banana 2](https://de
 
 ## 3. Configure Stripe
 
-The live Stripe account contains the products, prices, meter, and webhook described in [`billing.md`](billing.md). The deployed price IDs are in `wrangler.jsonc`, and the webhook targets `https://nib.doug-lance.workers.dev/billing/webhook`.
+The live Stripe account contains the products, prices, meter, and webhook described in [`billing.md`](billing.md). The deployed price IDs are in `wrangler.jsonc`; the canonical webhook target is `https://nibtool.com/billing/webhook`.
 
-Before launch, create a durable live restricted key on the [Stripe API keys page](https://dashboard.stripe.com/apikeys) with only the permissions required by [`billing.md`](billing.md). Stripe displays the key once. Paste it directly into Wrangler; do not save it in the repository or send it through chat:
+Create and rotate the live restricted key on the [Stripe API keys page](https://dashboard.stripe.com/apikeys) with only the permissions required by [`billing.md`](billing.md). Stripe displays the key once. Paste it directly into Wrangler; do not save it in the repository or send it through chat:
 
 ```sh
 npx wrangler secret put STRIPE_SECRET_KEY
@@ -50,16 +49,7 @@ Enable Stripe Tax and complete the business-origin and tax-registration settings
 
 ## 4. Configure authentication
 
-`PUBLIC_ORIGIN` is already set to the production Worker origin. Keep these two identity scopes separate:
-
-| Scope | Mechanism | Status |
-| --- | --- | --- |
-| Owner/admin dogfood | Cloudflare Zero Trust Access | Supported by [`worker/src/access.ts`](../worker/src/access.ts); application and Wrangler variables still need configuration |
-| Customers and free trials | Customer signup plus revocable Worker credentials | Not implemented; required before launch |
-
-For owner/admin Access, create a self-hosted application for protected routes, keep the public site, discovery, `/mcp`, and `/billing/webhook` outside it, then set `ACCESS_TEAM_DOMAIN` and `ACCESS_POLICY_AUD`. The Worker validates the assertion itself before an MCP `tools/call`. See [Access JWT validation](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/).
-
-Do not add customers as Zero Trust users. Each Access user consumes a seat. The customer flow must issue a tenant-bound, revocable credential that the CLI and remote MCP can present without exposing an owner service token. Store only a credential hash and lifecycle metadata in D1, use Cloudflare-native abuse controls at signup, and preserve the current rule that public discovery cannot execute a model. Until that flow exists, the Worker must continue returning `401` for customer generation, account, artifact, and billing requests.
+`PUBLIC_ORIGIN` is fixed to `https://nibtool.com`. Configure `AUTH_RATE_LIMIT_SECRET` as a Wrangler secret and verify `login@nibtool.com` is an allowed Cloudflare Email Service sender. Apply migrations through `0010_hard_cut_accounts.sql` before deploying the Worker. Migration 0010 deletes pre-launch test identities and drops the superseded auth and workspace schemas. Public discovery remains unauthenticated; product data and execution require a revocable account session.
 
 ## 5. Apply D1 migrations
 
@@ -114,7 +104,7 @@ Verify, in order:
 6. One paid Fast 1K generation creates a D1 usage row and exactly one Stripe `nib_usage_cents` meter event.
 7. Default-to-High change and cancellation update authorization correctly.
 
-The 2026-08-04 Workers-only deployment verified dynamic Topcoat rendering on `/`, `/docs`, and `/pricing` through the `SITE` binding, asset-only Static Assets, Worker-native MCP initialization and `tools/list`, and the unauthenticated `401` account boundary. The live Topcoat Worker version is `182e5669-4fb5-428b-a378-19cf19f0c783`; the compatible public Worker version is `3f9d10ef-6600-4b78-acfd-d82c7b9af77f`. No Nib Container application exists. Successful generation and billing canaries still require customer authentication and a durable Stripe key.
+The 2026-08-13 production canary created a live-mode $9.99 default-plan Checkout Session through an authenticated Nib account, with automatic tax, billing address, tax ID, and individual-name collection enabled. The same canary account was then permanently deleted through `DELETE /api/account`.
 
 ## Rollback
 

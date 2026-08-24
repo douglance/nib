@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn undo_then_redo_restores_final_state() {
-        let ann = box_at(0.0, 0.0);
+        let ann = box_at(0.0, 0.0).with_page_index(Some(12));
         let mut annotations = vec![ann.clone()];
         let mut history = History::new(10);
         history.record(Edit::Added(ann));
@@ -330,6 +330,7 @@ mod tests {
         history.undo(&mut annotations);
         history.redo(&mut annotations);
         assert_eq!(annotations, final_state);
+        assert_eq!(annotations[0].page_index(), Some(12));
     }
 
     #[test]

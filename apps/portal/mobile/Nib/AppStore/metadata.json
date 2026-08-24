@@ -1,0 +1,12 @@
+{
+  "app_name": "Nib",
+  "bundle_id": "com.douglance.nib",
+  "primary_category": "Developer Tools",
+  "secondary_category": "Graphics & Design",
+  "copyright": "2026 Lance Ventures LLC",
+  "privacy_policy_url": "https://nibtool.com/privacy",
+  "support_url": "https://nibtool.com/support",
+  "marketing_url": "https://nibtool.com",
+  "version": "0.3.1",
+  "build": "5"
+}

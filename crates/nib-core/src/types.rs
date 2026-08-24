@@ -5,6 +5,7 @@
 //! - Color, Point, Region primitives
 //! - NibImage document type
 
+use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
@@ -39,6 +40,21 @@ impl AnnotationId {
 impl Default for AnnotationId {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Compact optional zero-based PDF page index. Internally stores index + 1 so
+/// `None` remains a four-byte niche instead of enlarging every annotation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AnnotationPageIndex(Option<NonZeroU32>);
+
+impl AnnotationPageIndex {
+    pub fn from_index(page_index: Option<u32>) -> Self {
+        Self(page_index.and_then(|index| index.checked_add(1).and_then(NonZeroU32::new)))
+    }
+
+    pub fn get(self) -> Option<u32> {
+        self.0.map(|index| index.get() - 1)
     }
 }
 
@@ -521,6 +537,8 @@ pub struct Annotation {
     pub annotation_type: AnnotationType,
     pub color: Color,
     pub severity: Severity,
+    /// Zero-based PDF page ownership. Non-PDF annotations leave this unset.
+    pub page_index: AnnotationPageIndex,
     pub label: Option<String>,
     pub visible: bool,
     pub locked: bool,
@@ -541,6 +559,7 @@ impl Annotation {
             annotation_type,
             color: Color::default(),
             severity: Severity::default(),
+            page_index: AnnotationPageIndex::default(),
             label: None,
             visible: true,
             locked: false,
@@ -559,6 +578,19 @@ impl Annotation {
     pub fn with_group_id(mut self, group_id: Option<u64>) -> Self {
         self.group_id = group_id;
         self
+    }
+
+    pub fn with_page_index(mut self, page_index: Option<u32>) -> Self {
+        self.page_index = AnnotationPageIndex::from_index(page_index);
+        self
+    }
+
+    pub fn set_page_index(&mut self, page_index: Option<u32>) {
+        self.page_index = AnnotationPageIndex::from_index(page_index);
+    }
+
+    pub fn page_index(&self) -> Option<u32> {
+        self.page_index.get()
     }
 
     pub fn with_color(mut self, color: Color) -> Self {

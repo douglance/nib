@@ -142,6 +142,14 @@ impl ToolManager {
     pub fn registered_tools(&self) -> impl Iterator<Item = ToolId> + '_ {
         self.tools.keys().copied()
     }
+
+    /// Clear selections, drags, editors, and other transient state without
+    /// changing the active tool. Used when the underlying PDF page changes.
+    pub fn reset_all(&mut self) {
+        for tool in self.tools.values_mut() {
+            tool.reset();
+        }
+    }
 }
 
 impl Default for ToolManager {

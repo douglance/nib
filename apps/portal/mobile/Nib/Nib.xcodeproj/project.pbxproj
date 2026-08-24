@@ -7,36 +7,84 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0AFD13846D3BD9E8E222DFAD /* NibNativeReviewLauncher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AA7F3EC6BD5CF0A33160A50 /* NibNativeReviewLauncher.swift */; };
+		0E59C97DA24A6BCDBC7FFE9B /* NibDomain in Frameworks */ = {isa = PBXBuildFile; productRef = 98BB17BFDB10565CB727BF68 /* NibDomain */; };
 		0EA04B82C0C7694F0F49F4A1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A32ED7F52A841E03AD0C92F7 /* Assets.xcassets */; };
 		114B1CE48B0A2BC4EC6CD572 /* NibNotificationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 578F4267F678DABF1661C763 /* NibNotificationActions.swift */; };
+		12C95C5974E43C20A9DF9F20 /* NibDocumentReviewAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 052E6997F7F1D0B10D2CDE92 /* NibDocumentReviewAdapter.swift */; };
+		246B28ECDE4A4ED72001C644 /* NibDomain in Frameworks */ = {isa = PBXBuildFile; productRef = 95C7306594AC9DF6D5FC467C /* NibDomain */; };
 		261D94BDBD3E423E922250DB /* NativeVisualReviewWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8488F2721352FEA04DDCE390 /* NativeVisualReviewWorkspace.swift */; };
+		2877F3FA8D331B21EED1DF56 /* NibMacCaptureScreenCaptureKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7BFDADF8A7BEB42A3114AF5 /* NibMacCaptureScreenCaptureKit.swift */; };
 		2C360E52F66AD89725AC564E /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
 		2CDB698C2CB8C9AE5A22AD35 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
+		2F0E537DDC15DC75DBF65006 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 098C24ED712EB018C9663650 /* PrivacyInfo.xcprivacy */; };
+		306449F9957C7C92A3FD1D10 /* NibCloud in Frameworks */ = {isa = PBXBuildFile; productRef = DEC14D00B9B77F365AB913F4 /* NibCloud */; };
 		352007CE6CBC9EA5AD58C4F7 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5651696C8AE788034170AF7C /* UserNotifications.framework */; };
 		37F822AF467694674AC36EA1 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
+		3C96E9EA7F1E69E2CFB04C79 /* NibFeatures in Frameworks */ = {isa = PBXBuildFile; productRef = 5BFC3425A236E170727DC19C /* NibFeatures */; };
+		3CC484BA0C1F3DC901670AF4 /* NibAuthURLRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A58D9586301146C7E974BE20 /* NibAuthURLRoutingTests.swift */; };
 		4691A190A9C18A0E1B6EF5EF /* NibMacRequestStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D93FA771085054F032B9CC /* NibMacRequestStore.swift */; };
+		4854C4E9067022120D7A8193 /* NibNotifications in Frameworks */ = {isa = PBXBuildFile; productRef = EFC29D6658A778D9B9B0A17C /* NibNotifications */; };
 		48D6F5374D7F4E7FC991CBA3 /* NibMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58EB97C09C5FBFAF5F9C56DC /* NibMacApp.swift */; };
 		4B438EC7D7A3493230078A0F /* NibNotificationService.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		4B9A0D499A899E1389CDA712 /* NibMacNotificationRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = E48EC7D375C627344766C9EF /* NibMacNotificationRouting.swift */; };
+		4B9F584DDD6B58AAC9154D64 /* NibAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11A8905442E0603EFDFE722E /* NibAccountView.swift */; };
+		57ED71B559DBDCA8B3891E72 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 098C24ED712EB018C9663650 /* PrivacyInfo.xcprivacy */; };
+		57FA6002E5CD1558640FA33E /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 098C24ED712EB018C9663650 /* PrivacyInfo.xcprivacy */; };
+		5BD90C7CF0C41E981A27F601 /* NibMacCaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24210ACD2C2C1BFD8989C242 /* NibMacCaptureTests.swift */; };
 		5CCDAC3FB3AE5BD5A349D9F8 /* MainInterface.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = E467E4583683F4D6BFFA4EB1 /* MainInterface.storyboard */; };
 		5F3A60DF0DDD4FF95BABCC49 /* NibWatch.app in Embed Watch Content */ = {isa = PBXBuildFile; fileRef = 52933EB23EA0231EF0204C9E /* NibWatch.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		61AA078A4BBF4E69F685EC68 /* NibNotifications in Frameworks */ = {isa = PBXBuildFile; productRef = 295B15B1385DFC5F694DBAEF /* NibNotifications */; };
 		630B28B077AEE8F40B082AB5 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
 		64D3357B1BA5FD5C71C7FB40 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A22BEA3F4A56E9C31719B20E /* Assets.xcassets */; };
+		6534F5463629CAA7C6AF6F8E /* NibAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11A8905442E0603EFDFE722E /* NibAccountView.swift */; };
+		68F6403504F1DDA36AFC1A50 /* NibDocument in Frameworks */ = {isa = PBXBuildFile; productRef = 193794F74DFD9FF9B6E77427 /* NibDocument */; };
+		69A00FE81A2C0473052FDE1F /* NibAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11A8905442E0603EFDFE722E /* NibAccountView.swift */; };
+		6AD6A247CF6CF361F497E970 /* NibAccountDeletionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9F6940115286221390499585 /* NibAccountDeletionTests.swift */; };
+		6D39338C15837E701F878D8D /* NibDocument in Frameworks */ = {isa = PBXBuildFile; productRef = D2B01D27083F991BA90BE34F /* NibDocument */; };
 		74FAA153DF2A92184E5096B9 /* NibNotificationContentViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91A4E8F4A54130B9A51D73EF /* NibNotificationContentViewController.swift */; };
+		773AB1C0820AB21F55520824 /* NibDomain in Frameworks */ = {isa = PBXBuildFile; productRef = C31A80378DEC3568C7F4FC85 /* NibDomain */; };
+		79C5646166EE406AF6E9B574 /* NibAccountSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B92C4B56943ED5C8DFE5FD84 /* NibAccountSessionTests.swift */; };
+		7DE5BB249B9D4C5247B62892 /* NibNotifications in Frameworks */ = {isa = PBXBuildFile; productRef = 39A5D8A301D2B8627BBB8680 /* NibNotifications */; };
+		7FD612A3C9DCE96E42B446B1 /* NibFeatures in Frameworks */ = {isa = PBXBuildFile; productRef = B27482360B402F0E4C3D11B2 /* NibFeatures */; };
+		83B201CBBFD8DB5EB20914A0 /* NibCloud in Frameworks */ = {isa = PBXBuildFile; productRef = 00B6C043EEA8EFC69A5913E8 /* NibCloud */; };
+		8890176FF1C92D470F4AAF4B /* NibCloudLibraryAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3274CBBFD344A83005AC3652 /* NibCloudLibraryAdapter.swift */; };
+		8AFFD0ADA189095CDEB7ED6C /* NibCloud in Frameworks */ = {isa = PBXBuildFile; productRef = 428E096DC5007254526A52D7 /* NibCloud */; };
 		8BEA52BEE9EDD618F946DE28 /* NibModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1461BAB1131EA851E89E5D76 /* NibModels.swift */; };
 		8E9478F05C959AB8BAD64249 /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
+		92E9C943EC3EE5CF138E6DA8 /* NibDocumentReviewAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 052E6997F7F1D0B10D2CDE92 /* NibDocumentReviewAdapter.swift */; };
 		948568B6919ED3EF0303B227 /* NibNotificationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 578F4267F678DABF1661C763 /* NibNotificationActions.swift */; };
+		9499E9CF8388F3BD13043348 /* NibMacCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACD3C4418F0FF533911965EC /* NibMacCapture.swift */; };
+		9A50873011C3DB82D6CB7CE0 /* NibCloud in Frameworks */ = {isa = PBXBuildFile; productRef = 264E68C814E4DAF0F99E95F2 /* NibCloud */; };
+		9E55DD83426AD1924B193AC5 /* NibMacNavigationModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87CE2F7C80476D6E6B956D9F /* NibMacNavigationModel.swift */; };
 		9FA97C68F9BCC2B7B73ED084 /* NativeVisualReviewWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8488F2721352FEA04DDCE390 /* NativeVisualReviewWorkspace.swift */; };
+		9FFBFA608460922FB0F8D6EF /* NibDocument in Frameworks */ = {isa = PBXBuildFile; productRef = 7233F848A6FA71C63F44084C /* NibDocument */; };
+		A68E39959C4657F239EDE71B /* ScreenCaptureKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 36E2085C3CE970BB43460C6F /* ScreenCaptureKit.framework */; };
+		AABAB2F3978EF063D049F1CD /* NibNotifications in Frameworks */ = {isa = PBXBuildFile; productRef = 2E46D11A42EDA6C0CBFE052D /* NibNotifications */; };
+		ABAE7FA4682E0A9AD1415017 /* NibCloudLibraryAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3274CBBFD344A83005AC3652 /* NibCloudLibraryAdapter.swift */; };
+		AF385B2FB6B5CC9FF8A6F950 /* NibMacRequestNavigator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4904CF6A7599BA0AFBC2FBFC /* NibMacRequestNavigator.swift */; };
+		B013872E68D371B407CE25F8 /* NibAccountView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11A8905442E0603EFDFE722E /* NibAccountView.swift */; };
+		B0181A185DA929459E9824F2 /* NibDomain in Frameworks */ = {isa = PBXBuildFile; productRef = 46AD16DABBB735E2F997BC0B /* NibDomain */; };
 		B47B174C4B432F24B10ABB65 /* NibMacRequestStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70DAF7B2B93FC8B5083D403 /* NibMacRequestStoreTests.swift */; };
+		B6089BDB4B472995A4F09A85 /* NibFeatures in Frameworks */ = {isa = PBXBuildFile; productRef = 400E54BCC732AD6FE52D7B23 /* NibFeatures */; };
+		B8B378F1C8EB1ADACB83FDEA /* NibAuthPollingPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC624E1AA562E8B8ABDF00BC /* NibAuthPollingPolicyTests.swift */; };
+		B8F1F0A92E452978CC61663A /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5651696C8AE788034170AF7C /* UserNotifications.framework */; };
 		B9A1216E1D1590D2BDC74AFC /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
 		BC8E3AC859F0D1DE4AE82B2F /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A32ED7F52A841E03AD0C92F7 /* Assets.xcassets */; };
 		BF89159096AEEBC81186E419 /* NibNotificationContent.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 4223F714CA35C1FC68EA8A70 /* NibNotificationContent.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C2ADF1B81765C8323BBD9EFD /* NibWatchCloudLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D5EFB95607F23282C41E247 /* NibWatchCloudLibrary.swift */; };
 		C531C3B0A7769E943DBC0B5C /* UserNotificationsUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A9724ECCA76D68E0A3BCCE55 /* UserNotificationsUI.framework */; };
 		CA1430F5410E7E744F84DB92 /* NibWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */; };
+		CBC1971D683480F2E5A78434 /* NibMacNavigationModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF9132FAEB72416AEE8A536 /* NibMacNavigationModelTests.swift */; };
+		CEE7C0D48328494197B15C76 /* NibMacPreviewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 415E3F81BA53CEA64A2D9C3D /* NibMacPreviewState.swift */; };
 		E253523F19968EEF08FEA4C4 /* NibApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71EE9945059B827CA14650BA /* NibApp.swift */; };
+		E5FA90861C82CC285CC04C99 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 098C24ED712EB018C9663650 /* PrivacyInfo.xcprivacy */; };
+		E8137E3BF1D3C166654467EC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A32ED7F52A841E03AD0C92F7 /* Assets.xcassets */; };
 		F240C4B0F79FC092B68766D8 /* NibClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07765833BEFC7FA59A4738B2 /* NibClient.swift */; };
+		F9298C2F0E3227D65D1F7641 /* NibCloudLibraryAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3274CBBFD344A83005AC3652 /* NibCloudLibraryAdapter.swift */; };
 		FB820CAA4BD507B27CBF16CB /* NibApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71EE9945059B827CA14650BA /* NibApp.swift */; };
+		FC925A5EB67ABEFFD47C016B /* NibMacNotificationRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B5035B06798747ABAC8364B /* NibMacNotificationRoutingTests.swift */; };
 		FD0C0CA9CB4F264679BABDC9 /* NibNotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */; };
+		FE9519F7F11EA6C3303FA2CC /* NibMacCaptureRegionOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706AD9CA2FCC9EF7ED92E9D7 /* NibMacCaptureRegionOverlay.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -97,39 +145,107 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		052E6997F7F1D0B10D2CDE92 /* NibDocumentReviewAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibDocumentReviewAdapter.swift; sourceTree = "<group>"; };
 		07765833BEFC7FA59A4738B2 /* NibClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibClient.swift; sourceTree = "<group>"; };
+		098C24ED712EB018C9663650 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		11A8905442E0603EFDFE722E /* NibAccountView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibAccountView.swift; sourceTree = "<group>"; };
 		12D93FA771085054F032B9CC /* NibMacRequestStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacRequestStore.swift; sourceTree = "<group>"; };
 		1461BAB1131EA851E89E5D76 /* NibModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibModels.swift; sourceTree = "<group>"; };
 		21E4996C82093A975BA19860 /* NibVision.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = NibVision.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		24210ACD2C2C1BFD8989C242 /* NibMacCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacCaptureTests.swift; sourceTree = "<group>"; };
 		2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibNotificationService.swift; sourceTree = "<group>"; };
+		3274CBBFD344A83005AC3652 /* NibCloudLibraryAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibCloudLibraryAdapter.swift; sourceTree = "<group>"; };
 		336ADA2A4DB36B112DC818FE /* NibNotificationService.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = NibNotificationService.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		36E2085C3CE970BB43460C6F /* ScreenCaptureKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ScreenCaptureKit.framework; path = System/Library/Frameworks/ScreenCaptureKit.framework; sourceTree = SDKROOT; };
+		415E3F81BA53CEA64A2D9C3D /* NibMacPreviewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacPreviewState.swift; sourceTree = "<group>"; };
 		4223F714CA35C1FC68EA8A70 /* NibNotificationContent.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = NibNotificationContent.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		4904CF6A7599BA0AFBC2FBFC /* NibMacRequestNavigator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacRequestNavigator.swift; sourceTree = "<group>"; };
 		52933EB23EA0231EF0204C9E /* NibWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NibWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		5651696C8AE788034170AF7C /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		578F4267F678DABF1661C763 /* NibNotificationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibNotificationActions.swift; sourceTree = "<group>"; };
 		58EB97C09C5FBFAF5F9C56DC /* NibMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacApp.swift; sourceTree = "<group>"; };
-		6AA7F3EC6BD5CF0A33160A50 /* NibNativeReviewLauncher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibNativeReviewLauncher.swift; sourceTree = "<group>"; };
+		5CF85227041218DC990CF91D /* NibKit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = NibKit; path = Packages/NibKit; sourceTree = SOURCE_ROOT; };
 		6B7405E10F9BFBDBF72AC385 /* Nib.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Nib.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		706AD9CA2FCC9EF7ED92E9D7 /* NibMacCaptureRegionOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacCaptureRegionOverlay.swift; sourceTree = "<group>"; };
 		71EE9945059B827CA14650BA /* NibApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibApp.swift; sourceTree = "<group>"; };
 		7730A6A490108C2248C422E2 /* NibMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NibMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7B5035B06798747ABAC8364B /* NibMacNotificationRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacNotificationRoutingTests.swift; sourceTree = "<group>"; };
 		8488F2721352FEA04DDCE390 /* NativeVisualReviewWorkspace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeVisualReviewWorkspace.swift; sourceTree = "<group>"; };
+		87CE2F7C80476D6E6B956D9F /* NibMacNavigationModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacNavigationModel.swift; sourceTree = "<group>"; };
+		8D5EFB95607F23282C41E247 /* NibWatchCloudLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibWatchCloudLibrary.swift; sourceTree = "<group>"; };
 		91A4E8F4A54130B9A51D73EF /* NibNotificationContentViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibNotificationContentViewController.swift; sourceTree = "<group>"; };
+		9AF9132FAEB72416AEE8A536 /* NibMacNavigationModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacNavigationModelTests.swift; sourceTree = "<group>"; };
+		9F6940115286221390499585 /* NibAccountDeletionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibAccountDeletionTests.swift; sourceTree = "<group>"; };
 		A22BEA3F4A56E9C31719B20E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A32ED7F52A841E03AD0C92F7 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibWatchApp.swift; sourceTree = "<group>"; };
+		A58D9586301146C7E974BE20 /* NibAuthURLRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibAuthURLRoutingTests.swift; sourceTree = "<group>"; };
 		A70DAF7B2B93FC8B5083D403 /* NibMacRequestStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacRequestStoreTests.swift; sourceTree = "<group>"; };
 		A9724ECCA76D68E0A3BCCE55 /* UserNotificationsUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotificationsUI.framework; path = System/Library/Frameworks/UserNotificationsUI.framework; sourceTree = SDKROOT; };
+		AC624E1AA562E8B8ABDF00BC /* NibAuthPollingPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibAuthPollingPolicyTests.swift; sourceTree = "<group>"; };
+		ACD3C4418F0FF533911965EC /* NibMacCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacCapture.swift; sourceTree = "<group>"; };
 		AE901F494D897855FF91CE73 /* NibMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NibMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B92C4B56943ED5C8DFE5FD84 /* NibAccountSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibAccountSessionTests.swift; sourceTree = "<group>"; };
+		D7BFDADF8A7BEB42A3114AF5 /* NibMacCaptureScreenCaptureKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacCaptureScreenCaptureKit.swift; sourceTree = "<group>"; };
 		E467E4583683F4D6BFFA4EB1 /* MainInterface.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = MainInterface.storyboard; sourceTree = "<group>"; };
+		E48EC7D375C627344766C9EF /* NibMacNotificationRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NibMacNotificationRouting.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		06F03A42ACFEB62EDEF17495 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				773AB1C0820AB21F55520824 /* NibDomain in Frameworks */,
+				9A50873011C3DB82D6CB7CE0 /* NibCloud in Frameworks */,
+				7FD612A3C9DCE96E42B446B1 /* NibFeatures in Frameworks */,
+				68F6403504F1DDA36AFC1A50 /* NibDocument in Frameworks */,
+				61AA078A4BBF4E69F685EC68 /* NibNotifications in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		10BA7BE65569D6E43073612C /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 				352007CE6CBC9EA5AD58C4F7 /* UserNotifications.framework in Frameworks */,
 				C531C3B0A7769E943DBC0B5C /* UserNotificationsUI.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		59793D22D9A9E8F9D968A51E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0E59C97DA24A6BCDBC7FFE9B /* NibDomain in Frameworks */,
+				306449F9957C7C92A3FD1D10 /* NibCloud in Frameworks */,
+				B6089BDB4B472995A4F09A85 /* NibFeatures in Frameworks */,
+				6D39338C15837E701F878D8D /* NibDocument in Frameworks */,
+				AABAB2F3978EF063D049F1CD /* NibNotifications in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E109FB0599CF87E29A59E56B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B0181A185DA929459E9824F2 /* NibDomain in Frameworks */,
+				8AFFD0ADA189095CDEB7ED6C /* NibCloud in Frameworks */,
+				3C96E9EA7F1E69E2CFB04C79 /* NibFeatures in Frameworks */,
+				9FFBFA608460922FB0F8D6EF /* NibDocument in Frameworks */,
+				7DE5BB249B9D4C5247B62892 /* NibNotifications in Frameworks */,
+				B8F1F0A92E452978CC61663A /* UserNotifications.framework in Frameworks */,
+				A68E39959C4657F239EDE71B /* ScreenCaptureKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EEBFB39D1A7B2AC0A8D0FC9D /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				246B28ECDE4A4ED72001C644 /* NibDomain in Frameworks */,
+				83B201CBBFD8DB5EB20914A0 /* NibCloud in Frameworks */,
+				4854C4E9067022120D7A8193 /* NibNotifications in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -155,6 +271,13 @@
 		1B27CDE8C934A7685A8EDDA3 /* MacTests */ = {
 			isa = PBXGroup;
 			children = (
+				9F6940115286221390499585 /* NibAccountDeletionTests.swift */,
+				B92C4B56943ED5C8DFE5FD84 /* NibAccountSessionTests.swift */,
+				AC624E1AA562E8B8ABDF00BC /* NibAuthPollingPolicyTests.swift */,
+				A58D9586301146C7E974BE20 /* NibAuthURLRoutingTests.swift */,
+				24210ACD2C2C1BFD8989C242 /* NibMacCaptureTests.swift */,
+				9AF9132FAEB72416AEE8A536 /* NibMacNavigationModelTests.swift */,
+				7B5035B06798747ABAC8364B /* NibMacNotificationRoutingTests.swift */,
 				A70DAF7B2B93FC8B5083D403 /* NibMacRequestStoreTests.swift */,
 			);
 			path = MacTests;
@@ -164,13 +287,17 @@
 			isa = PBXGroup;
 			children = (
 				8488F2721352FEA04DDCE390 /* NativeVisualReviewWorkspace.swift */,
+				11A8905442E0603EFDFE722E /* NibAccountView.swift */,
 				71EE9945059B827CA14650BA /* NibApp.swift */,
 				07765833BEFC7FA59A4738B2 /* NibClient.swift */,
+				3274CBBFD344A83005AC3652 /* NibCloudLibraryAdapter.swift */,
+				052E6997F7F1D0B10D2CDE92 /* NibDocumentReviewAdapter.swift */,
 				1461BAB1131EA851E89E5D76 /* NibModels.swift */,
 				578F4267F678DABF1661C763 /* NibNotificationActions.swift */,
 				91A4E8F4A54130B9A51D73EF /* NibNotificationContentViewController.swift */,
 				2E6EC950FDB7C5F899B2BC2D /* NibNotificationService.swift */,
 				A4C0891465BA1E1C8495BFAA /* NibWatchApp.swift */,
+				8D5EFB95607F23282C41E247 /* NibWatchCloudLibrary.swift */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -195,12 +322,22 @@
 				07D17B1BE5BD3A34F7ABF80F /* ContentResources */,
 				D154E0C85A3CE5C4A863D249 /* MacSources */,
 				1B27CDE8C934A7685A8EDDA3 /* MacTests */,
+				8C80D4DF2F8EA9FDCF0E2FD9 /* Packages */,
 				0BB864B483F075986AD130F9 /* Resources */,
+				AC054FD74093C7D314F9EEE5 /* SharedResources */,
 				27B2721DA17FDD6803048B2B /* Sources */,
 				9A380FB25AC3D109D6BF0B2A /* WatchResources */,
 				A97033821F8D98C1ECC1A744 /* Frameworks */,
 				3C409D27FA4E25C19389555F /* Products */,
 			);
+			sourceTree = "<group>";
+		};
+		8C80D4DF2F8EA9FDCF0E2FD9 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				5CF85227041218DC990CF91D /* NibKit */,
+			);
+			path = Packages;
 			sourceTree = "<group>";
 		};
 		9A380FB25AC3D109D6BF0B2A /* WatchResources */ = {
@@ -214,18 +351,33 @@
 		A97033821F8D98C1ECC1A744 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				36E2085C3CE970BB43460C6F /* ScreenCaptureKit.framework */,
 				5651696C8AE788034170AF7C /* UserNotifications.framework */,
 				A9724ECCA76D68E0A3BCCE55 /* UserNotificationsUI.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
 		};
+		AC054FD74093C7D314F9EEE5 /* SharedResources */ = {
+			isa = PBXGroup;
+			children = (
+				098C24ED712EB018C9663650 /* PrivacyInfo.xcprivacy */,
+			);
+			path = SharedResources;
+			sourceTree = "<group>";
+		};
 		D154E0C85A3CE5C4A863D249 /* MacSources */ = {
 			isa = PBXGroup;
 			children = (
 				58EB97C09C5FBFAF5F9C56DC /* NibMacApp.swift */,
+				ACD3C4418F0FF533911965EC /* NibMacCapture.swift */,
+				706AD9CA2FCC9EF7ED92E9D7 /* NibMacCaptureRegionOverlay.swift */,
+				D7BFDADF8A7BEB42A3114AF5 /* NibMacCaptureScreenCaptureKit.swift */,
+				87CE2F7C80476D6E6B956D9F /* NibMacNavigationModel.swift */,
+				E48EC7D375C627344766C9EF /* NibMacNotificationRouting.swift */,
+				415E3F81BA53CEA64A2D9C3D /* NibMacPreviewState.swift */,
+				4904CF6A7599BA0AFBC2FBFC /* NibMacRequestNavigator.swift */,
 				12D93FA771085054F032B9CC /* NibMacRequestStore.swift */,
-				6AA7F3EC6BD5CF0A33160A50 /* NibNativeReviewLauncher.swift */,
 			);
 			path = MacSources;
 			sourceTree = "<group>";
@@ -258,6 +410,7 @@
 			buildPhases = (
 				02ECF96BE2EE1E4E54BD472A /* Sources */,
 				3677294FBB663159B7FBC4DD /* Resources */,
+				06F03A42ACFEB62EDEF17495 /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -265,6 +418,11 @@
 			);
 			name = NibVision;
 			packageProductDependencies = (
+				C31A80378DEC3568C7F4FC85 /* NibDomain */,
+				264E68C814E4DAF0F99E95F2 /* NibCloud */,
+				B27482360B402F0E4C3D11B2 /* NibFeatures */,
+				193794F74DFD9FF9B6E77427 /* NibDocument */,
+				295B15B1385DFC5F694DBAEF /* NibNotifications */,
 			);
 			productName = NibVision;
 			productReference = 21E4996C82093A975BA19860 /* NibVision.app */;
@@ -292,7 +450,8 @@
 			buildConfigurationList = 774BABD212A71F3865DDFAD4 /* Build configuration list for PBXNativeTarget "NibMac" */;
 			buildPhases = (
 				47B88AC6F2BA43C907AEA2E6 /* Sources */,
-				2C421873707F0CB400193E09 /* Bundle native Rust reviewer */,
+				3CD6E59F8D444D37A3E99B7E /* Resources */,
+				E109FB0599CF87E29A59E56B /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -300,6 +459,11 @@
 			);
 			name = NibMac;
 			packageProductDependencies = (
+				46AD16DABBB735E2F997BC0B /* NibDomain */,
+				428E096DC5007254526A52D7 /* NibCloud */,
+				5BFC3425A236E170727DC19C /* NibFeatures */,
+				7233F848A6FA71C63F44084C /* NibDocument */,
+				39A5D8A301D2B8627BBB8680 /* NibNotifications */,
 			);
 			productName = NibMac;
 			productReference = 7730A6A490108C2248C422E2 /* NibMac.app */;
@@ -329,6 +493,7 @@
 			buildPhases = (
 				CFD6067CD8549F2097C3AE7E /* Sources */,
 				A42E49F27D80E039936B5E45 /* Resources */,
+				59793D22D9A9E8F9D968A51E /* Frameworks */,
 				D383732B9572964C7F01868A /* Embed Foundation Extensions */,
 				9E58B4435F0DE8C7765D3287 /* Embed Watch Content */,
 			);
@@ -341,6 +506,11 @@
 			);
 			name = Nib;
 			packageProductDependencies = (
+				98BB17BFDB10565CB727BF68 /* NibDomain */,
+				DEC14D00B9B77F365AB913F4 /* NibCloud */,
+				400E54BCC732AD6FE52D7B23 /* NibFeatures */,
+				D2B01D27083F991BA90BE34F /* NibDocument */,
+				2E46D11A42EDA6C0CBFE052D /* NibNotifications */,
 			);
 			productName = Nib;
 			productReference = 6B7405E10F9BFBDBF72AC385 /* Nib.app */;
@@ -352,6 +522,7 @@
 			buildPhases = (
 				44EF127FE4FB47F34890A255 /* Sources */,
 				95B50A4918B8149A86F1760B /* Resources */,
+				EEBFB39D1A7B2AC0A8D0FC9D /* Frameworks */,
 			);
 			buildRules = (
 			);
@@ -359,6 +530,9 @@
 			);
 			name = NibWatch;
 			packageProductDependencies = (
+				95C7306594AC9DF6D5FC467C /* NibDomain */,
+				00B6C043EEA8EFC69A5913E8 /* NibCloud */,
+				EFC29D6658A778D9B9B0A17C /* NibNotifications */,
 			);
 			productName = NibWatch;
 			productReference = 52933EB23EA0231EF0204C9E /* NibWatch.app */;
@@ -374,25 +548,25 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					38D22B6A14A721B173DD41C5 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 2AS3V73632;
 					};
 					8991718C0D2ADD151BBDE3A2 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 2AS3V73632;
 					};
 					9982A9051D627A814D37131A = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 2AS3V73632;
 					};
 					A828E180CCCBA43725D33C9E = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 2AS3V73632;
 					};
 					AA9EF3BF2BF3AE7F55892EDE = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 2AS3V73632;
 					};
 					C15769AED6F15C320C8DC4B3 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 2AS3V73632;
 					};
 					E8F5C2720E0225B25CC638C0 = {
-						DevelopmentTeam = "";
+						DevelopmentTeam = 2AS3V73632;
 					};
 				};
 			};
@@ -405,6 +579,9 @@
 			);
 			mainGroup = 58251BB91F1BCC484FBC9342;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				941637AE161F25050374B5CD /* XCLocalSwiftPackageReference "Packages/NibKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3C409D27FA4E25C19389555F /* Products */;
 			projectDirPath = "";
@@ -435,6 +612,16 @@
 			buildActionMask = 2147483647;
 			files = (
 				0EA04B82C0C7694F0F49F4A1 /* Assets.xcassets in Resources */,
+				E5FA90861C82CC285CC04C99 /* PrivacyInfo.xcprivacy in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		3CD6E59F8D444D37A3E99B7E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E8137E3BF1D3C166654467EC /* Assets.xcassets in Resources */,
+				57ED71B559DBDCA8B3891E72 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -443,6 +630,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				64D3357B1BA5FD5C71C7FB40 /* Assets.xcassets in Resources */,
+				57FA6002E5CD1558640FA33E /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -451,32 +639,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				BC8E3AC859F0D1DE4AE82B2F /* Assets.xcassets in Resources */,
+				2F0E537DDC15DC75DBF65006 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		2C421873707F0CB400193E09 /* Bundle native Rust reviewer */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Bundle native Rust reviewer";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\nreviewer=\"${NIB_REVIEWER_BINARY:-$SRCROOT/../../../../target/release/nib}\"\nif [[ ! -x \"$reviewer\" ]]; then\n  echo \"error: native reviewer is missing or not executable: $reviewer\" >&2\n  echo \"error: run cargo build --release --all-features --bin nib first\" >&2\n  exit 1\nfi\nhelpers=\"$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers\"\ndestination=\"$helpers/nib-reviewer\"\n/bin/mkdir -p \"$helpers\"\n/bin/cp \"$reviewer\" \"$destination\"\n/bin/chmod 0755 \"$destination\"\nif [[ -n \"${EXPANDED_CODE_SIGN_IDENTITY:-}\" && \"${EXPANDED_CODE_SIGN_IDENTITY}\" != \"-\" ]]; then\n  /usr/bin/codesign --force --sign \"$EXPANDED_CODE_SIGN_IDENTITY\" \"$destination\"\nfi\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		02ECF96BE2EE1E4E54BD472A /* Sources */ = {
@@ -484,8 +651,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				9FA97C68F9BCC2B7B73ED084 /* NativeVisualReviewWorkspace.swift in Sources */,
+				6534F5463629CAA7C6AF6F8E /* NibAccountView.swift in Sources */,
 				FB820CAA4BD507B27CBF16CB /* NibApp.swift in Sources */,
 				B9A1216E1D1590D2BDC74AFC /* NibClient.swift in Sources */,
+				ABAE7FA4682E0A9AD1415017 /* NibCloudLibraryAdapter.swift in Sources */,
+				12C95C5974E43C20A9DF9F20 /* NibDocumentReviewAdapter.swift in Sources */,
 				630B28B077AEE8F40B082AB5 /* NibModels.swift in Sources */,
 				948568B6919ED3EF0303B227 /* NibNotificationActions.swift in Sources */,
 			);
@@ -495,6 +665,13 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6AD6A247CF6CF361F497E970 /* NibAccountDeletionTests.swift in Sources */,
+				79C5646166EE406AF6E9B574 /* NibAccountSessionTests.swift in Sources */,
+				B8B378F1C8EB1ADACB83FDEA /* NibAuthPollingPolicyTests.swift in Sources */,
+				3CC484BA0C1F3DC901670AF4 /* NibAuthURLRoutingTests.swift in Sources */,
+				5BD90C7CF0C41E981A27F601 /* NibMacCaptureTests.swift in Sources */,
+				CBC1971D683480F2E5A78434 /* NibMacNavigationModelTests.swift in Sources */,
+				FC925A5EB67ABEFFD47C016B /* NibMacNotificationRoutingTests.swift in Sources */,
 				B47B174C4B432F24B10ABB65 /* NibMacRequestStoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -503,9 +680,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B013872E68D371B407CE25F8 /* NibAccountView.swift in Sources */,
 				8E9478F05C959AB8BAD64249 /* NibClient.swift in Sources */,
 				37F822AF467694674AC36EA1 /* NibModels.swift in Sources */,
 				CA1430F5410E7E744F84DB92 /* NibWatchApp.swift in Sources */,
+				C2ADF1B81765C8323BBD9EFD /* NibWatchCloudLibrary.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -513,11 +692,19 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4B9F584DDD6B58AAC9154D64 /* NibAccountView.swift in Sources */,
 				2C360E52F66AD89725AC564E /* NibClient.swift in Sources */,
+				F9298C2F0E3227D65D1F7641 /* NibCloudLibraryAdapter.swift in Sources */,
 				48D6F5374D7F4E7FC991CBA3 /* NibMacApp.swift in Sources */,
+				9499E9CF8388F3BD13043348 /* NibMacCapture.swift in Sources */,
+				FE9519F7F11EA6C3303FA2CC /* NibMacCaptureRegionOverlay.swift in Sources */,
+				2877F3FA8D331B21EED1DF56 /* NibMacCaptureScreenCaptureKit.swift in Sources */,
+				9E55DD83426AD1924B193AC5 /* NibMacNavigationModel.swift in Sources */,
+				4B9A0D499A899E1389CDA712 /* NibMacNotificationRouting.swift in Sources */,
+				CEE7C0D48328494197B15C76 /* NibMacPreviewState.swift in Sources */,
+				AF385B2FB6B5CC9FF8A6F950 /* NibMacRequestNavigator.swift in Sources */,
 				4691A190A9C18A0E1B6EF5EF /* NibMacRequestStore.swift in Sources */,
 				2CDB698C2CB8C9AE5A22AD35 /* NibModels.swift in Sources */,
-				0AFD13846D3BD9E8E222DFAD /* NibNativeReviewLauncher.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -542,8 +729,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				261D94BDBD3E423E922250DB /* NativeVisualReviewWorkspace.swift in Sources */,
+				69A00FE81A2C0473052FDE1F /* NibAccountView.swift in Sources */,
 				E253523F19968EEF08FEA4C4 /* NibApp.swift in Sources */,
 				F240C4B0F79FC092B68766D8 /* NibClient.swift in Sources */,
+				8890176FF1C92D470F4AAF4B /* NibCloudLibraryAdapter.swift in Sources */,
+				92E9C943EC3EE5CF138E6DA8 /* NibDocumentReviewAdapter.swift in Sources */,
 				8BEA52BEE9EDD618F946DE28 /* NibModels.swift in Sources */,
 				114B1CE48B0A2BC4EC6CD572 /* NibNotificationActions.swift in Sources */,
 			);
@@ -585,6 +775,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib;
 				SDKROOT = xros;
 				TARGETED_DEVICE_FAMILY = 7;
@@ -631,6 +822,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib;
 				SDKROOT = xros;
 				TARGETED_DEVICE_FAMILY = 7;
@@ -641,6 +833,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				APS_ENVIRONMENT = production;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -671,9 +864,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 6;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 2AS3V73632;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -686,9 +879,10 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.3.0;
+				MARKETING_VERSION = 0.3.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
+				NIB_APNS_ENVIRONMENT = production;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
@@ -769,13 +963,16 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = NibMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "NibMac-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib.macos;
+				NIB_MAC_BUNDLE_IDENTIFIER = com.douglance.nib.macos;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(NIB_MAC_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = Nib;
 				SDKROOT = macosx;
 			};
@@ -818,13 +1015,16 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = NibMac.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
 				INFOPLIST_FILE = "NibMac-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.douglance.nib.macos;
+				NIB_MAC_BUNDLE_IDENTIFIER = com.douglance.nib.macos;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(NIB_MAC_BUNDLE_IDENTIFIER)";
 				PRODUCT_NAME = Nib;
 				SDKROOT = macosx;
 			};
@@ -834,6 +1034,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
+				APS_ENVIRONMENT = development;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
@@ -864,9 +1065,9 @@
 				CLANG_WARN_UNREACHABLE_CODE = YES;
 				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 6;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = 2AS3V73632;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu11;
@@ -885,9 +1086,10 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.3.0;
+				MARKETING_VERSION = 0.3.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
+				NIB_APNS_ENVIRONMENT = sandbox;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
@@ -1004,6 +1206,88 @@
 			defaultConfigurationName = Debug;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		941637AE161F25050374B5CD /* XCLocalSwiftPackageReference "Packages/NibKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/NibKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		00B6C043EEA8EFC69A5913E8 /* NibCloud */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibCloud;
+		};
+		193794F74DFD9FF9B6E77427 /* NibDocument */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibDocument;
+		};
+		264E68C814E4DAF0F99E95F2 /* NibCloud */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibCloud;
+		};
+		295B15B1385DFC5F694DBAEF /* NibNotifications */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibNotifications;
+		};
+		2E46D11A42EDA6C0CBFE052D /* NibNotifications */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibNotifications;
+		};
+		39A5D8A301D2B8627BBB8680 /* NibNotifications */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibNotifications;
+		};
+		400E54BCC732AD6FE52D7B23 /* NibFeatures */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibFeatures;
+		};
+		428E096DC5007254526A52D7 /* NibCloud */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibCloud;
+		};
+		46AD16DABBB735E2F997BC0B /* NibDomain */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibDomain;
+		};
+		5BFC3425A236E170727DC19C /* NibFeatures */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibFeatures;
+		};
+		7233F848A6FA71C63F44084C /* NibDocument */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibDocument;
+		};
+		95C7306594AC9DF6D5FC467C /* NibDomain */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibDomain;
+		};
+		98BB17BFDB10565CB727BF68 /* NibDomain */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibDomain;
+		};
+		B27482360B402F0E4C3D11B2 /* NibFeatures */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibFeatures;
+		};
+		C31A80378DEC3568C7F4FC85 /* NibDomain */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibDomain;
+		};
+		D2B01D27083F991BA90BE34F /* NibDocument */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibDocument;
+		};
+		DEC14D00B9B77F365AB913F4 /* NibCloud */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibCloud;
+		};
+		EFC29D6658A778D9B9B0A17C /* NibNotifications */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NibNotifications;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = DE190AA07A7FBA8D7BC434E9 /* Project object */;
 }

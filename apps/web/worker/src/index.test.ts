@@ -21,6 +21,13 @@ describe("site routing", () => {
     expect(isPrivatePage("/account")).toBe(true);
   });
 
+  it("publishes support without exposing account management", () => {
+    expect(isPublicPage("/support")).toBe(true);
+    expect(isPrivatePage("/support")).toBe(false);
+    expect(isPublicPage("/account/delete")).toBe(false);
+    expect(isPrivatePage("/account/delete")).toBe(true);
+  });
+
   it("does not classify MCP as a site route", () => {
     expect(isPublicPage("/mcp")).toBe(false);
     expect(isPrivatePage("/mcp")).toBe(false);
