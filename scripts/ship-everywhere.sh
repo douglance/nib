@@ -36,11 +36,7 @@ install -d "$BIN_DIR"
 if [[ -x "$BIN_DIR/nib" && ! -e "$ROLLBACK_DIR/nib" ]]; then
   cp -p "$BIN_DIR/nib" "$ROLLBACK_DIR/nib"
 fi
-if [[ -x "$BIN_DIR/nib2" && ! -e "$ROLLBACK_DIR/nib2" ]]; then
-  cp -p "$BIN_DIR/nib2" "$ROLLBACK_DIR/nib2"
-fi
 install -m 0755 "$ROOT/target/release/nib" "$BIN_DIR/nib"
-install -m 0755 "$ROOT/target/release/nib" "$BIN_DIR/nib2"
 
 echo "Syncing Nib skills..."
 "$BIN_DIR/nib" skills add
