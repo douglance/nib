@@ -128,7 +128,8 @@ final class NibMacNotificationController: NSObject, UNUserNotificationCenterDele
     private func handle(_ route: NibMacNotificationRoute, idempotencyKey: String) async {
         switch route {
         case .openRequest(let requestID):
-            navigator.open(requestID: requestID, portalURL: store.baseURL)
+            await store.reload()
+            navigator.open(requestID: requestID)
         case .openProject(let projectID):
             if let project = store.projects.first(where: { $0.id == projectID }),
                let url = store.projectURL(for: project) {

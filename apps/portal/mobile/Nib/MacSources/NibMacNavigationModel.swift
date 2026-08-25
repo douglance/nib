@@ -81,6 +81,30 @@ enum NibMacHistoryFilter: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+struct NibMacDetailSelection: Equatable {
+    private(set) var requestID: String?
+    private(set) var libraryItemID: NibLibraryItem.ID?
+
+    init(requestID: String? = nil, libraryItemID: NibLibraryItem.ID? = nil) {
+        self.requestID = requestID
+        self.libraryItemID = requestID == nil ? libraryItemID : nil
+    }
+
+    mutating func selectRequest(_ requestID: String?) {
+        self.requestID = requestID
+        if requestID != nil {
+            libraryItemID = nil
+        }
+    }
+
+    mutating func selectLibraryItem(_ libraryItemID: NibLibraryItem.ID?) {
+        self.libraryItemID = libraryItemID
+        if libraryItemID != nil {
+            requestID = nil
+        }
+    }
+}
+
 struct NibMacBadgeSnapshot: Equatable {
     var sidebar: [NibMacSidebarSection: Int]
     var dock: Int

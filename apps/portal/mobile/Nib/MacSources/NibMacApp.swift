@@ -122,6 +122,7 @@ final class NibMacAppDelegate: NSObject, NSApplicationDelegate, ObservableObject
     let previewState = NibMacPreviewState.current()
     private lazy var notificationController = NibMacNotificationController(store: store)
     private var fallbackMainWindow: NSWindow?
+    private var pendingRequestID: String?
 
     override init() {
         let store = NibMacRequestStore()
@@ -177,6 +178,7 @@ final class NibMacAppDelegate: NSObject, NSApplicationDelegate, ObservableObject
         if allowed {
             notificationController.register()
             store.start()
+            openPendingRequestIfPossible()
         } else {
             store.stopAndClear()
         }
@@ -184,15 +186,11 @@ final class NibMacAppDelegate: NSObject, NSApplicationDelegate, ObservableObject
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        guard accountAccess else { return }
         for url in urls {
-            guard url.scheme == "nib",
-                  url.host == "request",
-                  let requestID = url.pathComponents.dropFirst().first,
-                  !requestID.isEmpty else {
-                continue
-            }
-            NibMacRequestNavigator.shared.open(requestID: requestID, portalURL: store.baseURL)
+            guard let requestID = NibMacRequestNavigator.requestID(from: url) else { continue }
+            pendingRequestID = requestID
+            ensureMainWindowIsVisible(delay: 0)
+            openPendingRequestIfPossible()
         }
     }
 
@@ -241,6 +239,19 @@ final class NibMacAppDelegate: NSObject, NSApplicationDelegate, ObservableObject
     private func updateDockBadge() {
         let count = store.badges.dock
         NSApplication.shared.dockTile.badgeLabel = count == 0 ? nil : "\(count)"
+    }
+
+    private func openPendingRequestIfPossible() {
+        guard accountAccess || previewState != nil,
+              let requestID = pendingRequestID else { return }
+        Task {
+            if previewState == nil {
+                await store.reload()
+            }
+            guard pendingRequestID == requestID else { return }
+            pendingRequestID = nil
+            NibMacRequestNavigator.shared.open(requestID: requestID)
+        }
     }
 
     private func ensureMainWindowIsVisible(delay: TimeInterval = 0.5) {
@@ -328,9 +339,9 @@ final class NibMacAppDelegate: NSObject, NSApplicationDelegate, ObservableObject
 
 private struct NibMacRootView: View {
     @ObservedObject var store: NibMacRequestStore
+    @ObservedObject private var requestNavigator = NibMacRequestNavigator.shared
     @State private var selection: NibMacSidebarSection?
-    @State private var selectedRequestID: String?
-    @State private var selectedLibraryItemID: NibLibraryItem.ID?
+    @State private var detailSelection: NibMacDetailSelection
     @State private var historyFilter: NibMacHistoryFilter
     @State private var searchText = ""
     @StateObject private var libraryAdapter = NibCloudLibraryAdapter()
@@ -341,8 +352,10 @@ private struct NibMacRootView: View {
         self.store = store
         let previewState = NibMacPreviewState.current()
         _selection = State(initialValue: previewState?.sidebarSection ?? .inbox)
-        _selectedRequestID = State(initialValue: previewState?.selectedRequestID)
-        _selectedLibraryItemID = State(initialValue: previewState?.selectedLibraryItemID)
+        _detailSelection = State(initialValue: NibMacDetailSelection(
+            requestID: previewState?.selectedRequestID,
+            libraryItemID: previewState?.selectedLibraryItemID
+        ))
         _historyFilter = State(initialValue: previewState?.historyFilter ?? .all)
     }
 
@@ -468,6 +481,14 @@ private struct NibMacRootView: View {
         .onChange(of: store.badges.dock) { _, count in
             NSApplication.shared.dockTile.badgeLabel = count == 0 ? nil : "\(count)"
         }
+        .onChange(of: requestNavigator.requestOpenIntent, initial: true) { _, intent in
+            guard let intent else { return }
+            searchText = ""
+            selection = store.historyRequests.contains { $0.id == intent.requestID }
+                ? .history
+                : .inbox
+            detailSelection.selectRequest(intent.requestID)
+        }
         .preferredColorScheme(NibMacPreviewState.current() == nil ? nil : .light)
     }
 
@@ -530,10 +551,9 @@ private struct NibMacRootView: View {
 
             NibLibraryListView(
                 items: filteredLibraryItems,
-                selectedID: selectedLibraryItemID,
+                selectedID: detailSelection.libraryItemID,
                 select: { item in
-                    selectedLibraryItemID = item.id
-                    selectedRequestID = nil
+                    detailSelection.selectLibraryItem(item.id)
                 }
             )
 
@@ -554,7 +574,7 @@ private struct NibMacRootView: View {
         emptyTitle: String,
         emptyMessage: String
     ) -> some View {
-        List(selection: $selectedRequestID) {
+        List(selection: requestSelection) {
             if store.connectionState == .reconnecting {
                 NibMacReconnectingRow {
                     store.start()
@@ -639,13 +659,20 @@ private struct NibMacRootView: View {
     }
 
     private var selectedRequest: NibRequest? {
-        guard let selectedRequestID else { return nil }
+        guard let selectedRequestID = detailSelection.requestID else { return nil }
         return store.requests.first { $0.id == selectedRequestID }
     }
 
     private var selectedLibraryItem: NibLibraryItem? {
-        guard let selectedLibraryItemID else { return nil }
+        guard let selectedLibraryItemID = detailSelection.libraryItemID else { return nil }
         return allLibraryItems.first { $0.id == selectedLibraryItemID }
+    }
+
+    private var requestSelection: Binding<String?> {
+        Binding(
+            get: { detailSelection.requestID },
+            set: { detailSelection.selectRequest($0) }
+        )
     }
 
     private var historyLibraryItems: [NibLibraryItem] {
@@ -703,7 +730,7 @@ private struct NibMacRootView: View {
     }
 
     private func open(_ request: NibRequest) {
-        NibMacRequestNavigator.shared.open(requestID: request.id, portalURL: store.baseURL)
+        NibMacRequestNavigator.shared.open(requestID: request.id)
     }
 
     private func captureInteractiveRegion() async {
@@ -940,7 +967,7 @@ private struct NibMenuBarRequestsView: View {
     }
 
     private func open(_ request: NibRequest) {
-        navigator.open(requestID: request.id, portalURL: store.baseURL)
+        navigator.open(requestID: request.id)
     }
 
     private func copyLink(for request: NibRequest) {
@@ -1074,7 +1101,7 @@ private struct NibMacRequestDetailView: View {
                     }
                     Spacer()
                     Button {
-                        NibMacRequestNavigator.shared.open(requestID: request.id, portalURL: store.baseURL)
+                        NibMacRequestNavigator.shared.open(requestID: request.id)
                     } label: {
                         Label("Open", systemImage: "arrow.up.right.square")
                     }

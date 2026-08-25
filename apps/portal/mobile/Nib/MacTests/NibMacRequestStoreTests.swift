@@ -39,6 +39,24 @@ final class NibMacRequestStoreTests: XCTestCase {
         )
     }
 
+    func testRequestNavigatorKeepsRequestOpeningNative() throws {
+        let navigator = NibMacRequestNavigator()
+
+        navigator.open(requestID: "req-123")
+
+        XCTAssertEqual(
+            navigator.requestOpenIntent,
+            NibMacRequestOpenIntent(requestID: "req-123", sequence: 1)
+        )
+        XCTAssertNil(navigator.lastError)
+    }
+
+    func testRequestNavigatorResolvesNativeRequestURL() throws {
+        let url = try XCTUnwrap(URL(string: "nib://request/req-123"))
+
+        XCTAssertEqual(NibMacRequestNavigator.requestID(from: url), "req-123")
+    }
+
     private func request(
         id: String,
         status: String,

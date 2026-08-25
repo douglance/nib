@@ -66,6 +66,16 @@ struct NibMacNavigationModelTests {
         #expect(NibMacPreviewState.empty.selectedRequestID == nil)
     }
 
+    @Test
+    func selectingInboxRequestReplacesLibraryDetailSelection() {
+        var selection = NibMacDetailSelection(libraryItemID: "file-child")
+
+        selection.selectRequest("approve-layout")
+
+        #expect(selection.requestID == "approve-layout")
+        #expect(selection.libraryItemID == nil)
+    }
+
     private func request(
         id: String,
         status: String,
