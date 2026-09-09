@@ -5,6 +5,7 @@ import { NibFileBackend } from "./nib-files";
 import { purgeReviewAccount } from "./account-data";
 import { commitFirstResponse, responseChoiceValue, visualResponseError } from "./response-coordinator";
 import { isPublishedVisualReview, parseReviewRoute, publicAttachmentUrl, publicResponseUrl, publicReviewRecord, reviewPage, reviewPath } from "./review-page";
+import { acceptanceNotification, acceptanceNotificationPayload } from "./acceptance-notifications";
 
 interface Env {
   REQUESTS: DurableObjectNamespace<AccountReviewHub>;
@@ -12,6 +13,7 @@ interface Env {
   NIB_APNS_TEAM_ID?: string;
   NIB_APNS_KEY_ID?: string;
   NIB_APNS_PRIVATE_KEY?: string;
+  NIB_ACCEPTANCE_ORIGIN?: string;
 }
 
 type JsonObject = Record<string, unknown>;
@@ -140,6 +142,7 @@ export default {
 
 export class AccountReviewHub extends DurableObject<Env> {
   private sockets = new Set<WebSocket>();
+  private acceptanceDelivery: Promise<void> = Promise.resolve();
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -154,6 +157,12 @@ export class AccountReviewHub extends DurableObject<Env> {
     }
     if (await this.ctx.storage.get("account:deleted")) {
       return json({ error: "Account deleted" }, 410);
+    }
+    if (url.pathname === "/api/acceptance-notifications" && request.method === "POST") {
+      const input = await request.json();
+      const response = this.acceptanceDelivery.then(() => this.acceptanceNotice(input));
+      this.acceptanceDelivery = response.then(() => undefined, () => undefined);
+      return response;
     }
     if (url.pathname === "/api/nib-files" || url.pathname.startsWith("/api/nib-files/")) {
       const fileResponse = await new NibFileBackend({
@@ -245,6 +254,38 @@ export class AccountReviewHub extends DurableObject<Env> {
     return [...stored.values()]
       .filter((item) => item.kind !== "visual-review" || item.publishedAt)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  private async acceptanceNotice(raw: unknown): Promise<Response> {
+    let notice;
+    try { notice = acceptanceNotification(raw, this.env.NIB_ACCEPTANCE_ORIGIN || "https://nibtool.com"); }
+    catch (error) { return json({ error: error instanceof Error ? error.message : "Invalid acceptance notification" }, 400); }
+    const now = new Date().toISOString();
+    const key = `acceptance-delivery:${notice.reviewId}:${notice.state}`;
+    const existing = await this.get(notice.reviewId);
+    if (existing && existing.kind !== "acceptance-review") return json({ error: "Request id collision" }, 409);
+    if (Number(existing?.metadata.acceptanceSequence || 0) > notice.sequence) return json({ delivered: true, stale: true });
+    if (await this.ctx.storage.get(key)) return json({ delivered: true, replayed: true });
+    const item: RequestRecord = {
+      id: notice.reviewId, kind: "acceptance-review", title: notice.title,
+      prompt: "Open the exact preview and review the requested behavior.", body: notice.change,
+      context: null, choices: [], allowText: false, target: { projectId: notice.projectId },
+      status: notice.state === "pending" ? "open" : "resolved", priority: "normal", source: "acceptance",
+      createdAt: existing?.createdAt || now, updatedAt: now, viewedAt: existing?.viewedAt || null,
+      answeredAt: notice.state === "pending" ? null : now, actedAt: null,
+      resolvedAt: notice.state === "pending" ? null : now, expiresAt: notice.expiresAt,
+      publishedAt: existing?.publishedAt || now, notifiedAt: existing?.notifiedAt || null,
+      notificationClickedAt: existing?.notificationClickedAt || null, staleReason: null,
+      attachments: [], responses: [], metadata: { contract: "nib.acceptance/v1", projectId: notice.projectId,
+        reviewUrl: notice.reviewUrl, revision: notice.revision, acceptanceState: notice.state, acceptanceSequence: notice.sequence },
+    };
+    await this.put(item);
+    this.broadcast(existing ? "updated" : "created", item);
+    const sent = await this.deliver(acceptanceNotificationPayload(notice));
+    const devices = await this.listDevices();
+    if (sent === 0 && devices.length > 0) return json({ error: "Device delivery needs retry", inboxStored: true }, 503);
+    await this.ctx.storage.put(key, { deliveredAt: now, sent });
+    return json({ delivered: true, sent, requestId: item.id });
   }
 
   private async get(id: string): Promise<RequestRecord | undefined> {
@@ -348,6 +389,9 @@ export class AccountReviewHub extends DurableObject<Env> {
   private async patch(id: string, input: JsonObject): Promise<Response> {
     const item = await this.get(id);
     if (!item) return json({ error: "Request not found" }, 404);
+    if (item.kind === "acceptance-review" && (input.status !== undefined || input.metadata !== undefined)) {
+      return json({ error: "Acceptance state is managed by the team review", reviewUrl: item.metadata.reviewUrl }, 409);
+    }
     const now = new Date().toISOString();
     if (input.metadata && !item.publishedAt) item.metadata = { ...item.metadata, ...object(input.metadata) };
     if (typeof input.status === "string") item.status = input.status;
@@ -482,6 +526,7 @@ export class AccountReviewHub extends DurableObject<Env> {
   ): Promise<Response> {
     const item = await this.get(id);
     if (!item) return json({ error: "Request not found" }, 404);
+    if (item.kind === "acceptance-review") return json({ error: "Open the team review to record an acceptance decision", reviewUrl: item.metadata.reviewUrl }, 409);
     const idempotencyKey = (headerIdempotencyKey || text(input.idempotencyKey)).slice(0, 200);
     if (item.kind === "visual-review" && !item.publishedAt) return json({ error: "Visual review is not published" }, 409);
     const now = new Date().toISOString();

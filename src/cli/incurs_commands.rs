@@ -5,7 +5,8 @@
 //! compatibility adapter without exposing a second public parser.
 
 use super::{
-    fields, AwaitSubmitArgs, FeedbackArgs, RecordStartArgs, RequestReviewArgs, ReviewArgs,
+    fields, AwaitSubmitArgs, FeedbackArgs, RecordStartArgs, RequestReviewArgs, RequestVerifyArgs,
+    ReviewArgs,
 };
 use async_trait::async_trait;
 use incurs::{
@@ -34,6 +35,56 @@ struct WaitRecordingHandler;
 struct InspectMediaHandler;
 struct PosterMediaHandler;
 struct TranscribeMediaHandler;
+
+#[derive(Debug, Deserialize, incurs::Args)]
+struct AcceptanceReviewArgs {
+    /// Acceptance review ID.
+    review_id: String,
+}
+
+#[derive(Debug, Deserialize, incurs::Options)]
+struct AcceptanceProjectOptions {
+    /// Acceptance project ID.
+    project: Option<String>,
+}
+
+#[derive(Debug, Deserialize, incurs::Options)]
+struct RequestWaitOptions {
+    /// Acceptance project ID; omit for the legacy visual-feedback request service.
+    project: Option<String>,
+    /// Seconds to wait; zero waits indefinitely.
+    #[incurs(alias = "t", default = 0)]
+    timeout: u64,
+}
+
+#[derive(Debug, Deserialize, incurs::Options)]
+struct AcceptanceExportOptions {
+    /// Acceptance project ID.
+    project: Option<String>,
+    /// Output .nib packet path; omit to return the server export JSON.
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize, incurs::Options)]
+struct AcceptanceVerifyOptions {
+    /// Acceptance project ID; can be derived from --packet.
+    project: Option<String>,
+    /// Expected acceptance manifest hash for live verification.
+    manifest_hash: Option<String>,
+    /// Local acceptance packet for offline verification or live expected hash.
+    packet: Option<PathBuf>,
+    /// Trusted JWKS file for offline receipt verification.
+    jwks: Option<PathBuf>,
+    /// Expected build commit for live verification.
+    commit: Option<String>,
+    /// Expected subject for live verification.
+    subject: Option<String>,
+    /// Expected gate for live verification.
+    gate: Option<String>,
+    /// Verify local packet integrity only; historical, not current.
+    #[incurs(default = false)]
+    offline: bool,
+}
 
 #[derive(Debug, Deserialize, incurs::Args)]
 struct AuthLoginArgs {
@@ -332,12 +383,15 @@ fn error(message: impl ToString) -> CommandResult {
 #[async_trait]
 impl CommandHandler for FeedbackHandler {
     async fn run(&self, ctx: CommandContext) -> CommandResult {
-        let file = match fields::path_arg(&ctx.args, "file") {
-            Ok(file) => file,
-            Err(result) => return result,
-        };
+        let file = fields::optional_path_arg(&ctx.args, "file");
         let args = FeedbackArgs {
             file,
+            packet: fields::optional_path_arg(&ctx.options, "packet"),
+            project: ctx
+                .options
+                .get("project")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             message: ctx
                 .options
                 .get("message")
@@ -713,15 +767,58 @@ fn mcp_options(policy: Policy) -> McpCommandOptions {
 }
 
 fn typed_request_group() -> Cli {
-    let wait = CommandDef::typed::<RequestArgs, WaitOptions, (), Value, _, _>(
-        "wait",
-        |ctx: TypedContext<RequestArgs, WaitOptions, ()>| async move {
-            match super::web_feedback::wait_for_request(&ctx.args.request_id, ctx.options.timeout)
-                .await
-            {
+    let get = CommandDef::typed::<AcceptanceReviewArgs, AcceptanceProjectOptions, (), Value, _, _>(
+        "get",
+        |ctx: TypedContext<AcceptanceReviewArgs, AcceptanceProjectOptions, ()>| async move {
+            let Some(project_id) = ctx.options.project else {
+                return TypedResult::error(
+                    "ACCEPTANCE_PROJECT_REQUIRED",
+                    "request get requires --project PROJECT_ID",
+                );
+            };
+            match super::acceptance::get_review(&project_id, &ctx.args.review_id) {
                 Ok(response) => TypedResult::ok(response),
-                Err(wait_error) => {
-                    TypedResult::error("REQUEST_WAIT_FAILED", wait_error.to_string())
+                Err(error) => TypedResult::error("ACCEPTANCE_GET_FAILED", error.to_string()),
+            }
+        },
+    )
+    .description("Read one published acceptance review")
+    .mcp(mcp_options(Policy {
+        read_only: true,
+        idempotent: true,
+        open_world: true,
+        mcp_name: Some("acceptance_get"),
+        ..EXTERNAL_EFFECT
+    }))
+    .done();
+
+    let wait = CommandDef::typed::<RequestArgs, RequestWaitOptions, (), Value, _, _>(
+        "wait",
+        |ctx: TypedContext<RequestArgs, RequestWaitOptions, ()>| async move {
+            if let Some(project_id) = ctx.options.project {
+                match super::acceptance::wait_for_acceptance_review(
+                    &project_id,
+                    &ctx.args.request_id,
+                    ctx.options.timeout,
+                )
+                .await
+                {
+                    Ok(response) => TypedResult::ok(response),
+                    Err(error) => {
+                        TypedResult::error("ACCEPTANCE_WAIT_FAILED", error.to_string())
+                    }
+                }
+            } else {
+                match super::web_feedback::wait_for_request(
+                    &ctx.args.request_id,
+                    ctx.options.timeout,
+                )
+                .await
+                {
+                    Ok(response) => TypedResult::ok(response),
+                    Err(wait_error) => {
+                        TypedResult::error("REQUEST_WAIT_FAILED", wait_error.to_string())
+                    }
                 }
             }
         },
@@ -737,6 +834,154 @@ fn typed_request_group() -> Cli {
         idempotent: true,
         open_world: true,
         mcp_name: Some("wait_for_request"),
+        ..EXTERNAL_EFFECT
+    }))
+    .done();
+
+    let export =
+        CommandDef::typed::<AcceptanceReviewArgs, AcceptanceExportOptions, (), Value, _, _>(
+            "export",
+            |ctx: TypedContext<AcceptanceReviewArgs, AcceptanceExportOptions, ()>| async move {
+                let Some(project_id) = ctx.options.project else {
+                    return TypedResult::error(
+                        "ACCEPTANCE_PROJECT_REQUIRED",
+                        "request export requires --project PROJECT_ID",
+                    );
+                };
+                let value = match super::acceptance::export_review(&project_id, &ctx.args.review_id)
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return TypedResult::error("ACCEPTANCE_EXPORT_FAILED", error.to_string())
+                    }
+                };
+                if let Some(output) = ctx.options.output {
+                    if let Err(error) = super::acceptance::export_packet_envelope(&value, &output) {
+                        return TypedResult::error("ACCEPTANCE_EXPORT_FAILED", error.to_string());
+                    }
+                    if let Err(error) =
+                        super::acceptance::download_export_evidence(&project_id, &output, &value)
+                    {
+                        return TypedResult::error("ACCEPTANCE_EXPORT_FAILED", error.to_string());
+                    }
+                    TypedResult::ok(json!({"status":"exported","file":output}))
+                } else {
+                    TypedResult::ok(value)
+                }
+            },
+        )
+        .description(
+            "Export one acceptance review as the server JSON envelope or a portable .nib packet",
+        )
+        .mcp(mcp_options(Policy {
+            read_only: false,
+            idempotent: true,
+            open_world: true,
+            mcp_name: Some("acceptance_export"),
+            ..EXTERNAL_EFFECT
+        }))
+        .done();
+
+    let verify = CommandDef::typed::<AcceptanceReviewArgs, AcceptanceVerifyOptions, (), Value, _, _>(
+        "verify",
+        |ctx: TypedContext<AcceptanceReviewArgs, AcceptanceVerifyOptions, ()>| async move {
+            let args = RequestVerifyArgs {
+                review_id: ctx.args.review_id,
+                project: ctx.options.project,
+                manifest_hash: ctx.options.manifest_hash,
+                packet: ctx.options.packet,
+                jwks: ctx.options.jwks,
+                commit: ctx.options.commit,
+                subject: ctx.options.subject,
+                gate: ctx.options.gate,
+                offline: ctx.options.offline,
+            };
+            if args.offline {
+                let Some(packet) = args.packet.as_deref() else {
+                    return TypedResult::error(
+                        "ACCEPTANCE_PACKET_REQUIRED",
+                        "request verify --offline requires --packet",
+                    );
+                };
+                let Some(jwks) = args.jwks.as_deref() else {
+                    return TypedResult::error(
+                        "ACCEPTANCE_JWKS_REQUIRED",
+                        "request verify --offline requires --jwks PATH",
+                    );
+                };
+                return match crate::storage::verify_packet_offline_with_jwks(packet, jwks) {
+                    Ok(value) => match serde_json::to_value(value) {
+                        Ok(value) if value.get("satisfied").and_then(Value::as_bool) == Some(true) => {
+                            TypedResult::ok(value)
+                        }
+                        Ok(value) => TypedResult::error(
+                            "ACCEPTANCE_VERIFY_UNSATISFIED",
+                            value.to_string(),
+                        ),
+                        Err(error) => {
+                            TypedResult::error("ACCEPTANCE_VERIFY_FAILED", error.to_string())
+                        }
+                    },
+                    Err(error) => {
+                        TypedResult::error("ACCEPTANCE_VERIFY_FAILED", error.to_string())
+                    }
+                };
+            }
+            let packet = match args
+                .packet
+                .as_deref()
+                .map(crate::storage::open_packet)
+                .transpose()
+            {
+                Ok(packet) => packet,
+                Err(error) => {
+                    return TypedResult::error("ACCEPTANCE_VERIFY_FAILED", error.to_string())
+                }
+            };
+            let Some(project_id) = args
+                .project
+                .clone()
+                .or_else(|| packet.as_ref().map(|packet| packet.project_id.clone()))
+            else {
+                return TypedResult::error(
+                    "ACCEPTANCE_PROJECT_REQUIRED",
+                    "live request verify requires --project PROJECT_ID or --packet",
+                );
+            };
+            let Some(manifest_hash) = args
+                .manifest_hash
+                .clone()
+                .or_else(|| packet.as_ref().map(|packet| packet.manifest_hash.clone()))
+            else {
+                return TypedResult::error(
+                    "ACCEPTANCE_MANIFEST_HASH_REQUIRED",
+                    "live request verify requires --manifest-hash or --packet",
+                );
+            };
+            match super::acceptance::verify_review(
+                &project_id,
+                &args.review_id,
+                &json!({
+                    "manifestHash": manifest_hash,
+                    "commit": args.commit,
+                    "subject": args.subject,
+                    "gate": args.gate
+                }),
+            ) {
+                Ok(value) if value.get("satisfied").and_then(Value::as_bool) == Some(true) => {
+                    TypedResult::ok(value)
+                }
+                Ok(value) => TypedResult::error("ACCEPTANCE_VERIFY_UNSATISFIED", value.to_string()),
+                Err(error) => TypedResult::error("ACCEPTANCE_VERIFY_FAILED", error.to_string()),
+            }
+        },
+    )
+    .description("Live-verify a current acceptance review, or offline-verify a packet as historical proof")
+    .mcp(mcp_options(Policy {
+        read_only: true,
+        idempotent: true,
+        open_world: true,
+        mcp_name: Some("acceptance_verify"),
         ..EXTERNAL_EFFECT
     }))
     .done();
@@ -768,7 +1013,10 @@ fn typed_request_group() -> Cli {
 
     Cli::create("request")
         .description("Review or resume waiting for an existing durable human request")
+        .command("get", get)
         .command("review", review)
+        .command("export", export)
+        .command("verify", verify)
         .command("wait", wait)
 }
 
@@ -1153,11 +1401,23 @@ pub fn register(cli: Cli) -> Cli {
             "Ask a human for feedback, clarification, or reassurance on every registered Nib device, then use the response and continue the task",
             vec![fields::field(
                 "file",
-                "Image, .nib, or MP4/H.264 file",
+                "Image, .nib, MP4/H.264, or PDF file",
                 FieldType::String,
-                true,
+                false,
             )],
             vec![
+                fields::field(
+                    "packet",
+                    "Portable acceptance packet to publish",
+                    FieldType::String,
+                    false,
+                ),
+                fields::field(
+                    "project",
+                    "Acceptance project ID for packet publication",
+                    FieldType::String,
+                    false,
+                ),
                 fields::field_with_alias(
                     "message",
                     "Question shown to the reviewer",
@@ -2191,6 +2451,9 @@ mod tests {
             "auth_login",
             "auth_status",
             "auth_logout",
+            "acceptance_get",
+            "acceptance_export",
+            "acceptance_verify",
             "add_annotation",
             "read_annotations",
             "remove_annotation",
@@ -2226,6 +2489,12 @@ mod tests {
             clear.annotations.as_ref().unwrap().destructive_hint,
             Some(true)
         );
+
+        let verify = catalog.get("acceptance_verify").unwrap();
+        assert_eq!(
+            verify.annotations.as_ref().unwrap().read_only_hint,
+            Some(true)
+        );
     }
 
     #[test]
@@ -2255,6 +2524,10 @@ mod tests {
         assert_eq!(
             feedback.input_schema["properties"]["detach"]["default"],
             false
+        );
+        assert!(
+            feedback.input_schema["properties"].get("packet").is_some(),
+            "feedback must expose packet publication through the single review entrypoint"
         );
     }
 }

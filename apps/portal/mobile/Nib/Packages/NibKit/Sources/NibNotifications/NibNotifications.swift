@@ -85,6 +85,9 @@ public enum NibNotificationContract {
         text: String? = nil
     ) -> NibNotificationRoute? {
         let payload = payload(from: userInfo)
+        if isAcceptanceReview(payload) {
+            return acceptanceReviewOpenRoute(payload: payload)
+        }
         if actionIdentifier == UNNotificationDefaultActionIdentifier
             || actionIdentifier == NibNotificationIdentifiers.open {
             if let requestID = nonEmptyString(payload["requestId"]) {
@@ -155,6 +158,22 @@ public enum NibNotificationContract {
         return nil
     }
 
+    private static func acceptanceReviewOpenRoute(payload: [String: Any]) -> NibNotificationRoute? {
+        if let value = nonEmptyString(payload["url"]), let url = URL(string: value) {
+            return .openURL(url)
+        }
+        if let metadata = payloadDictionary(payload["metadata"]),
+           let value = nonEmptyString(metadata["reviewUrl"]),
+           let url = URL(string: value) {
+            return .openURL(url)
+        }
+        return nil
+    }
+
+    private static func isAcceptanceReview(_ payload: [String: Any]) -> Bool {
+        nonEmptyString(payload["type"]) == "acceptance-review"
+    }
+
     private static func choiceAction(index: Int, title: String) -> UNNotificationAction {
         UNNotificationAction(identifier: "NIB_CHOICE_\(index)", title: title, options: [])
     }
@@ -195,5 +214,15 @@ public enum NibNotificationContract {
         guard let string = value as? String else { return nil }
         let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func payloadDictionary(_ value: Any?) -> [String: Any]? {
+        if let dictionary = value as? [String: Any] {
+            return dictionary
+        }
+        if let dictionary = value as? NSDictionary {
+            return dictionary as? [String: Any]
+        }
+        return nil
     }
 }

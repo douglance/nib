@@ -22,6 +22,16 @@ final class NibMacRequestStoreTests: XCTestCase {
         XCTAssertEqual(store.reviewURL(for: request)?.absoluteString, "https://nibtool.com/r/request-id")
     }
 
+    func testAcceptanceReviewUsesMetadataReviewURL() throws {
+        let request = try acceptanceReview()
+        let store = NibMacRequestStore()
+
+        XCTAssertEqual(request.acceptanceReviewURL?.absoluteString, "https://nibtool.com/acceptance/projects/project-1/reviews/review-1")
+        XCTAssertEqual(store.reviewURL(for: request)?.absoluteString, "https://nibtool.com/acceptance/projects/project-1/reviews/review-1")
+        XCTAssertTrue(request.choices.isEmpty)
+        XCTAssertFalse(request.allowText)
+    }
+
     func testVisualReviewProvidesImageAndDecisionMapping() throws {
         let request = try request(id: "request-id", status: "open", updatedAt: "2026-07-23T11:00:00.000Z")
 
@@ -93,6 +103,39 @@ final class NibMacRequestStoreTests: XCTestCase {
             }
           ],
           "responses": []
+        }
+        """
+        return try JSONDecoder().decode(NibRequest.self, from: Data(json.utf8))
+    }
+
+    private func acceptanceReview() throws -> NibRequest {
+        let json = """
+        {
+          "id": "review-1",
+          "kind": "acceptance-review",
+          "title": "Acceptance review",
+          "prompt": "Review build acceptance.",
+          "body": null,
+          "context": null,
+          "choices": [],
+          "allowText": false,
+          "target": {
+            "projectId": "project-1",
+            "projectName": "Project 1",
+            "appPath": null,
+            "url": null
+          },
+          "status": "open",
+          "priority": "normal",
+          "source": "nib",
+          "createdAt": "2026-07-23T10:00:00.000Z",
+          "updatedAt": "2026-07-23T11:00:00.000Z",
+          "attachments": [],
+          "responses": [],
+          "metadata": {
+            "reviewUrl": "https://nibtool.com/acceptance/projects/project-1/reviews/review-1",
+            "subject": { "nested": true }
+          }
         }
         """
         return try JSONDecoder().decode(NibRequest.self, from: Data(json.utf8))

@@ -157,6 +157,19 @@ The CLI publishes the preview and canonical `.nib` together, prints the
 versioned response JSON, and merges returned annotations into the originating
 `.nib` file.
 
+## Acceptance Gates
+
+Acceptance v1 records human approval for a specific project, subject, gate,
+manifest, and build. It lives in the public Nib Worker under
+`/api/acceptance/v1` and is disabled by default until configured with
+`ACCEPTANCE_ENABLED="true"`.
+
+Start with [docs/acceptance.md](docs/acceptance.md) for the API, roles, CLI, and
+GitHub workflow path. Use
+[docs/acceptance-operations.md](docs/acceptance-operations.md) for rollout,
+secrets, Queue retry, receipt rotation, Cloudflare preview verification, and
+rollback.
+
 ## Annotation Types
 
 | Category | Types |

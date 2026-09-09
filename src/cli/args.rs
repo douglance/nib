@@ -137,8 +137,17 @@ pub enum TileCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum RequestCommand {
+    /// Read a published acceptance review
+    Get(RequestGetArgs),
+
     /// Wait for a published request to receive a response
     Wait(RequestWaitArgs),
+
+    /// Export a published acceptance review into a portable packet
+    Export(RequestExportArgs),
+
+    /// Verify an acceptance review or local packet
+    Verify(RequestVerifyArgs),
 
     /// Open a durable request in the native Rust reviewer
     Review(RequestReviewArgs),
@@ -230,7 +239,15 @@ pub enum CaptureMode {
 #[derive(Parser, Debug)]
 pub struct FeedbackArgs {
     /// Image or .nib file to get feedback on
-    pub file: PathBuf,
+    pub file: Option<PathBuf>,
+
+    /// Portable acceptance packet to publish
+    #[arg(long)]
+    pub packet: Option<PathBuf>,
+
+    /// Acceptance project ID for packet publication
+    #[arg(long)]
+    pub project: Option<String>,
 
     /// Question shown on every registered Nib device
     #[arg(short = 'm', long)]
@@ -264,9 +281,75 @@ pub struct RequestWaitArgs {
     /// Durable request ID printed when feedback publishes
     pub request_id: String,
 
+    /// Acceptance project ID; omit for the legacy visual-feedback request service
+    #[arg(long)]
+    pub project: Option<String>,
+
     /// Timeout in seconds (0 = no timeout)
     #[arg(short = 't', long, default_value = "0")]
     pub timeout: u64,
+}
+
+#[derive(Parser, Debug)]
+pub struct RequestGetArgs {
+    /// Acceptance review ID
+    pub review_id: String,
+
+    /// Acceptance project ID
+    #[arg(long)]
+    pub project: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+pub struct RequestExportArgs {
+    /// Acceptance review ID
+    pub review_id: String,
+
+    /// Acceptance project ID
+    #[arg(long)]
+    pub project: Option<String>,
+
+    /// Output .nib packet path; omit to print the server export JSON
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct RequestVerifyArgs {
+    /// Acceptance review ID for live verification
+    pub review_id: String,
+
+    /// Acceptance project ID; can be derived from --packet
+    #[arg(long)]
+    pub project: Option<String>,
+
+    /// Expected acceptance manifest hash for live verification
+    #[arg(long)]
+    pub manifest_hash: Option<String>,
+
+    /// Local acceptance packet for offline verification or live expected hash
+    #[arg(long)]
+    pub packet: Option<PathBuf>,
+
+    /// Trusted JWKS file for offline receipt verification
+    #[arg(long)]
+    pub jwks: Option<PathBuf>,
+
+    /// Expected build commit for live verification
+    #[arg(long)]
+    pub commit: Option<String>,
+
+    /// Expected subject for live verification
+    #[arg(long)]
+    pub subject: Option<String>,
+
+    /// Expected gate for live verification
+    #[arg(long)]
+    pub gate: Option<String>,
+
+    /// Verify local packet integrity only; this is historical, not current
+    #[arg(long)]
+    pub offline: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -783,6 +866,7 @@ mod tests {
         let Command::Feedback(args) = cli.command else {
             panic!("expected feedback command");
         };
+        assert_eq!(args.file, Some(PathBuf::from("review.png")));
         assert_eq!(args.timeout, 0);
         assert!(!args.detach, "feedback must wait unless detach is explicit");
 
@@ -822,6 +906,7 @@ mod tests {
             panic!("expected request wait command");
         };
         assert_eq!(args.request_id, "req-123");
+        assert!(args.project.is_none());
         assert_eq!(args.timeout, 0);
     }
 
@@ -832,5 +917,63 @@ mod tests {
             panic!("expected request review command");
         };
         assert_eq!(args.request_id, "req-123");
+    }
+
+    #[test]
+    fn feedback_accepts_acceptance_packet_without_visual_file() {
+        let cli = Cli::try_parse_from([
+            "nib",
+            "feedback",
+            "--packet",
+            "acceptance.nib",
+            "--project",
+            "project-1",
+        ])
+        .unwrap();
+        let Command::Feedback(args) = cli.command else {
+            panic!("expected feedback command");
+        };
+        assert!(args.file.is_none());
+        assert_eq!(args.packet, Some(PathBuf::from("acceptance.nib")));
+        assert_eq!(args.project.as_deref(), Some("project-1"));
+    }
+
+    #[test]
+    fn acceptance_request_commands_parse_project_selection() {
+        let cli = Cli::try_parse_from([
+            "nib",
+            "request",
+            "get",
+            "review-1",
+            "--project",
+            "project-1",
+        ])
+        .unwrap();
+        let Command::Request(RequestCommand::Get(args)) = cli.command else {
+            panic!("expected request get command");
+        };
+        assert_eq!(args.review_id, "review-1");
+        assert_eq!(args.project.as_deref(), Some("project-1"));
+
+        let cli = Cli::try_parse_from([
+            "nib",
+            "request",
+            "verify",
+            "review-1",
+            "--project",
+            "project-1",
+            "--manifest-hash",
+            "abc",
+            "--jwks",
+            "trusted.json",
+        ])
+        .unwrap();
+        let Command::Request(RequestCommand::Verify(args)) = cli.command else {
+            panic!("expected request verify command");
+        };
+        assert_eq!(args.review_id, "review-1");
+        assert_eq!(args.project.as_deref(), Some("project-1"));
+        assert_eq!(args.manifest_hash.as_deref(), Some("abc"));
+        assert_eq!(args.jwks, Some(PathBuf::from("trusted.json")));
     }
 }

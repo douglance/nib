@@ -39,6 +39,16 @@ export interface MeterEvent {
 }
 
 export interface Env {
+  ACCEPTANCE: DurableObjectNamespace<AcceptanceCoordinator>;
+  ACCEPTANCE_EVENTS: Queue<AcceptanceEvent>;
+  ACCEPTANCE_ENABLED?: string;
+  ACCEPTANCE_SIGNING_JWK?: string;
+  ACCEPTANCE_SIGNING_KEY_ID?: string;
+  ACCEPTANCE_VERIFICATION_JWKS?: string;
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
+  GITHUB_WEBHOOK_SECRET?: string;
+  ACCEPTANCE_GITHUB_OIDC_AUDIENCE?: string;
   CF_VERSION_METADATA: WorkerVersionMetadata;
   AI: Ai;
   DB: D1Database;
@@ -69,3 +79,5 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_BILLING_API_TOKEN?: string;
 }
+import type { AcceptanceCoordinator } from "./acceptance/coordinator";
+import type { AcceptanceEvent } from "./acceptance/contracts";

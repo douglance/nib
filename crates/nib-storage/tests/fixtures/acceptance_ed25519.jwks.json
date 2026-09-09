@@ -1,0 +1,12 @@
+{
+  "keys": [
+    {
+      "crv": "Ed25519",
+      "x": "22w5o5S5sOJqwokR9iE0kYTcvhfIbqo3JZ7fkVthiPU",
+      "kty": "OKP",
+      "kid": "rust-ed25519-test-key",
+      "alg": "EdDSA",
+      "use": "sig"
+    }
+  ]
+}

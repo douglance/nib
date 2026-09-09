@@ -187,7 +187,10 @@ final class NibMacRequestStore: ObservableObject {
     }
 
     func reviewURL(for request: NibRequest) -> URL? {
-        URL(string: "/r/\(request.id)", relativeTo: baseURL)?.absoluteURL
+        if let acceptanceURL = request.acceptanceReviewURL {
+            return acceptanceURL
+        }
+        return URL(string: "/r/\(request.id)", relativeTo: baseURL)?.absoluteURL
     }
 
     func requestURL(for requestID: String) -> URL? {

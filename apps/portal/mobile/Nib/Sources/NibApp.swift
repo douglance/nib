@@ -218,7 +218,7 @@ struct RequestInboxView: View {
 
                                 ForEach(activeRequests) { request in
                                     Button {
-                                        selectedRequest = request
+                                        openInbox(request)
                                     } label: {
                                         ActionableRequestRow(request: request)
                                     }
@@ -627,11 +627,19 @@ struct RequestInboxView: View {
             let request = try await client.request(id: id)
             requests.removeAll { $0.id == request.id }
             requests.insert(request, at: 0)
-            selectedRequest = request
+            openInbox(request)
             error = nil
         } catch {
             self.error = error.localizedDescription
         }
+    }
+
+    private func openInbox(_ request: NibRequest) {
+        if let url = request.acceptanceReviewURL {
+            webRoute = WebRoute(url: url, title: request.title)
+            return
+        }
+        selectedRequest = request
     }
 
     private func open(url: URL) {
@@ -847,7 +855,7 @@ struct RequestInboxView: View {
                 Button {
                     sidebarDestination = nil
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                        selectedRequest = request
+                        openInbox(request)
                     }
                 } label: {
                     RequestRow(request: request)
@@ -2422,7 +2430,9 @@ struct RequestDetailView: View {
 
     var body: some View {
         Group {
-            if request.kind == "visual-review", reviewImage != nil || reviewVideo != nil || reviewPDF != nil || reviewNib != nil {
+            if request.kind == "acceptance-review" {
+                acceptanceReviewView
+            } else if request.kind == "visual-review", reviewImage != nil || reviewVideo != nil || reviewPDF != nil || reviewNib != nil {
                 NativeVisualReviewWorkspace(
                     request: request,
                     imageURL: client.absoluteURL(reviewImage?.url),
@@ -2546,6 +2556,55 @@ struct RequestDetailView: View {
         }
         .background(NibTheme.background)
         .navigationTitle("Request")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var acceptanceReviewView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(request.kind)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(NibTheme.blue)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(NibTheme.blue.opacity(0.12), in: Capsule())
+                    Text(request.title)
+                        .font(.largeTitle.weight(.semibold))
+                        .foregroundStyle(NibTheme.text)
+                        .textSelection(.enabled)
+                    Text(request.prompt)
+                        .font(.body)
+                        .foregroundStyle(NibTheme.muted)
+                        .textSelection(.enabled)
+                    if let context = request.context, !context.isEmpty {
+                        Text(context)
+                            .font(.footnote)
+                            .foregroundStyle(NibTheme.muted2)
+                            .textSelection(.enabled)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(22)
+                .background(NibTheme.surface, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(NibTheme.border))
+
+                if let url = request.acceptanceReviewURL {
+                    Button {
+                        webRoute = WebRoute(url: url, title: request.title)
+                    } label: {
+                        Label("Open acceptance review", systemImage: "globe")
+                    }
+                    .buttonStyle(NibPrimaryButtonStyle())
+                } else {
+                    ContentUnavailableView("Review link unavailable", systemImage: "link")
+                        .foregroundStyle(NibTheme.text)
+                }
+            }
+            .padding(20)
+        }
+        .background(NibTheme.background)
+        .navigationTitle("Acceptance")
         .navigationBarTitleDisplayMode(.inline)
     }
 

@@ -730,6 +730,10 @@ private struct NibMacRootView: View {
     }
 
     private func open(_ request: NibRequest) {
+        if let url = store.reviewURL(for: request), request.kind == "acceptance-review" {
+            NibMacRequestNavigator.shared.open(url)
+            return
+        }
         NibMacRequestNavigator.shared.open(requestID: request.id)
     }
 
@@ -967,6 +971,10 @@ private struct NibMenuBarRequestsView: View {
     }
 
     private func open(_ request: NibRequest) {
+        if let url = store.reviewURL(for: request), request.kind == "acceptance-review" {
+            navigator.open(url)
+            return
+        }
         navigator.open(requestID: request.id)
     }
 
@@ -1101,7 +1109,11 @@ private struct NibMacRequestDetailView: View {
                     }
                     Spacer()
                     Button {
-                        NibMacRequestNavigator.shared.open(requestID: request.id)
+                        if let url = store.reviewURL(for: request), request.kind == "acceptance-review" {
+                            NibMacRequestNavigator.shared.open(url)
+                        } else {
+                            NibMacRequestNavigator.shared.open(requestID: request.id)
+                        }
                     } label: {
                         Label("Open", systemImage: "arrow.up.right.square")
                     }

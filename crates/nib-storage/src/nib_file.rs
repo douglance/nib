@@ -1004,6 +1004,7 @@ impl NibFile {
 
     /// Validate that this is a valid .nib file
     fn validate_schema(&self) -> StorageResult<()> {
+        self.reject_acceptance_packet()?;
         // Check schema_version table exists and has a valid version
         let version: i32 = self
             .conn
@@ -1021,6 +1022,23 @@ impl NibFile {
             )));
         }
 
+        Ok(())
+    }
+
+    fn reject_acceptance_packet(&self) -> StorageResult<()> {
+        let is_acceptance: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='acceptance_packet'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
+        if is_acceptance {
+            return Err(StorageError::InvalidFormat(
+                "Acceptance packets cannot be opened as image .nib files; use `nib request export` and `nib request verify --offline --jwks` for acceptance packets".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -1891,6 +1909,37 @@ mod tests {
         assert_eq!(info.format, "png");
         assert_eq!(info.width, 1);
         assert_eq!(info.height, 1);
+    }
+
+    #[test]
+    fn opening_acceptance_packet_as_image_reports_explicit_unsupported_kind() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("acceptance.nib");
+        crate::acceptance::create_packet(
+            &path,
+            &serde_json::json!({
+                "contract":"nib.acceptance/v1",
+                "projectId":"project-1",
+                "subject":"checkout",
+                "gate":"ship",
+                "title":"Ship checkout",
+                "request":"Can this ship?",
+                "change":"Checkout flow",
+                "criteria":[{"id":"c1","text":"Flow passes"}],
+                "build":{"provider":"cloudflare","commit":"abc","previewUrl":"https://example.com","deployment":{"id":"dep","components":[]}},
+                "evidence":[{"id":"e1","kind":"test","label":"cargo test","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]
+            }),
+        )
+        .unwrap();
+
+        let error = NibFile::open(&path)
+            .err()
+            .expect("acceptance packet rejected");
+
+        assert!(error
+            .to_string()
+            .contains("Acceptance packets cannot be opened as image .nib files"));
+        assert!(!error.to_string().contains("no such table: image"));
     }
 
     #[test]

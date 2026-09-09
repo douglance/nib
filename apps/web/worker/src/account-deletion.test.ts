@@ -71,6 +71,10 @@ class FakeStatement {
   async first<T>(): Promise<T | null> {
     return this.sql.includes("stripe_customer_id") ? this.account as T : null;
   }
+
+  async all<T>(): Promise<{ results: T[] }> {
+    return { results: [] };
+  }
 }
 
 class FakeD1 {

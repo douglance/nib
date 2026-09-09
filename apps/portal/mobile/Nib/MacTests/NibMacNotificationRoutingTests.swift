@@ -48,4 +48,31 @@ struct NibMacNotificationRoutingTests {
 
         #expect(route == .openURL(url))
     }
+
+    @Test
+    func resolvesAcceptanceReviewToWebURLInsteadOfNativeResponse() throws {
+        let url = try #require(URL(string: "https://nibtool.com/acceptance/projects/project-1/reviews/review-1"))
+        let userInfo: [AnyHashable: Any] = [
+            "type": "acceptance-review",
+            "requestId": "review-1",
+            "projectId": "project-1",
+            "url": url.absoluteString,
+            "choices": [],
+            "allowText": false
+        ]
+
+        #expect(NibMacNotificationRoute.resolve(
+            actionIdentifier: UNNotificationDefaultActionIdentifier,
+            userInfo: userInfo
+        ) == .openURL(url))
+        #expect(NibMacNotificationRoute.resolve(
+            actionIdentifier: NibMacNotificationActions.choice0,
+            userInfo: userInfo
+        ) == .openURL(url))
+        #expect(NibMacNotificationRoute.resolve(
+            actionIdentifier: NibMacNotificationActions.text,
+            userInfo: userInfo,
+            text: "approve"
+        ) == .openURL(url))
+    }
 }

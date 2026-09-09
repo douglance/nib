@@ -41,6 +41,10 @@ struct NibRequest: Identifiable, Codable, Hashable, Sendable {
         var createdAt: String
     }
 
+    struct Metadata: Codable, Hashable, Sendable {
+        var reviewUrl: String?
+    }
+
     var id: String
     var kind: String
     var title: String
@@ -57,6 +61,7 @@ struct NibRequest: Identifiable, Codable, Hashable, Sendable {
     var updatedAt: String
     var attachments: [Attachment]
     var responses: [Response]
+    var metadata: Metadata?
 
     var isActive: Bool {
         ["open", "viewed", "stale"].contains(status)
@@ -71,6 +76,12 @@ struct NibRequest: Identifiable, Codable, Hashable, Sendable {
 
     var latestResponse: Response? {
         responses.first
+    }
+
+    var acceptanceReviewURL: URL? {
+        guard kind == "acceptance-review" else { return nil }
+        guard let reviewUrl = metadata?.reviewUrl else { return nil }
+        return URL(string: reviewUrl)
     }
 
     var visualReviewImage: Attachment? {

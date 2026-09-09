@@ -16,6 +16,7 @@
 //! - sessions: Active collaboration sessions
 //! - --mcp: Nib and Incurs Code Mode integration
 
+pub mod acceptance;
 pub mod annotation_json;
 pub mod args;
 pub mod auth;

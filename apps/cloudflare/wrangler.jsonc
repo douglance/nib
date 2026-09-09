@@ -4,6 +4,7 @@
   "workers_dev": false,
   "main": "src/index.ts",
   "compatibility_date": "2026-07-31",
+  "vars": { "NIB_ACCEPTANCE_ORIGIN": "https://nibtool.com" },
   "durable_objects": {
     "bindings": [
       { "name": "REQUESTS", "class_name": "AccountReviewHub" }

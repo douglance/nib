@@ -11,6 +11,25 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  acceptance:
+    name: Acceptance Workers and integrations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/cloudflare/package-lock.json
+      - run: npm ci --prefix apps/web
+      - run: npm ci --prefix apps/cloudflare
+      - run: npm run check --prefix apps/web
+      - run: npm test --prefix apps/web
+      - run: npm test --prefix apps/cloudflare
+      - run: node --test integrations/github-action/index.test.mjs integrations/cloudflare/test/cloudflare-preview.test.mjs
+
   check:
     name: Check
     runs-on: macos-14

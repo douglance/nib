@@ -125,8 +125,19 @@ async fn run_compat() -> Result<()> {
         Command::Capture(args) => cli::run_capture(&args),
         Command::Feedback(args) => cli::run_feedback(&args).await,
         Command::Review(args) => cli::run_review(&args).await,
+        Command::Request(RequestCommand::Get(args)) => cli::acceptance::run_request_get(&args),
         Command::Request(RequestCommand::Wait(args)) => {
-            cli::web_feedback::run_request_wait(&args).await
+            if args.project.is_some() {
+                cli::acceptance::run_request_wait(&args).await
+            } else {
+                cli::web_feedback::run_request_wait(&args).await
+            }
+        }
+        Command::Request(RequestCommand::Export(args)) => {
+            cli::acceptance::run_request_export(&args)
+        }
+        Command::Request(RequestCommand::Verify(args)) => {
+            cli::acceptance::run_request_verify(&args)
         }
         Command::Request(RequestCommand::Review(args)) => {
             cli::web_feedback::run_request_review(&args).await

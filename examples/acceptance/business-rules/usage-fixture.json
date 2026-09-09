@@ -1,0 +1,6 @@
+{
+  "accountId": "acct_acceptance_business_rules",
+  "networkIdentities": 3,
+  "expectedCents": 0,
+  "meteringQueue": "preview-only"
+}

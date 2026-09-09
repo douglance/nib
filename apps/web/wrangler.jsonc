@@ -22,9 +22,10 @@
   "routes": [
     { "pattern": "nibtool.com", "custom_domain": true }
   ],
-  "triggers": { "crons": ["17 3 * * *"] },
+  "triggers": { "crons": ["17 3 * * *", "* * * * *"] },
   "ai": { "binding": "AI" },
   "vars": {
+    "ACCEPTANCE_ENABLED": "false",
     "AI_GATEWAY_ID": "default",
     "ENVIRONMENT": "production",
     "PUBLIC_ORIGIN": "https://nibtool.com",
@@ -54,9 +55,17 @@
   ],
   "queues": {
     "producers": [
+      { "binding": "ACCEPTANCE_EVENTS", "queue": "nib-acceptance-events" },
       { "binding": "METERING_QUEUE", "queue": "nib-metering" }
     ],
     "consumers": [
+      {
+        "queue": "nib-acceptance-events",
+        "max_batch_size": 10,
+        "max_batch_timeout": 1,
+        "max_retries": 10,
+        "dead_letter_queue": "nib-acceptance-events-dlq"
+      },
       {
         "queue": "nib-metering",
         "max_batch_size": 25,
@@ -75,6 +84,7 @@
   ],
   "durable_objects": {
     "bindings": [
+      { "name": "ACCEPTANCE", "class_name": "AcceptanceCoordinator" },
       { "name": "TENANT_GATE", "class_name": "TenantGate" },
       { "name": "SCHEDULER", "class_name": "GenerationScheduler" },
       { "name": "TRIAL_GATE", "class_name": "TrialGate" }
@@ -97,6 +107,7 @@
     {
       "tag": "v3-workers-only",
       "deleted_classes": ["VisualizeContainer", "TopcoatContainer"]
-    }
+    },
+    { "tag": "v4-acceptance", "new_sqlite_classes": ["AcceptanceCoordinator"] }
   ]
 }

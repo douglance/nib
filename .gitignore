@@ -22,3 +22,8 @@ demo.*.png
 *.annotations.json
 *.nib-shm
 *.nib-wal
+
+# Acceptance preview journals and local verification artifacts
+/.tmp/
+/.nib/cloudflare-previews/
+/apps/web/.tmp-acceptance-runtime-*.mjs

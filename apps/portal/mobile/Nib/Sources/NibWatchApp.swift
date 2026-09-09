@@ -71,6 +71,7 @@ extension Notification.Name {
     static let nibWatchDeviceRegistrationFailed = Notification.Name("nibWatchDeviceRegistrationFailed")
     static let nibWatchOpenRequest = Notification.Name("nibWatchOpenRequest")
     static let nibWatchOpenProject = Notification.Name("nibWatchOpenProject")
+    static let nibWatchOpenWebURL = Notification.Name("nibWatchOpenWebURL")
     static let nibWatchRequestsChanged = Notification.Name("nibWatchRequestsChanged")
 }
 
@@ -217,6 +218,11 @@ struct WatchRequestListView: View {
                 NibWatchNotificationActions.clearPendingProjectId(projectId)
                 Task { await openProject(id: projectId) }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .nibWatchOpenWebURL)) { payload in
+                guard let url = payload.object as? URL else { return }
+                NibWatchNotificationActions.clearPendingWebURL(url)
+                notice = "Open this acceptance review on iPhone."
+            }
             .onReceive(NotificationCenter.default.publisher(for: .nibWatchRequestsChanged)) { _ in
                 Task { await load() }
             }
@@ -309,6 +315,10 @@ struct WatchRequestListView: View {
         }
         if let projectId = NibWatchNotificationActions.consumePendingProjectId() {
             await openProject(id: projectId)
+            return
+        }
+        if NibWatchNotificationActions.consumePendingWebURL() != nil {
+            notice = "Open this acceptance review on iPhone."
         }
     }
 
@@ -751,7 +761,9 @@ struct WatchRequestDetailView: View {
     var body: some View {
         ZStack {
             WatchTheme.background.ignoresSafeArea()
-            if request.kind == "visual-review" {
+            if request.kind == "acceptance-review" {
+                acceptanceReview
+            } else if request.kind == "visual-review" {
                 if inspectingImage, let imageURL = visualReviewImageURL {
                     WatchImageInspectionView(url: imageURL) {
                         inspectingImage = false
@@ -764,6 +776,31 @@ struct WatchRequestDetailView: View {
             }
         }
         .navigationTitle("Request")
+    }
+
+    private var acceptanceReview: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(request.title)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(WatchTheme.text)
+                Text(request.prompt)
+                    .font(.footnote)
+                    .foregroundStyle(WatchTheme.muted)
+                if let url = request.acceptanceReviewURL {
+                    WatchNoticeSurface(message: "Open this acceptance review on iPhone.")
+                    Text(url.absoluteString)
+                        .font(.caption2)
+                        .foregroundStyle(WatchTheme.muted)
+                        .lineLimit(4)
+                } else {
+                    WatchNoticeSurface(message: "Review link unavailable.")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 2)
+            .padding(.bottom, 8)
+        }
     }
 
     private var visualReview: some View {
@@ -1218,6 +1255,7 @@ enum NibWatchNotificationActions {
     static let text = NibNotificationIdentifiers.text
     private static let pendingRequestKey = "nib.pendingNotification.requestId"
     private static let pendingProjectKey = "nib.pendingNotification.projectId"
+    private static let pendingURLKey = "nib.pendingNotification.url"
 
     static func register() {
         UNUserNotificationCenter.current().setNotificationCategories(NibNotificationContract.categories())
@@ -1247,8 +1285,9 @@ enum NibWatchNotificationActions {
             NotificationCenter.default.post(name: .nibWatchOpenRequest, object: requestId)
         case .openProject:
             await openPayload(payload)
-        case .openURL:
-            break
+        case .openURL(let url):
+            storePendingWebURL(url)
+            NotificationCenter.default.post(name: .nibWatchOpenWebURL, object: url)
         case .respondChoice(let requestId, let choiceIndex):
             let deviceId = payload["deviceId"] as? String ?? "watch-notification"
             let isVisualReview = payload["type"] as? String == "visual-review"
@@ -1304,12 +1343,21 @@ enum NibWatchNotificationActions {
         consumePendingString(pendingProjectKey)
     }
 
+    static func consumePendingWebURL() -> URL? {
+        guard let value = consumePendingString(pendingURLKey) else { return nil }
+        return URL(string: value)
+    }
+
     static func clearPendingRequestId(_ requestId: String) {
         clearPendingString(pendingRequestKey, matching: requestId)
     }
 
     static func clearPendingProjectId(_ projectId: String) {
         clearPendingString(pendingProjectKey, matching: projectId)
+    }
+
+    static func clearPendingWebURL(_ url: URL) {
+        clearPendingString(pendingURLKey, matching: url.absoluteString)
     }
 
     static func handleRemoteNotification(userInfo: [AnyHashable: Any]) async -> Bool {
@@ -1394,6 +1442,10 @@ enum NibWatchNotificationActions {
 
     private static func storePendingProjectId(_ projectId: String) {
         UserDefaults.standard.set(projectId, forKey: pendingProjectKey)
+    }
+
+    private static func storePendingWebURL(_ url: URL) {
+        UserDefaults.standard.set(url.absoluteString, forKey: pendingURLKey)
     }
 
     private static func consumePendingString(_ key: String) -> String? {

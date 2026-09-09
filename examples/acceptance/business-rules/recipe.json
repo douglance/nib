@@ -1,0 +1,68 @@
+{
+  "contract": "nib.cloudflare-preview/v1",
+  "projectId": "00000000-0000-4000-8000-000000000202",
+  "subject": "billing-business-rules",
+  "gate": "pilot-business-rules",
+  "title": "Billing business-rule acceptance",
+  "request": "Confirm that usage metering and trial limits behave correctly in the Cloudflare preview.",
+  "change": "Deploys the Nib public Worker, site Worker, and review service into an isolated acceptance preview stack with seeded billing data.",
+  "revision": "replace-with-ci-commit-sha",
+  "build": {
+    "commit": "replace-with-ci-commit-sha",
+    "repository": {
+      "id": "nib",
+      "owner": "douglance",
+      "name": "nib"
+    }
+  },
+  "criteria": [
+    {
+      "id": "trial-limit",
+      "text": "A seeded trial account stops billable generation after the configured trial network identity limit.",
+      "verification": "Run the business-rules smoke against the preview URL and attach the test output."
+    },
+    {
+      "id": "metering-queue",
+      "text": "Metering events enqueue only on the preview queue and never reference production queue names.",
+      "verification": "Attach queue assertion output from the isolated preview stack."
+    }
+  ],
+  "cloudflare": {
+    "wranglerPackage": "apps/web",
+    "components": [
+      {
+        "name": "nib-site",
+        "config": "apps/web/site/wrangler.jsonc",
+        "cwd": "apps/web/site"
+      },
+      {
+        "name": "nib-global",
+        "config": "apps/cloudflare/wrangler.jsonc",
+        "cwd": "apps/cloudflare"
+      },
+      {
+        "name": "nib",
+        "primary": true,
+        "preview": "isolated-stack",
+        "config": "apps/web/wrangler.jsonc",
+        "cwd": "apps/web",
+        "seed": {
+          "d1": [
+            {
+              "binding": "DB",
+              "file": "examples/acceptance/business-rules/seed.sql"
+            }
+          ],
+          "r2": [
+            {
+              "binding": "ARTIFACTS",
+              "key": "acceptance/business-rules/usage-fixture.json",
+              "file": "examples/acceptance/business-rules/usage-fixture.json"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "evidence": []
+}

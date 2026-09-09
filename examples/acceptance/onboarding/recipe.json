@@ -1,0 +1,52 @@
+{
+  "contract": "nib.cloudflare-preview/v1",
+  "projectId": "00000000-0000-4000-8000-000000000101",
+  "subject": "onboarding-review-delivery",
+  "gate": "pilot-onboarding",
+  "title": "Onboarding review delivery",
+  "request": "Confirm that a new customer can receive and open a Nib review request from the Cloudflare preview.",
+  "change": "Deploys the account review Worker into an isolated acceptance preview stack.",
+  "revision": "replace-with-ci-commit-sha",
+  "build": {
+    "commit": "replace-with-ci-commit-sha",
+    "repository": {
+      "id": "nib",
+      "owner": "douglance",
+      "name": "nib"
+    }
+  },
+  "criteria": [
+    {
+      "id": "onboarding-email",
+      "text": "The preview creates a customer review request without production notification bindings.",
+      "verification": "Run the onboarding smoke against the preview URL and attach the JSON result."
+    },
+    {
+      "id": "review-open",
+      "text": "The review page opens from the preview URL and shows the seeded request.",
+      "verification": "Attach browser evidence captured from the preview URL."
+    }
+  ],
+  "cloudflare": {
+    "wranglerPackage": "apps/cloudflare",
+    "components": [
+      {
+        "name": "nib-global",
+        "primary": true,
+        "preview": "isolated-stack",
+        "config": "apps/cloudflare/wrangler.jsonc",
+        "cwd": "apps/cloudflare",
+        "seed": {
+          "r2": [
+            {
+              "binding": "MEDIA",
+              "key": "acceptance/onboarding/request.json",
+              "file": "examples/acceptance/onboarding/review-request.json"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "evidence": []
+}

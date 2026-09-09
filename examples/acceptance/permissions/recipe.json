@@ -1,0 +1,66 @@
+{
+  "contract": "nib.cloudflare-preview/v1",
+  "projectId": "00000000-0000-4000-8000-000000000303",
+  "subject": "acceptance-project-permissions",
+  "gate": "pilot-permissions",
+  "title": "Acceptance project permission gate",
+  "request": "Confirm that project admins, reviewers, viewers, and automation tokens receive only their expected acceptance permissions.",
+  "change": "Deploys the Nib public Worker and service-binding dependencies into an isolated preview stack with seeded team, project, reviewer, viewer, and automation-token fixtures.",
+  "revision": "replace-with-ci-commit-sha",
+  "build": {
+    "commit": "replace-with-ci-commit-sha",
+    "repository": {
+      "id": "nib",
+      "owner": "douglance",
+      "name": "nib"
+    }
+  },
+  "criteria": [
+    {
+      "id": "admin-manage",
+      "text": "A project admin can manage members and publish acceptance manifests.",
+      "verification": "Run the permissions smoke with the seeded admin account."
+    },
+    {
+      "id": "viewer-readonly",
+      "text": "A viewer can read the review but cannot publish, vote, invalidate, or manage credentials.",
+      "verification": "Run the permissions smoke with the seeded viewer account."
+    },
+    {
+      "id": "automation-scope",
+      "text": "A project automation credential can publish and verify only for the seeded project scopes.",
+      "verification": "Run the permissions smoke with the seeded automation token."
+    }
+  ],
+  "cloudflare": {
+    "wranglerPackage": "apps/web",
+    "components": [
+      {
+        "name": "nib-site",
+        "config": "apps/web/site/wrangler.jsonc",
+        "cwd": "apps/web/site"
+      },
+      {
+        "name": "nib-global",
+        "config": "apps/cloudflare/wrangler.jsonc",
+        "cwd": "apps/cloudflare"
+      },
+      {
+        "name": "nib",
+        "primary": true,
+        "preview": "isolated-stack",
+        "config": "apps/web/wrangler.jsonc",
+        "cwd": "apps/web",
+        "seed": {
+          "d1": [
+            {
+              "binding": "DB",
+              "file": "examples/acceptance/permissions/seed.sql"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "evidence": []
+}

@@ -1,0 +1,72 @@
+name: Nib Acceptance
+description: Link, publish, or verify a Nib acceptance review from GitHub Actions.
+inputs:
+  api-origin:
+    description: Nib API origin.
+    required: false
+    default: https://nibtool.com
+  mode:
+    description: link, publish, or verify.
+    required: true
+  project-id:
+    description: Nib acceptance project id.
+    required: true
+  setup-token:
+    description: One-time Nib project admin token for link mode. Remove this secret after linking.
+    required: false
+  installation-id:
+    description: GitHub App installation id for link mode.
+    required: false
+  repository-id:
+    description: GitHub repository id for link mode. Defaults to GITHUB_REPOSITORY_ID.
+    required: false
+  repository:
+    description: GitHub repository owner/name for link mode. Defaults to GITHUB_REPOSITORY.
+    required: false
+  allowed-workflows:
+    description: Comma- or newline-separated workflow refs allowed to publish or verify. Defaults to GITHUB_WORKFLOW_REF in link mode.
+    required: false
+  gates:
+    description: Comma- or newline-separated acceptance gates this integration may update.
+    required: false
+  manifest-path:
+    description: Path to the acceptance manifest JSON for publish and verify modes.
+    required: false
+  review-id:
+    description: Review id for verify mode.
+    required: false
+  manifest-hash:
+    description: Expected manifest hash for verify mode.
+    required: false
+  commit:
+    description: Expected commit SHA for verify mode.
+    required: false
+  cloudflare-state-path:
+    description: Path to the Cloudflare preview state JSON for Cloudflare provider manifests.
+    required: false
+  cloudflare-account-id:
+    description: Cloudflare account id. Defaults to CLOUDFLARE_ACCOUNT_ID.
+    required: false
+  cloudflare-api-token:
+    description: Cloudflare API token. Defaults to CLOUDFLARE_API_TOKEN.
+    required: false
+outputs:
+  review-id:
+    description: Published or verified review id.
+  review-url:
+    description: Nib review URL.
+  manifest-hash:
+    description: Acceptance manifest hash.
+  state:
+    description: Review state.
+  satisfied:
+    description: Whether verify mode satisfied the gate.
+  receipt:
+    description: Signed acceptance receipt when present.
+  repository-id:
+    description: Linked GitHub repository id in link mode.
+  repository:
+    description: Linked GitHub repository owner/name in link mode.
+runs:
+  using: node24
+  main: index.mjs

@@ -1,5 +1,6 @@
 import { expiredSessionCookie, type NibAccount } from "./account-auth";
 import type { Env } from "./types";
+import { assertCanDeleteAccount, removeAccountMemberships } from "./acceptance/teams";
 
 export async function deleteAccount(
   request: Request,
@@ -7,6 +8,16 @@ export async function deleteAccount(
   env: Env,
 ): Promise<Response> {
   try {
+    try {
+      await assertCanDeleteAccount(env.DB, account.id);
+    } catch (error) {
+      if (error instanceof Error && error.message === "acceptance_last_owner") {
+        return Response.json({ error: "acceptance_last_owner", message: "Transfer ownership or archive your team before deleting your account." }, {
+          status: 409, headers: { "cache-control": "private, no-store" },
+        });
+      }
+      throw error;
+    }
     const stored = await env.DB.prepare(
       "SELECT email, stripe_customer_id FROM accounts WHERE account_id = ?",
     ).bind(account.id).first<{ email: string; stripe_customer_id: string | null }>();
@@ -27,6 +38,7 @@ export async function deleteAccount(
       deleteR2Prefix(env.ARTIFACTS, `references/${account.id}/`),
     ]);
 
+    await removeAccountMemberships(env.DB, account.id);
     await env.DB.batch([
       env.DB.prepare("INSERT OR IGNORE INTO deleted_accounts(account_id, deleted_at) VALUES (?, unixepoch())").bind(account.id),
       env.DB.prepare("DELETE FROM usage_ledger WHERE account_id = ?").bind(account.id),

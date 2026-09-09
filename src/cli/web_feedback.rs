@@ -91,11 +91,18 @@ pub async fn run(args: &FeedbackArgs) -> Result<(), WebFeedbackError> {
 }
 
 pub(crate) async fn run_value(args: &FeedbackArgs) -> Result<Value, WebFeedbackError> {
-    let published = publish_feedback_request(
-        &args.file,
-        args.message.as_deref(),
-        args.annotations.as_deref(),
-    )?;
+    if args.packet.is_some() {
+        return super::acceptance::run_feedback_packet_value(args)
+            .await
+            .map_err(|error| WebFeedbackError::before_publish(error.to_string()));
+    }
+    let file = args.file.as_deref().ok_or_else(|| {
+        WebFeedbackError::before_publish(
+            "feedback requires an image, .nib, MP4, PDF, or --packet PATH",
+        )
+    })?;
+    let published =
+        publish_feedback_request(file, args.message.as_deref(), args.annotations.as_deref())?;
     print_wait_handle(&published);
     finish_published_value(args, published).await
 }
@@ -190,7 +197,9 @@ pub(crate) async fn review_request_value(args: &RequestReviewArgs) -> crate::cor
     .map_err(crate::core::NibError::Other)?;
 
     let feedback = FeedbackArgs {
-        file: downloaded.file.clone(),
+        file: Some(downloaded.file.clone()),
+        packet: None,
+        project: None,
         message: Some(downloaded.prompt.clone()),
         annotations: None,
         timeout: 0,

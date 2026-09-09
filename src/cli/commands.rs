@@ -2505,6 +2505,11 @@ pub fn run_export(args: &super::args::ExportArgs) -> Result<()> {
             args.file.display()
         )));
     }
+    if crate::storage::open_packet(&args.file).is_ok() {
+        return Err(crate::core::NibError::Other(
+            "Acceptance packets cannot be exported as images; use `nib request export REVIEW_ID --project PROJECT_ID --output packet.nib`".into(),
+        ));
+    }
 
     // Open the .nib file
     let nib = NibFile::open(&args.file)?;
@@ -2643,7 +2648,9 @@ pub async fn run_generate(args: &super::args::GenerateArgs, format: &OutputForma
 
     if args.feedback {
         let feedback_args = super::args::FeedbackArgs {
-            file: out_path.clone(),
+            file: Some(out_path.clone()),
+            packet: None,
+            project: None,
             message: args.message.clone(),
             annotations: None,
             timeout: 0,
@@ -2765,16 +2772,19 @@ pub(crate) async fn run_native_feedback_value(
 ) -> Result<serde_json::Value> {
     use super::annotation_json;
 
+    let file = args.file.as_ref().ok_or_else(|| {
+        crate::core::NibError::Other("native feedback requires a visual file".into())
+    })?;
+
     // Verify file exists
-    if !args.file.exists() {
+    if !file.exists() {
         return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
+            crate::core::StorageError::NotFound(format!("File not found: {}", file.display())),
         ));
     }
 
     // Determine if this is an image or .nib file
-    let extension = args
-        .file
+    let extension = file
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
@@ -2787,11 +2797,11 @@ pub(crate) async fn run_native_feedback_value(
     if !is_image && !is_nib && !is_video && !is_pdf {
         return Err(crate::core::NibError::Other(format!(
             "Unsupported file type: {}. Expected .nib, PDF, MP4/H.264, or image (.png, .jpg, .webp)",
-            args.file.display()
+            file.display()
         )));
     }
     if is_video {
-        crate::media::inspect_media(&args.file)?;
+        crate::media::inspect_media(file)?;
         if args.annotations.is_some() {
             return Err(crate::core::NibError::Other(
                 "E_VIDEO_PROMPT_ANNOTATIONS_UNSUPPORTED: add video annotations in the paused-frame reviewer so each annotation has a timeMs anchor"
@@ -2800,7 +2810,7 @@ pub(crate) async fn run_native_feedback_value(
         }
     }
     if is_pdf {
-        crate::pdf::inspect_pdf(&args.file).map_err(crate::core::NibError::Other)?;
+        crate::pdf::inspect_pdf(file).map_err(crate::core::NibError::Other)?;
         if args.annotations.is_some() {
             return Err(crate::core::NibError::Other(
                 "E_PDF_PROMPT_ANNOTATIONS_UNSUPPORTED: add PDF annotations in the page reviewer so each annotation has a pageIndex anchor"
@@ -2812,9 +2822,9 @@ pub(crate) async fn run_native_feedback_value(
     // Images use their canonical .nib session. Videos and PDFs use the media path
     // itself as the deterministic collaboration-session identity.
     let session_path = if is_image {
-        let nib_path = args.file.with_extension("nib");
+        let nib_path = file.with_extension("nib");
         if !nib_path.exists() {
-            let image_data = std::fs::read(&args.file)?;
+            let image_data = std::fs::read(file)?;
             let img = image::load_from_memory(&image_data).map_err(|e| {
                 crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
             })?;
@@ -2823,10 +2833,10 @@ pub(crate) async fn run_native_feedback_value(
         }
         nib_path
     } else if is_nib {
-        let nib = NibFile::open_editable(&args.file)?;
+        let nib = NibFile::open_editable(file)?;
         nib.path().to_path_buf()
     } else {
-        args.file.clone()
+        file.clone()
     };
 
     let timeout_duration = feedback_timeout(args.timeout);

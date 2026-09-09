@@ -32,8 +32,16 @@ import { agentApiResponse } from "./agent-api";
 import { mcpResponse } from "./mcp";
 import { syncCloudflareUsage } from "./cloudflare-usage";
 import type { Env as Bindings, MeterEvent } from "./types";
+import { handleAcceptanceRequest } from "./acceptance/api";
+import { AcceptanceCoordinator } from "./acceptance/coordinator";
+import type { AcceptanceEvent } from "./acceptance/contracts";
+import { consumeAcceptanceEvents } from "./acceptance/delivery";
+import { deliverQueuedCustomerWebhooks } from "./acceptance/integrations";
+import { reconcileGitHubAcceptanceChecks } from "./acceptance/github";
+import { sendPendingInvitationEmails } from "./acceptance/teams";
 
 export {
+  AcceptanceCoordinator,
   GenerationScheduler,
   GenerationWorkflow,
   TenantGate,
@@ -53,6 +61,8 @@ export default {
       return handleStripeWebhook(request, env);
     const authResponse = await handleAccountAuth(request, env);
     if (authResponse) return authResponse;
+    const acceptanceResponse = await handleAcceptanceRequest(request, env);
+    if (acceptanceResponse) return acceptanceResponse;
     if (
       url.pathname === "/.well-known/apple-app-site-association" &&
       request.method === "GET"
@@ -131,11 +141,20 @@ export default {
     return new Response("Not found", { status: 404 });
   },
 
-  async queue(batch: MessageBatch<MeterEvent>, env: Bindings): Promise<void> {
-    await consumeMetering(batch, env);
+  async queue(batch: MessageBatch<MeterEvent | AcceptanceEvent>, env: Bindings): Promise<void> {
+    if (batch.messages.some(message => "type" in message.body && message.body.type === "acceptance.changed")) {
+      await consumeAcceptanceEvents(batch as MessageBatch<AcceptanceEvent>, env);
+    } else await consumeMetering(batch as MessageBatch<MeterEvent>, env);
   },
 
   async scheduled(_event: ScheduledController, env: Bindings): Promise<void> {
+    if (_event.cron === "* * * * *") {
+      await Promise.all([
+        deliverQueuedCustomerWebhooks(env), reconcileGitHubAcceptanceChecks(env),
+        ...(env.ACCEPTANCE_ENABLED === "true" ? [sendPendingInvitationEmails(env)] : []),
+      ]);
+      return;
+    }
     await runMaintenance(env);
     await purgeDeletedAccountArtifacts(env);
     try {
@@ -144,7 +163,7 @@ export default {
       console.error("Cloudflare Billable Usage sync failed", error);
     }
   },
-} satisfies ExportedHandler<Bindings, MeterEvent>;
+} satisfies ExportedHandler<Bindings, MeterEvent | AcceptanceEvent>;
 
 function withoutTrustedContext(request: Request): Request {
   const headers = new Headers(request.headers);

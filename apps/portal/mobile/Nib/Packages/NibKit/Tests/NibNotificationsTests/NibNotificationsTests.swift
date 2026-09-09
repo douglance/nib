@@ -43,6 +43,35 @@ struct NibNotificationsTests {
         ) == .openURL(projectURL))
     }
 
+    @Test("Acceptance review notifications open the authorized web flow and never resolve response routes")
+    func acceptanceReviewOpensWebFlow() throws {
+        let reviewURL = try #require(URL(string: "https://nibtool.com/acceptance/projects/project-1/reviews/review-1"))
+        let payload: [AnyHashable: Any] = [
+            "nib": [
+                "type": "acceptance-review",
+                "requestId": "review-1",
+                "projectId": "project-1",
+                "url": reviewURL.absoluteString,
+                "choices": [],
+                "allowText": false
+            ]
+        ]
+
+        for action in [
+            UNNotificationDefaultActionIdentifier,
+            NibNotificationIdentifiers.open,
+            NibNotificationIdentifiers.choice0,
+            NibNotificationIdentifiers.choice1,
+            NibNotificationIdentifiers.text
+        ] {
+            #expect(NibNotificationContract.resolve(
+                actionIdentifier: action,
+                userInfo: payload,
+                text: "approve"
+            ) == .openURL(reviewURL))
+        }
+    }
+
     @Test("Resolution and idempotency identities are deterministic")
     func resolution() {
         let resolution: [AnyHashable: Any] = [

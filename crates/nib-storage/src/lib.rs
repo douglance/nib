@@ -6,6 +6,7 @@
 //! - PNG export with embedded QML
 //! - SQLite index for search
 
+pub mod acceptance;
 pub mod convert;
 pub mod export;
 pub mod index;
@@ -13,6 +14,13 @@ pub mod nib_file;
 pub mod qml_file;
 pub mod sessions;
 
+pub use acceptance::{
+    append_asset_bytes, append_decision, append_review_snapshot, append_signature, canonical_json,
+    create_packet, manifest_hash, open_packet, verify_packet_offline,
+    verify_packet_offline_with_jwks, AcceptanceAsset, AcceptanceAssetBytes, AcceptanceDecision,
+    AcceptancePacket, AcceptanceReviewSnapshot, AcceptanceSignature, OfflineVerification,
+    ACCEPTANCE_CONTRACT, ACCEPTANCE_PACKET_KIND,
+};
 pub use convert::{
     annotation_to_sidecar, load_sidecar_annotations, save_sidecar_annotations,
     sidecar_path_for_image, sidecar_to_annotation,

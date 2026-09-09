@@ -100,7 +100,9 @@ final class NibNotificationContentViewController: UIViewController, @preconcurre
         _ response: UNNotificationResponse,
         completionHandler completion: @escaping (UNNotificationContentExtensionResponseOption) -> Void
     ) {
+        let choices = payload["choices"] as? [String] ?? []
         guard let choiceIndex = choiceIndex(for: response.actionIdentifier),
+              choices.indices.contains(choiceIndex),
               let url = responseURL
         else {
             completion(.dismissAndForwardAction)

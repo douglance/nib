@@ -107,7 +107,7 @@ export async function verifiedAccount(request: Request, env: Env): Promise<NibAc
 
 export async function handleAccountAuth(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
-  if (url.pathname === "/auth/sign-in" && request.method === "GET") return html(signInPage());
+  if (url.pathname === "/auth/sign-in" && request.method === "GET") return html(signInPage(safeAuthReturnTo(url.searchParams.get("returnTo"))));
   if (url.pathname === "/auth/verify" && request.method === "GET") return html(verificationPage(url));
   if (url.pathname === "/api/auth/challenges" && request.method === "POST") return createChallenge(request, env);
 
@@ -273,15 +273,27 @@ async function exchangeChallenge(request: Request, env: Env, id: string): Promis
   }, 200, headers);
 }
 
-function signInPage(): string {
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Sign in to Nib</title>${styles()}<main><p class="wordmark">Nib</p><h1>Sign in to Nib</h1><p>Enter your email. We’ll send you a secure sign-in link.</p><form id="form"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required><button>Send sign-in link</button><p id="status" role="status"></p></form></main><script>${signInScript()}</script></html>`;
+export function safeAuthReturnTo(value: string | null): string {
+  if (!value || !value.startsWith("/") || value.startsWith("//") || /[\\<>\u0000-\u001f\u007f]/.test(value)) return "/account";
+  try {
+    const url = new URL(value, ORIGIN);
+    if (url.origin !== ORIGIN) return "/account";
+    if (url.pathname === "/acceptance" || url.pathname.startsWith("/acceptance/") || url.pathname.startsWith("/r/") || url.pathname === "/account") {
+      return url.pathname + url.search + url.hash;
+    }
+  } catch { /* Invalid destinations use the account page. */ }
+  return "/account";
 }
 
-function signInScript(): string {
+function signInPage(returnTo: string): string {
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Sign in to Nib</title>${styles()}<main><p class="wordmark">Nib</p><h1>Sign in to Nib</h1><p>Enter your email. We’ll send you a secure sign-in link.</p><form id="form"><label for="email">Email</label><input id="email" name="email" type="email" autocomplete="email" required><button>Send sign-in link</button><p id="status" role="status"></p></form></main><script>${signInScript(returnTo)}</script></html>`;
+}
+
+function signInScript(returnTo: string): string {
   return `const form=document.querySelector('#form'),status=document.querySelector('#status');
 const b64=b=>btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,'');
 form.addEventListener('submit',async e=>{e.preventDefault();const button=form.querySelector('button');button.disabled=true;status.textContent='Sending sign-in link…';const bytes=crypto.getRandomValues(new Uint8Array(32)),verifier=b64(bytes),digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier)),pkceChallenge=b64(digest);const response=await fetch('/api/auth/challenges',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:form.email.value,pkceChallenge,platform:'web',deviceName:'Nib web'})});if(!response.ok){status.textContent='Nib could not send the link. Try again.';button.disabled=false;return}const data=await response.json();sessionStorage.setItem('nib.auth',JSON.stringify({id:data.challengeId,verifier}));status.textContent='Check your email. This page will finish signing you in.';poll(data.challengeId,verifier)});
-async function poll(id,verifier){const response=await fetch('/api/auth/challenges/'+encodeURIComponent(id)+'/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({verifier})});if(response.status===202){setTimeout(()=>poll(id,verifier),1500);return}if(response.ok){sessionStorage.removeItem('nib.auth');location.assign('/account');return}status.textContent='This sign-in request expired. Send a new link.';form.querySelector('button').disabled=false}
+async function poll(id,verifier){const response=await fetch('/api/auth/challenges/'+encodeURIComponent(id)+'/token',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({verifier})});if(response.status===202){setTimeout(()=>poll(id,verifier),1500);return}if(response.ok){sessionStorage.removeItem('nib.auth');location.assign(${JSON.stringify(returnTo)});return}status.textContent='This sign-in request expired. Send a new link.';form.querySelector('button').disabled=false}
 const pending=sessionStorage.getItem('nib.auth');if(pending){try{const value=JSON.parse(pending);status.textContent='Waiting for your sign-in link…';poll(value.id,value.verifier)}catch{sessionStorage.removeItem('nib.auth')}}`;
 }
 
