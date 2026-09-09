@@ -58,6 +58,9 @@
               "file": "examples/acceptance/permissions/seed.sql"
             }
           ]
+        },
+        "vars": {
+          "ACCEPTANCE_ENABLED": "true"
         }
       }
     ]

@@ -128,6 +128,7 @@ async function writeJson(filePath, value) {
 
 function printJson(value) {
   console.log(JSON.stringify(value, null, 2));
+  if (value?.satisfied === false) process.exitCode = 1;
 }
 
 function required(value, name) {

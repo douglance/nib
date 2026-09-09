@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import {
   FakeCloudflareApi,
   LiveCloudflareApi,
@@ -12,6 +14,20 @@ import {
   verifyAcceptanceGateFromManifest,
   verifyCloudflareManifest,
 } from "../src/cloudflare-preview.mjs";
+
+test("CLI returns a failing exit status for an unsatisfied provider verification", async () => {
+  const root = await fixtureRoot();
+  const manifestPath = path.join(root, "invalid-manifest.json");
+  const statePath = path.join(root, "invalid-state.json");
+  await writeFile(manifestPath, "{}");
+  await writeFile(statePath, "{}");
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../bin/nib-cloudflare-preview.mjs", import.meta.url)),
+    "verify-cloudflare", "--manifest", manifestPath, "--state", statePath], {
+    encoding: "utf8", env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: "test-account", CLOUDFLARE_API_TOKEN: "test-unused-token" },
+  });
+  assert.equal(result.status, 1);
+  assert.deepEqual(JSON.parse(result.stdout), { satisfied: false, reason: "manifest has no Cloudflare deployment components" });
+});
 
 test("dry-run plan is deterministic and does not call Cloudflare", async () => {
   const root = await fixtureRoot();
@@ -27,12 +43,16 @@ test("dry-run plan is deterministic and does not call Cloudflare", async () => {
 
 test("isolated stack rewrites service bindings and stateful resources", async () => {
   const root = await fixtureRoot();
-  const plan = await planCloudflarePreview(recipeFor(root), { root });
+  const recipe = recipeFor(root);
+  recipe.cloudflare.components.find((component) => component.primary).vars = { ACCEPTANCE_ENABLED: "true" };
+  const plan = await planCloudflarePreview(recipe, { root });
   const primary = plan.components.find((component) => component.role === "primary");
   const dependency = plan.components.find((component) => component.baseName === "review-worker");
   assert.equal(primary.generatedConfig.services[0].service, dependency.name);
   assert.equal(primary.generatedConfig.workers_dev, true);
   assert.equal(primary.generatedConfig.preview_urls, false);
+  assert.equal(primary.generatedConfig.vars.ENVIRONMENT, "production");
+  assert.equal(primary.generatedConfig.vars.ACCEPTANCE_ENABLED, "true");
   assert.equal(dependency.generatedConfig.workers_dev, false);
   assert.equal(dependency.generatedConfig.preview_urls, false);
   assert.equal(dependency.generatedConfig.vars.PUBLIC_ORIGIN, primary.generatedConfig.vars.PUBLIC_ORIGIN);
@@ -608,6 +628,7 @@ async function fixtureRoot() {
     name: "app-worker",
     main: "index.ts",
     compatibility_date: "2026-08-02",
+    vars: { ENVIRONMENT: "production" },
     preview_urls: true,
     routes: [{ pattern: "example.com", custom_domain: true }],
     send_email: [{ name: "EMAIL", allowed_sender_addresses: ["login@example.com"] }],

@@ -60,6 +60,9 @@
               "file": "examples/acceptance/business-rules/usage-fixture.json"
             }
           ]
+        },
+        "vars": {
+          "ACCEPTANCE_ENABLED": "true"
         }
       }
     ]

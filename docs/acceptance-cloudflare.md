@@ -32,7 +32,7 @@ Required environment:
 - `CLOUDFLARE_API_TOKEN`
 - `NIB_ACCEPTANCE_TOKEN` for publishing, verifying, or invalidating an acceptance review
 
-Recipe fields are under `examples/acceptance/*/recipe.json`. CI should replace `revision` and `build.commit` with the commit being reviewed before planning or deploying.
+Recipe fields are under `examples/acceptance/*/recipe.json`. Use `examples/acceptance/prepare.mjs` as described in [Acceptance examples](acceptance-examples.md) to set the receiving project, repository identity, commit, and revision before planning or deploying. Component `vars` may explicitly override non-secret configuration. The adapter preserves the configured `ENVIRONMENT`, so production-only business rules still run against the isolated resources.
 
 ## Dry-Run Inspect
 
@@ -88,7 +88,7 @@ node integrations/cloudflare/bin/nib-cloudflare-preview.mjs publish \
 
 The script posts `{manifest}` to `/api/acceptance/v1/projects/:projectId/reviews` with an idempotency key. It reads `NIB_ACCEPTANCE_TOKEN` unless `--token` or `--token-env` is supplied.
 
-The CLI verify command requires the manifest and the matching local state file so it can refresh the Cloudflare provider attestation before calling the acceptance API:
+Unsatisfied CLI verification returns exit status 1. The CLI verify command requires the manifest and the matching local state file so it can refresh the Cloudflare provider attestation before calling the acceptance API:
 
 ```sh
 node integrations/cloudflare/bin/nib-cloudflare-preview.mjs verify-acceptance \
@@ -139,8 +139,8 @@ Teardown deletes preview Workers first, deletes only R2 fixture objects recorded
 
 ## Pilot Recipes
 
-- `examples/acceptance/onboarding/recipe.json` deploys the account review Worker with an R2 review-request fixture.
+- `examples/acceptance/onboarding/recipe.json` deploys the authenticated public Worker and private dependencies with an R2 review-request fixture.
 - `examples/acceptance/business-rules/recipe.json` deploys `nib`, `nib-site`, and `nib-global` with D1/R2 fixtures for trial and metering behavior.
-- `examples/acceptance/permissions/recipe.json` deploys the public Worker stack with seeded acceptance team, project, role, and credential fixtures.
+- `examples/acceptance/permissions/recipe.json` deploys the public Worker stack with seeded acceptance team, project, role fixtures; create scoped credentials through the API.
 
 These recipes are pilot inputs. Fixture-based tests prove adapter behavior only; they do not prove a live Cloudflare deployment or customer acceptance.

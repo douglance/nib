@@ -6,11 +6,11 @@ Implementation validation for `feat/acceptance-v1`, September 9, 2026. The imple
 
 | Area | Result | Durable execution |
 | --- | --- | --- |
-| Web Worker suite, including real workerd integration | 31 files, 215 tests passed | `01a08460-6b4a-7320-9562-f512ec5b1e23` |
+| Web Worker suite, including real workerd integration | 31 files, 215 tests passed | `01a0853a-a3c1-70d1-8c75-8bab525b7c89` |
 | Existing review service and acceptance notification routing | 7 files, 38 tests passed | `01a0843a-867a-7200-bdee-5a43c0bbd89f` |
-| GitHub Action, including ownership-proof link mode | 7 tests passed | `01a08460-6c79-7ec2-b2b8-b025263adc47` |
-| Cloudflare adapter, including migration-before-seed, service-binding verification, provider attestation, and teardown retry | 21 tests passed | `01a0845f-c4dc-7010-a7c8-b9b2b40432f0` |
-| Web TypeScript | Passed | `01a08460-6bed-7471-a8e6-a987638720f2` |
+| GitHub Action, including ownership-proof link mode | 7 tests passed | `01a0853a-a448-73b3-a2ab-d73458a77b3b` |
+| Cloudflare adapter, including migration-before-seed, private routing, CLI failure exit, provider attestation, and teardown retry | 22 tests passed | `01a0853a-a448-73b3-a2ab-d73458a77b3b` |
+| Web TypeScript | Passed | `01a0853a-a3c1-70d1-8c75-8bbd48967624` |
 | Real Chrome desktop/mobile acceptance flow | Passed; screenshots inspected | `01a0843e-f63b-7470-829e-2cee5035071a` |
 | Rust CLI compatibility entrypoint against workerd | Export passed; offline historical receipt passed; superseded live gate failed with exit 1 | `01a08443-11b9-7c42-812d-65f84b84c47d` |
 | Default Rust CLI entrypoint against workerd | Export and historical receipt verification passed; superseded live gate failed with exit 1 | `01a08446-d4b0-7192-8d3a-ef5013649979` |
@@ -19,9 +19,13 @@ Implementation validation for `feat/acceptance-v1`, September 9, 2026. The imple
 | Rust Clippy with all features and warnings denied | Passed | `01a08427-a466-72e0-9a63-9ea2f7c8649e` |
 | Rust formatting | Passed | `01a08427-f25e-78b1-a493-d0ee1c2811b7` |
 | Site asset build | Passed with an explicit local C linker path | `01a0842f-0fad-7e83-83b3-3c7feb4bc4ef` |
-| Public Worker deployment bundle | Wrangler dry run passed | `01a08430-da00-7db3-94e7-e9da884ad468` |
+| Public Worker deployment bundle | Wrangler dry run passed after repository-revocation fixes | `01a08465-3041-7942-931f-d77a443618dd` |
 | Review-service deployment bundle | Wrangler dry run passed | `01a08430-da6a-7363-88ba-6fcc5ce4b3cf` |
 | iOS and watchOS builds, macOS tests | Passed without code signing | `01a08404-f770-77c2-8c15-e45b1ffaf7be` |
+
+Three full-stack application examples passed in `01a0853c-1845-7261-8991-2e645d2dbbd5`: authenticated request routing to the real review service, production trial network limits against local storage, a real local metering-queue send matched to the ledger, and permissions including viewer invalidation denial. These runs use mocked Stripe/AI, local email, unconfigured APNs, and a test site shell. They do not establish hosted preview or notification delivery. [Reproduction and deployment inputs](acceptance-examples.md) distinguish the local runner from the three Cloudflare recipes.
+
+All three recipes prepared and planned with concrete identifiers, private dependency Workers, and preserved production business-rule configuration in `01a0853c-1842-7c91-b1ef-446a8ba241a6`. Seed schema/replay validation passed in `01a0846b-eea4-7f52-b190-8edebf870d4f`. Actual Wrangler local migrations and both seeds passed in `01a0846d-0393-7552-b829-7d40fd3cbac3`, `01a0846d-3321-7210-a5c2-10027aa90f13`, and `01a0846d-5697-7f13-9c70-88d548aaa444`; queries confirmed five accounts, one team, four team members, one project, and three project roles.
 
 The workerd scenario executes the HTTP API with D1, R2, and SQLite Durable Objects. It covers teams, project access, invitations, evidence upload and retrieval, concurrent approvals for quorum two, signed receipts, membership revocation, same-subject revision supersession, a comment/publication race, and persistence after Durable Object eviction. Its build provider is `external`; Cloudflare control-plane behavior is tested separately with mocked API and command responses.
 
@@ -52,6 +56,6 @@ The acceptance Worker and adapter checks are included in `.github/workflows/ci.y
 
 ## Deployment boundary
 
-No production deployment, GitHub App installation, real email/APNs delivery, or physical-device acceptance was performed. GitHub account discovery reports the default `douglance` token invalid (`01a08424-2b6c-7173-9af0-0f2173b2487c`); Wrangler account discovery fails to read macOS Keychain with exit 36 (`01a08424-2bc3-7373-9c88-f4e5f2da9dc3`).
+No production deployment, GitHub App installation, real email/APNs delivery, or physical-device acceptance was performed. GitHub account discovery reports the default `douglance` token invalid (`01a0853a-a4a7-7312-8e95-d4e4b14d98c6`); Wrangler account discovery fails to read macOS Keychain with exit 36 (`01a0853a-a4bc-7f12-b76d-67cd1eadc0f1`).
 
 `ACCEPTANCE_ENABLED` remains `false`. The production rollout still requires working credentials, migrations and bindings, receipt keys, GitHub App configuration, and the real multi-account pilot described in [Acceptance Operations](acceptance-operations.md). The day-30 completion audit is [Acceptance day-30 audit](acceptance-30d-audit.md); production App registration, three published examples, new-user review-without-help onboarding, and commercial outcomes have not been validated by local tests.

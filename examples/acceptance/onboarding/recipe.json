@@ -5,7 +5,7 @@
   "gate": "pilot-onboarding",
   "title": "Onboarding review delivery",
   "request": "Confirm that a new customer can receive and open a Nib review request from the Cloudflare preview.",
-  "change": "Deploys the account review Worker into an isolated acceptance preview stack.",
+  "change": "Deploys the authenticated public Worker with private site and review service dependencies into an isolated acceptance preview stack.",
   "revision": "replace-with-ci-commit-sha",
   "build": {
     "commit": "replace-with-ci-commit-sha",
@@ -28,22 +28,35 @@
     }
   ],
   "cloudflare": {
-    "wranglerPackage": "apps/cloudflare",
+    "wranglerPackage": "apps/web",
     "components": [
       {
+        "name": "nib-site",
+        "config": "apps/web/site/wrangler.jsonc",
+        "cwd": "apps/web/site"
+      },
+      {
         "name": "nib-global",
+        "config": "apps/cloudflare/wrangler.jsonc",
+        "cwd": "apps/cloudflare"
+      },
+      {
+        "name": "nib",
         "primary": true,
         "preview": "isolated-stack",
-        "config": "apps/cloudflare/wrangler.jsonc",
-        "cwd": "apps/cloudflare",
+        "config": "apps/web/wrangler.jsonc",
+        "cwd": "apps/web",
         "seed": {
           "r2": [
             {
-              "binding": "MEDIA",
+              "binding": "ARTIFACTS",
               "key": "acceptance/onboarding/request.json",
               "file": "examples/acceptance/onboarding/review-request.json"
             }
           ]
+        },
+        "vars": {
+          "ACCEPTANCE_ENABLED": "true"
         }
       }
     ]

@@ -679,6 +679,7 @@ async function loadComponents(recipe, root, stackSlug) {
   return Promise.all(components.map(async (component, index) => {
     const configPath = path.resolve(root, requireString(component.config, `cloudflare.components[${index}].config`));
     const config = parseJsonc(await readFile(configPath, "utf8"));
+    if (component.vars) config.vars = { ...(config.vars ?? {}), ...component.vars };
     const cwd = path.resolve(root, component.cwd ?? path.dirname(component.config));
     const baseName = component.name ?? config.name;
     const assetState = await hashComponentAssets(root, config, component, configPath);
@@ -812,7 +813,7 @@ function rewriteConfig(component, componentByBaseName, stackSlug, primaryPreview
   const publicOrigin = previewUrlTemplate(primaryPreviewName, stackSlug);
   config.vars = {
     ...(config.vars ?? {}),
-    ENVIRONMENT: "acceptance-preview",
+    ENVIRONMENT: config.vars?.ENVIRONMENT ?? "acceptance-preview",
     PUBLIC_ORIGIN: publicOrigin,
     NIB_ACCEPTANCE_ORIGIN: publicOrigin,
     ACCEPTANCE_PREVIEW_STACK: stackSlug,

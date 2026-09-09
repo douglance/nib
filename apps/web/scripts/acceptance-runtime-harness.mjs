@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createLocalJWKSet, jwtVerify } from "jose";
 import esbuild from "esbuild";
 import { Miniflare } from "miniflare";
@@ -32,21 +32,10 @@ async function main() {
 }
 
 export async function runScenario(options = {}) {
-  const tempRoot = options.tempRoot || await mkdtemp(path.join(tmpdir(), "nib-acceptance-runtime-"));
   const runId = options.runId || crypto.randomUUID();
-  const keep = options.keep === true;
-  let mf;
+  const runtimeState = await createAcceptanceRuntime({ ...options, runId });
+  const { mf, runtime, accounts, dispose } = runtimeState;
   try {
-    const privateJwk = await generateSigningJwk();
-    const bundlePath = await buildAcceptanceBundle(tempRoot);
-    mf = await createMiniflare(bundlePath, tempRoot, privateJwk);
-    await applyD1Migrations(mf);
-
-    const runtime = new RuntimeClient(mf, null, `runtime-${runId}`);
-    await runtime.expectHealth();
-    const bindingDebug = await runtime.bindingDebug();
-    assert(bindingDebug.dbPrepareType === "function", `DB binding is not D1: ${JSON.stringify(bindingDebug)}`);
-    const accounts = await seedAccounts(mf);
     const owner = runtime.as(accounts.owner.token);
     const reviewerA = runtime.as(accounts.reviewerA.token);
     const reviewerB = runtime.as(accounts.reviewerB.token);
@@ -222,8 +211,7 @@ export async function runScenario(options = {}) {
       r2: { evidenceStatus: storedEvidence.status, evidenceSha256: evidence.sha256 },
     };
   } finally {
-    if (mf) await mf.dispose();
-    if (!keep && !options.tempRoot) await rm(tempRoot, { recursive: true, force: true });
+    await dispose();
   }
 }
 
@@ -270,16 +258,9 @@ async function serveHarness(port) {
   }, null, 2));
 }
 
-async function createRuntime(options = {}) {
-  const tempRoot = options.tempRoot || await mkdtemp(path.join(tmpdir(), "nib-acceptance-runtime-"));
-  const runId = options.runId || crypto.randomUUID();
-  const privateJwk = await generateSigningJwk();
-  const bundlePath = await buildAcceptanceBundle(tempRoot);
-  const mf = await createMiniflare(bundlePath, tempRoot, privateJwk);
-  await applyD1Migrations(mf);
-  const accounts = await seedAccounts(mf);
-  const runtime = new RuntimeClient(mf, null, `runtime-${runId}`);
-  await runtime.expectHealth();
+export async function createRuntime(options = {}) {
+  const runtimeState = await createAcceptanceRuntime(options);
+  const { mf, runtime, accounts, tempRoot } = runtimeState;
   const owner = runtime.as(accounts.owner.token);
   const team = await owner.post("/teams", { name: "Runtime Browser Team" }, "browser-team-create", 201);
   const teamId = team.team.id;
@@ -311,16 +292,68 @@ async function createRuntime(options = {}) {
     accounts,
   };
   process.once("SIGINT", async () => {
-    await mf.dispose();
-    if (!options.keep && !options.tempRoot) await rm(tempRoot, { recursive: true, force: true });
+    await runtimeState.dispose();
     process.exit(130);
   });
   process.once("SIGTERM", async () => {
-    await mf.dispose();
-    if (!options.keep && !options.tempRoot) await rm(tempRoot, { recursive: true, force: true });
+    await runtimeState.dispose();
     process.exit(143);
   });
-  return { mf, state, tempRoot };
+  return { mf, state, tempRoot, dispose: runtimeState.dispose };
+}
+
+export async function createAcceptanceRuntime(options = {}) {
+  const tempRoot = options.tempRoot || await mkdtemp(path.join(tmpdir(), "nib-acceptance-runtime-"));
+  const runId = options.runId || crypto.randomUUID();
+  const privateJwk = await generateSigningJwk();
+  const bundlePath = await buildAcceptanceBundle(tempRoot);
+  const mf = await createMiniflare(bundlePath, tempRoot, privateJwk);
+  await applyD1Migrations(mf);
+  const accounts = await seedAccounts(mf);
+  const runtime = new RuntimeClient(mf, null, `runtime-${runId}`);
+  await runtime.expectHealth();
+  const bindingDebug = await runtime.bindingDebug();
+  assert(bindingDebug.dbPrepareType === "function", `DB binding is not D1: ${JSON.stringify(bindingDebug)}`);
+  let disposed = false;
+  const dispose = async () => {
+    if (disposed) return;
+    disposed = true;
+    await mf.dispose();
+    if (!options.keep && !options.tempRoot) await rm(tempRoot, { recursive: true, force: true });
+  };
+  return { mf, runtime, accounts, tempRoot, dispose };
+}
+
+
+export async function createFullWorkerRuntime(options = {}) {
+  const tempRoot = options.tempRoot || await mkdtemp(path.join(tmpdir(), "nib-full-worker-runtime-"));
+  let mf;
+  let disposed = false;
+  const dispose = async () => {
+    if (disposed) return;
+    disposed = true;
+    try { await mf?.dispose(); }
+    finally {
+      if (!options.keep && !options.tempRoot) await rm(tempRoot, { recursive: true, force: true });
+    }
+  };
+  try {
+    const runId = options.runId || crypto.randomUUID();
+    const privateJwk = await generateSigningJwk();
+    const bundles = await buildFullWorkerBundles(tempRoot);
+    mf = await createFullWorkerMiniflare(bundles, tempRoot, privateJwk);
+    await applyD1Migrations(mf);
+    await (await mf.getD1Database("DB")).prepare("CREATE TABLE runtime_queue_sends(queue_name TEXT NOT NULL, body_json TEXT NOT NULL)").run();
+    const accounts = await seedAccounts(mf);
+    const runtime = new RuntimeClient(mf, null, `runtime-${runId}`);
+    await runtime.expectHealth();
+    const bindingDebug = await runtime.bindingDebug();
+    assert(bindingDebug.dbPrepareType === "function", `DB binding is not D1: ${JSON.stringify(bindingDebug)}`);
+    return { mf, runtime, accounts, tempRoot, dispose };
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
 }
 
 async function proxyToRuntime(mf, request, response) {
@@ -345,6 +378,100 @@ async function proxyToRuntime(mf, request, response) {
   workerResponse.headers.forEach((value, name) => { responseHeaders[name] = value; });
   response.writeHead(workerResponse.status, responseHeaders);
   response.end(Buffer.from(await workerResponse.arrayBuffer()));
+}
+
+async function buildFullWorkerBundles(tempRoot) {
+  const publicWorker = path.join(tempRoot, "public-worker-entry.mjs");
+  const reviewWorker = path.join(tempRoot, "review-worker-entry.mjs");
+  const siteWorker = path.join(tempRoot, "site-worker-entry.mjs");
+
+  await esbuild.build({
+    stdin: {
+      contents: `
+        globalThis.fetch = async (input, init) => {
+          const url = new URL(typeof input === "string" ? input : input.url);
+          if (url.origin === "https://api.stripe.com") {
+            if (url.pathname === "/v1/checkout/sessions") {
+              return Response.json({ id: "cs_runtime", url: "https://checkout.stripe.test/session/cs_runtime" });
+            }
+            if (url.pathname === "/v1/billing_portal/sessions") {
+              return Response.json({ id: "bps_runtime", url: "https://billing.stripe.test/session/bps_runtime" });
+            }
+            if (url.pathname.startsWith("/v1/subscriptions/")) {
+              return Response.json({ id: "sub_runtime", status: "active" });
+            }
+            if (url.pathname === "/v1/billing/meter_events") {
+              return Response.json({ id: "meter_runtime", created: true });
+            }
+          }
+          if (url.origin === "https://image.runtime.test") {
+            return new Response(Uint8Array.from([137,80,78,71,13,10,26,10]), { headers: { "content-type": "image/png" } });
+          }
+          throw new Error("Unexpected external request in local example: " + url.origin + url.pathname);
+        };
+        import worker, { AcceptanceCoordinator, GenerationScheduler, GenerationWorkflow, TenantGate, TrialGate } from "./worker/src/index.ts";
+        export { AcceptanceCoordinator, GenerationScheduler, GenerationWorkflow, TenantGate, TrialGate };
+        function runtimeEnv(env) {
+          return {
+            ...env,
+            AI: env.AI || { async run() { return { image: "https://image.runtime.test/generated.png" }; } },
+            METERING_QUEUE: {
+              async send(body, options) {
+                await env.METERING_QUEUE.send(body, options);
+                await env.DB.prepare("INSERT INTO runtime_queue_sends(queue_name, body_json) VALUES (?, ?)")
+                  .bind("nib-runtime-metering", JSON.stringify(body)).run();
+              },
+            },
+            GENERATE_WORKFLOW: env.GENERATE_WORKFLOW || { async create(input) { return { id: input?.id || crypto.randomUUID(), status: "queued" }; } },
+          };
+        }
+        export default {
+          fetch(request, env, ctx) {
+            if (new URL(request.url).pathname === "/__runtime_bindings") {
+              const candidate = runtimeEnv(env);
+              return Response.json({
+                dbType: typeof env.DB,
+                dbPrepareType: typeof env.DB?.prepare,
+                aiRunType: typeof candidate.AI?.run,
+                workflowCreateType: typeof candidate.GENERATE_WORKFLOW?.create,
+                bindingKeys: Object.keys(candidate).sort(),
+              });
+            }
+            return worker.fetch(request, runtimeEnv(env), ctx);
+          },
+          queue(batch, env) { return worker.queue?.(batch, runtimeEnv(env)); },
+          scheduled(event, env, ctx) { return worker.scheduled?.(event, runtimeEnv(env), ctx); },
+        };
+      `,
+      resolveDir: WEB_ROOT, sourcefile: "public-worker-entry.ts", loader: "ts",
+    },
+    bundle: true, format: "esm", platform: "browser", target: "es2024", outfile: publicWorker,
+    external: ["cloudflare:workers", "node:*"], conditions: ["workerd", "worker", "browser"], logLevel: "silent",
+    plugins: [cloudflareEmailPlugin()],
+  });
+
+  await esbuild.build({
+    stdin: {
+      contents: `
+        import worker, { AccountReviewHub } from "../cloudflare/src/index.ts";
+        export { AccountReviewHub };
+        export default worker;
+      `,
+      resolveDir: WEB_ROOT, sourcefile: "review-worker-entry.ts", loader: "ts",
+    },
+    bundle: true, format: "esm", platform: "browser", target: "es2024", outfile: reviewWorker,
+    external: ["cloudflare:workers"], conditions: ["workerd", "worker", "browser"], logLevel: "silent",
+  });
+
+  await esbuild.build({
+    stdin: {
+      contents: `export default { fetch() { return new Response("<!doctype html><title>Nib Test Site</title><main>Nib Test Site</main>", { headers: { "content-type": "text/html; charset=utf-8" } }); } };`,
+      resolveDir: WEB_ROOT, sourcefile: "site-worker-entry.ts", loader: "ts",
+    },
+    bundle: true, format: "esm", platform: "browser", target: "es2024", outfile: siteWorker, logLevel: "silent",
+  });
+
+  return { publicWorker, reviewWorker, siteWorker };
 }
 
 async function buildAcceptanceBundle(tempRoot) {
@@ -377,27 +504,32 @@ async function buildAcceptanceBundle(tempRoot) {
     target: "es2024",
     outfile,
     external: ["cloudflare:workers"],
-    plugins: [{
-      name: "acceptance-runtime-email",
-      setup(build) {
-        build.onResolve({ filter: /^cloudflare:email$/ }, () => ({
-          path: "acceptance-runtime-email",
-          namespace: "acceptance-runtime",
-        }));
-        build.onLoad({ filter: /.*/, namespace: "acceptance-runtime" }, () => ({
-          contents: "export class EmailMessage { constructor(from, to, raw) { this.from = from; this.to = to; this.raw = raw; } }",
-          loader: "js",
-        }));
-      },
-    }],
+    plugins: [cloudflareEmailPlugin()],
     conditions: ["workerd", "worker", "browser"],
     logLevel: "silent",
   });
   return outfile;
 }
 
-async function createMiniflare(bundlePath, tempRoot, privateJwk) {
-  const bindings = {
+
+function cloudflareEmailPlugin() {
+  return {
+    name: "acceptance-runtime-email",
+    setup(build) {
+      build.onResolve({ filter: /^cloudflare:email$/ }, () => ({
+        path: "acceptance-runtime-email",
+        namespace: "acceptance-runtime",
+      }));
+      build.onLoad({ filter: /.*/, namespace: "acceptance-runtime" }, () => ({
+        contents: "export class EmailMessage { constructor(from, to, raw) { this.from = from; this.to = to; this.raw = raw; } }",
+        loader: "js",
+      }));
+    },
+  };
+}
+
+function baseRuntimeBindings(privateJwk) {
+  return {
     ACCEPTANCE_ENABLED: "true",
     ACCEPTANCE_SIGNING_JWK: JSON.stringify(privateJwk),
     ACCEPTANCE_SIGNING_KEY_ID: "runtime-acceptance-key",
@@ -415,6 +547,11 @@ async function createMiniflare(bundlePath, tempRoot, privateJwk) {
     STRIPE_USAGE_EVENT_NAME: "visualize_usage_cents",
     STRIPE_PORTAL_CONFIGURATION_ID: "bpc_runtime",
   };
+}
+
+
+async function createMiniflare(bundlePath, tempRoot, privateJwk) {
+  const bindings = baseRuntimeBindings(privateJwk);
   return new Miniflare({
     name: "nib",
     scriptPath: bundlePath,
@@ -443,6 +580,61 @@ async function createMiniflare(bundlePath, tempRoot, privateJwk) {
     resourcePersistencePath: path.join(tempRoot, "miniflare"),
     bindings,
     queueConsumers: undefined,
+  });
+}
+
+
+async function createFullWorkerMiniflare(bundles, tempRoot, privateJwk) {
+  const bindings = { ...baseRuntimeBindings(privateJwk), ENVIRONMENT: "production" };
+  return new Miniflare({
+    rootPath: REPO_ROOT,
+    compatibilityDate: "2026-08-02",
+    compatibilityFlags: ["nodejs_compat"],
+    unsafeInspectDurableObjects: true,
+    resourcePersistencePath: path.join(tempRoot, "miniflare"),
+    workers: [
+      {
+        name: "nib",
+        scriptPath: bundles.publicWorker,
+        compatibilityDate: "2026-08-02",
+        compatibilityFlags: ["nodejs_compat"],
+        modules: true,
+        modulesRoot: tempRoot,
+        durableObjects: {
+          ACCEPTANCE: { className: "AcceptanceCoordinator", useSQLite: true },
+          TENANT_GATE: { className: "TenantGate", useSQLite: true },
+          SCHEDULER: { className: "GenerationScheduler", useSQLite: true },
+          TRIAL_GATE: { className: "TrialGate", useSQLite: true },
+        },
+        d1Databases: { DB: "nib-runtime-db" },
+        r2Buckets: { ARTIFACTS: "nib-runtime-artifacts" },
+        queueProducers: {
+          ACCEPTANCE_EVENTS: { queueName: "nib-runtime-acceptance-events" },
+          METERING_QUEUE: { queueName: "nib-runtime-metering" },
+        },
+        serviceBindings: { REVIEW: "nib-global", SITE: "nib-site", ASSETS: "nib-site" },
+        email: { send_email: [{ name: "EMAIL", allowed_sender_addresses: ["login@nibtool.com"] }] },
+        bindings,
+      },
+      {
+        name: "nib-global",
+        scriptPath: bundles.reviewWorker,
+        compatibilityDate: "2026-08-02",
+        compatibilityFlags: ["nodejs_compat"],
+        modules: true,
+        modulesRoot: tempRoot,
+        durableObjects: { REQUESTS: { className: "AccountReviewHub", useSQLite: true } },
+        r2Buckets: { MEDIA: "nib-runtime-media" },
+        bindings: { NIB_ACCEPTANCE_ORIGIN: ORIGIN },
+      },
+      {
+        name: "nib-site",
+        scriptPath: bundles.siteWorker,
+        compatibilityDate: "2026-08-02",
+        modules: true,
+        modulesRoot: tempRoot,
+      },
+    ],
   });
 }
 
@@ -496,7 +688,21 @@ async function seedAccounts(mf) {
   return rows;
 }
 
-class RuntimeClient {
+async function dispatchWithTimeout(mf, input, init, timeoutMs = 15_000) {
+  let timer;
+  try {
+    return await Promise.race([
+      mf.dispatchFetch(input, init),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Miniflare request timed out: ${typeof input === "string" ? input : input.url}`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export class RuntimeClient {
   constructor(mf, token = null, idempotencyPrefix = "runtime") {
     this.mf = mf;
     this.token = token;
@@ -508,18 +714,18 @@ class RuntimeClient {
   }
 
   async expectHealth() {
-    const response = await this.mf.dispatchFetch(`${ORIGIN}/health`);
+    const response = await dispatchWithTimeout(this.mf, `${ORIGIN}/health`);
     assert(response.status === 200, `health returned ${response.status}`);
   }
 
   async bindingDebug() {
-    const response = await this.mf.dispatchFetch(`${ORIGIN}/__runtime_bindings`);
+    const response = await dispatchWithTimeout(this.mf, `${ORIGIN}/__runtime_bindings`);
     assert(response.status === 200, `binding debug returned ${response.status}`);
     return await response.json();
   }
 
   async jwks() {
-    const response = await this.mf.dispatchFetch(`${ORIGIN}/.well-known/acceptance-jwks.json`);
+    const response = await dispatchWithTimeout(this.mf, `${ORIGIN}/.well-known/acceptance-jwks.json`);
     assert(response.status === 200, `jwks returned ${response.status}`);
     return await response.json();
   }
@@ -541,7 +747,7 @@ class RuntimeClient {
     if (this.token) headers.set("authorization", `Bearer ${this.token}`);
     if (body !== undefined) headers.set("content-type", "application/json");
     if (key) headers.set("idempotency-key", `${this.idempotencyPrefix}-${key}`);
-    const response = await this.mf.dispatchFetch(`${ORIGIN}/api/acceptance/v1${pathname}`, {
+    const response = await dispatchWithTimeout(this.mf, `${ORIGIN}/api/acceptance/v1${pathname}`, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -566,7 +772,7 @@ class RuntimeClient {
       "idempotency-key": `${this.idempotencyPrefix}-${key}`,
       "x-nib-filename": filename,
     });
-    const response = await this.mf.dispatchFetch(`${ORIGIN}/api/acceptance/v1/projects/${projectId}/evidence`, {
+    const response = await dispatchWithTimeout(this.mf, `${ORIGIN}/api/acceptance/v1/projects/${projectId}/evidence`, {
       method: "POST",
       headers,
       body,
@@ -577,43 +783,44 @@ class RuntimeClient {
   }
 
   async fetchEvidence(projectId, digest) {
-    return await this.mf.dispatchFetch(`${ORIGIN}/api/acceptance/v1/projects/${projectId}/evidence/${digest}`, {
+    return await dispatchWithTimeout(this.mf, `${ORIGIN}/api/acceptance/v1/projects/${projectId}/evidence/${digest}`, {
       headers: { authorization: `Bearer ${this.token}` },
     });
   }
 }
 
-function manifest(projectId, overrides = {}) {
+export function manifest(projectId, overrides = {}) {
+  const deployment = overrides.deployment || {
+    id: overrides.deploymentId || "deploy-runtime",
+    components: overrides.components || [{ name: "worker", versionId: overrides.versionId || "worker-runtime", kind: "worker" }],
+    configSha256: overrides.configSha256 || "0".repeat(64),
+    assetsSha256: overrides.assetsSha256 || "1".repeat(64),
+  };
   return {
     contract: "nib.acceptance/v1",
     projectId,
-    subject: PROJECT_SUBJECT,
-    gate: PROJECT_GATE,
+    subject: overrides.subject || PROJECT_SUBJECT,
+    gate: overrides.gate || PROJECT_GATE,
     title: overrides.title || "Runtime acceptance",
     request: overrides.request || "Ship the runtime acceptance packet",
-    change: "Exercise team API, Durable Object review state, D1 metadata, and R2 evidence together.",
-    criteria: [
+    change: overrides.change || "Exercise team API, Durable Object review state, D1 metadata, and R2 evidence together.",
+    criteria: overrides.criteria || [
       { id: "criterion-a", text: "First reviewer confirms the runtime behavior." },
       { id: "criterion-b", text: "Second reviewer confirms the runtime behavior." },
     ],
     build: {
-      repository: { id: "nib", owner: "douglance", name: "nib" },
+      repository: overrides.repository || { id: "nib", owner: "douglance", name: "nib" },
       commit: overrides.commit || "abc1230000000000000000000000000000000000",
-      provider: "external",
-      previewUrl: "https://preview.nib.test/runtime",
-      deployment: {
-        id: overrides.deploymentId || "deploy-runtime",
-        components: [{ name: "worker", versionId: overrides.versionId || "worker-runtime", kind: "worker" }],
-        configSha256: "0".repeat(64),
-        assetsSha256: "1".repeat(64),
-      },
-      assumptions: ["Runtime validation uses local Miniflare resources."],
+      provider: overrides.provider || "external",
+      previewUrl: overrides.previewUrl || "https://preview.nib.test/runtime",
+      deployment,
+      assumptions: overrides.assumptions || ["Runtime validation uses local Miniflare resources."],
     },
     evidence: overrides.evidence || [],
   };
 }
 
-async function doStorageSummary(mf, projectId) {
+export async function doStorageSummary(mf, projectId) {
   const storage = await mf.unsafeGetDurableObjectStorage("nib", "AcceptanceCoordinator", { name: `project:${projectId}` });
   const reviews = await storage.exec("SELECT id, subject, gate, revision, record FROM acceptance_reviews ORDER BY revision");
   const outbox = await storage.exec("SELECT id, sequence, payload FROM acceptance_outbox ORDER BY sequence");
@@ -626,7 +833,7 @@ async function doStorageSummary(mf, projectId) {
   };
 }
 
-async function d1Summary(mf) {
+export async function d1Summary(mf) {
   const db = await mf.getD1Database("DB");
   const tables = {};
   for (const table of ["accounts", "auth_sessions", "acceptance_teams", "acceptance_team_members", "acceptance_projects", "acceptance_project_members", "acceptance_evidence"]) {
@@ -636,7 +843,7 @@ async function d1Summary(mf) {
   return tables;
 }
 
-async function verifyReceipt(receipt, jwks, manifestHash) {
+export async function verifyReceipt(receipt, jwks, manifestHash) {
   const result = await jwtVerify(receipt, createLocalJWKSet(jwks), {
     issuer: "nib.acceptance",
     audience: "nib.acceptance/receipt",
@@ -677,7 +884,7 @@ function escapeHtml(value) {
   })[char]);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error) => {
     console.error(error.stack || String(error));
     process.exitCode = 1;

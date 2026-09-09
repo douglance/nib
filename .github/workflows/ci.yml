@@ -28,7 +28,8 @@ jobs:
       - run: npm run check --prefix apps/web
       - run: npm test --prefix apps/web
       - run: npm test --prefix apps/cloudflare
-      - run: node --test integrations/github-action/index.test.mjs integrations/cloudflare/test/cloudflare-preview.test.mjs
+      - run: node --test integrations/github-action/index.test.mjs integrations/cloudflare/test/cloudflare-preview.test.mjs examples/acceptance/*.test.mjs
+      - run: node apps/web/scripts/acceptance-example-runner.mjs --example all
 
   check:
     name: Check
