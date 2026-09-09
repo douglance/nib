@@ -29,7 +29,14 @@ test("isolated stack rewrites service bindings and stateful resources", async ()
   const root = await fixtureRoot();
   const plan = await planCloudflarePreview(recipeFor(root), { root });
   const primary = plan.components.find((component) => component.role === "primary");
-  assert.equal(primary.generatedConfig.services[0].service, plan.components.find((component) => component.baseName === "review-worker").name);
+  const dependency = plan.components.find((component) => component.baseName === "review-worker");
+  assert.equal(primary.generatedConfig.services[0].service, dependency.name);
+  assert.equal(primary.generatedConfig.workers_dev, true);
+  assert.equal(primary.generatedConfig.preview_urls, false);
+  assert.equal(dependency.generatedConfig.workers_dev, false);
+  assert.equal(dependency.generatedConfig.preview_urls, false);
+  assert.equal(dependency.generatedConfig.vars.PUBLIC_ORIGIN, primary.generatedConfig.vars.PUBLIC_ORIGIN);
+  assert.equal(dependency.generatedConfig.vars.NIB_ACCEPTANCE_ORIGIN, primary.generatedConfig.vars.PUBLIC_ORIGIN);
   assert.match(primary.generatedConfig.d1_databases[0].database_name, /-acc-/);
   assert.match(primary.generatedConfig.r2_buckets[0].bucket_name, /-acc-/);
   assert.match(primary.generatedConfig.queues.producers[0].queue, /-acc-/);
@@ -64,6 +71,31 @@ test("live apply refuses to overwrite an existing preview Worker script", async 
   assert.equal(api.calls.some((call) => call[0] === "resourceExists"), false);
 });
 
+test("live apply requires owned D1 id proof before migrations", async () => {
+  const root = await fixtureRoot();
+  const stateDir = path.join(root, ".state");
+  const plan = await planCloudflarePreview(recipeFor(root), { root, stateDir });
+  await mkdir(plan.stateDir, { recursive: true });
+  const d1Create = plan.operations.find((operation) => operation.action === "create" && operation.type === "d1");
+  await writeFile(path.join(plan.stateDir, "journal.json"), `${JSON.stringify({
+    contract: "nib.cloudflare-preview/v1",
+    stackSlug: plan.stackSlug,
+    planSha256: plan.planSha256,
+    operations: [{
+      key: d1Create.idempotencyKey,
+      target: d1Create.name,
+      action: "create",
+      type: "d1",
+      status: "succeeded",
+      result: { type: "d1", name: d1Create.name },
+    }],
+  }, null, 2)}\n`);
+  await assert.rejects(
+    deployCloudflarePreview(recipeFor(root), { root, stateDir, dryRun: false, allowLive: true, api: new FakeCloudflareApi() }),
+    /owned database id proof/
+  );
+});
+
 test("live apply creates, seeds, deploys, and emits an exact manifest", async () => {
   const root = await fixtureRoot();
   const api = new FakeCloudflareApi();
@@ -76,10 +108,22 @@ test("live apply creates, seeds, deploys, and emits an exact manifest", async ()
   assert.match(result.manifest.build.previewUrl, /\.fake-subdomain\.workers\.dev$/);
   assert.equal(result.plan.components[0].generatedConfig.vars.PUBLIC_ORIGIN, result.manifest.build.previewUrl);
   assert.equal(result.plan.components[0].generatedConfig.vars.NIB_ACCEPTANCE_ORIGIN, result.manifest.build.previewUrl);
+  assert.equal(result.plan.components[0].generatedConfig.preview_urls, false);
+  assert.equal(result.plan.components[1].generatedConfig.workers_dev, false);
+  assert.equal(result.plan.components[1].generatedConfig.preview_urls, false);
+  assert.equal(result.plan.components[1].generatedConfig.vars.NIB_ACCEPTANCE_ORIGIN, result.manifest.build.previewUrl);
   assert.equal("resources" in result.manifest.build.deployment, false);
   assert.equal(result.state.resources.length > 0, true);
   assert.match(result.plan.components[0].generatedConfig.d1_databases[0].database_id, /^d1-/);
-  assert.equal(api.calls.some((call) => call[0] === "seedResource"), true);
+  const d1CreateIndex = api.calls.findIndex((call) => call[0] === "createResource" && call[1] === "d1");
+  const migrateIndex = api.calls.findIndex((call) => call[0] === "applyD1Migrations");
+  const seedIndex = api.calls.findIndex((call) => call[0] === "seedResource" && call[1] === "d1");
+  assert.equal(d1CreateIndex >= 0, true);
+  assert.equal(migrateIndex > d1CreateIndex, true);
+  assert.equal(seedIndex > migrateIndex, true);
+  const journal = JSON.parse(await readFile(result.state.journalPath, "utf8"));
+  const migrationEntry = journal.operations.find((operation) => operation.action === "migrate" && operation.type === "d1");
+  assert.equal(migrationEntry.result.databaseId, result.state.resources.find((resource) => resource.type === "d1").id);
   assert.deepEqual(
     api.calls.filter((call) => call[0] === "deployWorker").map((call) => call[1]),
     [result.plan.components[1].name, result.plan.components[0].name]
@@ -207,6 +251,37 @@ test("LiveCloudflareApi detects existing R2 buckets from API list shape", async 
   });
   assert.equal(await api.resourceExists("r2", "bucket-acc-owned"), true);
   assert.equal(await api.resourceExists("r2", "other-bucket"), false);
+});
+
+test("LiveCloudflareApi applies D1 migrations through generated config", async () => {
+  const runnerCalls = [];
+  const api = new LiveCloudflareApi({
+    accountId: "acct",
+    apiToken: "token",
+    runner: { run: async (argv) => runnerCalls.push(argv) },
+    fetchImpl: async () => jsonResponse({ success: true, result: {} }),
+  });
+  await api.applyD1Migrations("db-acc-owned", {
+    generatedConfigPath: "/tmp/generated.wrangler.jsonc",
+    migrationsDir: "/repo/apps/web/worker/migrations",
+    migrationsSha256: "abc",
+  });
+  assert.deepEqual(runnerCalls, [["d1", "migrations", "apply", "db-acc-owned", "--remote", "--config", "/tmp/generated.wrangler.jsonc"]]);
+});
+
+test("LiveCloudflareApi seeds D1 through generated config", async () => {
+  const runnerCalls = [];
+  const api = new LiveCloudflareApi({
+    accountId: "acct",
+    apiToken: "token",
+    runner: { run: async (argv) => runnerCalls.push(argv) },
+    fetchImpl: async () => jsonResponse({ success: true, result: {} }),
+  });
+  await api.seedResource("d1", "db-acc-owned", {
+    file: "/repo/fixtures/seed.sql",
+    generatedConfigPath: "/tmp/generated.wrangler.jsonc",
+  });
+  assert.deepEqual(runnerCalls, [["d1", "execute", "db-acc-owned", "--remote", "--file", "/repo/fixtures/seed.sql", "--config", "/tmp/generated.wrangler.jsonc", "-y"]]);
 });
 
 test("LiveCloudflareApi deploys Workers and records active version from API", async () => {
@@ -373,6 +448,23 @@ test("teardown requires invalidation proof and owned local state", async () => {
     /materialized plan/
   );
   await writeFile(result.state.materialized.planPath, originalMaterializedPlan);
+  const originalJournal = await readFile(result.state.journalPath, "utf8");
+  const tamperedJournal = JSON.parse(originalJournal);
+  const tamperedMigration = tamperedJournal.operations.find((operation) => operation.action === "migrate" && operation.type === "d1");
+  tamperedMigration.result.databaseId = "other-d1";
+  await writeFile(result.state.journalPath, `${JSON.stringify(tamperedJournal, null, 2)}\n`);
+  await assert.rejects(
+    teardownCloudflarePreview(result.state, {
+      allowLive: true,
+      api,
+      acceptanceUrl: "https://acceptance.example",
+      token: "token",
+      reviewId: "review-id",
+      fetchImpl: async () => jsonResponse({ success: true, reviewId: "review-id", manifestHash: result.state.manifestHash, state: "invalidated" }),
+    }),
+    /D1 migration proof/
+  );
+  await writeFile(result.state.journalPath, originalJournal);
   const responses = [
     { success: true, reviewId: "review-id", manifestHash: result.state.manifestHash, state: "invalidated" },
     { success: true, reviewId: "review-id", manifestHash: result.state.manifestHash, revision: "abc123", satisfied: false, state: "invalidated" },
@@ -486,6 +578,8 @@ test("journal resumes an exact plan after partial resource creation", async () =
   const result = await deployCloudflarePreview(recipeFor(root), { root, stateDir, dryRun: false, allowLive: true, api: retryApi });
   assert.equal(result.verification.satisfied, true);
   assert.equal(retryApi.calls.some((call) => call[0] === "resourceExists" && created.some((resource) => resource.name === call[2])), false);
+  assert.equal(retryApi.calls.some((call) => call[0] === "applyD1Migrations"), false);
+  assert.equal(retryApi.calls.some((call) => call[0] === "seedResource"), false);
 });
 
 function notFound() {
@@ -514,10 +608,11 @@ async function fixtureRoot() {
     name: "app-worker",
     main: "index.ts",
     compatibility_date: "2026-08-02",
+    preview_urls: true,
     routes: [{ pattern: "example.com", custom_domain: true }],
     send_email: [{ name: "EMAIL", allowed_sender_addresses: ["login@example.com"] }],
     services: [{ binding: "REVIEW", service: "review-worker" }],
-    d1_databases: [{ binding: "DB", database_name: "prod-db", database_id: "prod" }],
+    d1_databases: [{ binding: "DB", database_name: "prod-db", database_id: "prod", migrations_dir: "migrations" }],
     r2_buckets: [{ binding: "ARTIFACTS", bucket_name: "prod-artifacts" }],
     queues: { producers: [{ binding: "EVENTS", queue: "prod-events" }] },
     durable_objects: { bindings: [{ name: "GATE", class_name: "Gate" }] },
@@ -527,6 +622,7 @@ async function fixtureRoot() {
     name: "review-worker",
     main: "index.ts",
     compatibility_date: "2026-08-02",
+    preview_urls: true,
   }, null, 2));
   return root;
 }

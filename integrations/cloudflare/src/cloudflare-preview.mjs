@@ -43,7 +43,7 @@ export async function planCloudflarePreview(recipe, options = {}) {
   }
 
   const plannedComponents = components.map((component) =>
-    planComponent(component, componentByBaseName, stackSlug, stateDir)
+    planComponent(component, componentByBaseName, stackSlug, stateDir, primary.previewName)
   );
   const resourceOperations = plannedComponents.flatMap((component) => component.resourceOperations);
   const componentOperations = plannedComponents.flatMap((component) => component.operations);
@@ -113,10 +113,11 @@ export async function deployCloudflarePreview(recipe, options = {}) {
   const journal = await loadJournal(plan);
   await assertNoSilentOverwrite(api, plan, journal);
   await applyActualPreviewOrigins(api, plan);
-  const createdResources = await applyResourceOperations(api, plan, journal);
+  const createdResources = await applyCreateOperations(api, plan, journal);
   applyCreatedResourceIds(plan, createdResources);
   refreshComponentDigests(plan);
   const materialized = await materializePlan(plan);
+  await applyDataOperations(api, plan, journal, createdResources);
   const deployedComponents = await applyWorkerOperations(api, plan, journal);
   const manifest = finalizeAcceptanceManifest(recipe, plan, deployedComponents);
   const localState = buildLocalState(plan, manifest, deployedComponents, createdResources, journal, materialized);
@@ -174,12 +175,14 @@ export async function verifyCloudflareManifest(api, manifest, localState) {
         reason: `${component.name} version detail did not confirm ${component.versionId}`,
       };
     }
-    const previewUrl = await api.getWorkerPreviewUrl(component.name);
-    if (component.name === localState.primaryComponent && previewUrl !== manifest.build.previewUrl) {
-      return {
-        satisfied: false,
-        reason: `${component.name} preview URL ${manifest.build.previewUrl} does not match owned Worker URL ${previewUrl}`,
-      };
+    if (component.name === localState.primaryComponent) {
+      const previewUrl = await api.getWorkerPreviewUrl(component.name);
+      if (previewUrl !== manifest.build.previewUrl) {
+        return {
+          satisfied: false,
+          reason: `${component.name} preview URL ${manifest.build.previewUrl} does not match owned Worker URL ${previewUrl}`,
+        };
+      }
     }
   }
   return { satisfied: true, reason: "all Cloudflare component versions are active and exact" };
@@ -434,6 +437,11 @@ export class FakeCloudflareApi {
     return resource;
   }
 
+  async applyD1Migrations(name, migration) {
+    this.calls.push(["applyD1Migrations", name, migration.migrationsDir, migration.migrationsSha256]);
+    return { type: "d1", name, migration };
+  }
+
   async seedResource(type, name, seed) {
     this.calls.push(["seedResource", type, name, seed.file ?? seed.key ?? "(inline)"]);
     return { type, name, seed };
@@ -462,7 +470,7 @@ export class FakeCloudflareApi {
       name: component.name,
       versionId,
       deploymentId,
-      previewUrl: await this.getWorkerPreviewUrl(component.name),
+      previewUrl: component.generatedConfig?.workers_dev === false ? undefined : await this.getWorkerPreviewUrl(component.name),
     };
   }
 
@@ -547,9 +555,14 @@ export class LiveCloudflareApi {
     throw new Error(`Unsupported resource type: ${type}`);
   }
 
+  async applyD1Migrations(name, migration) {
+    await this.runner.run(["d1", "migrations", "apply", name, "--remote", "--config", migration.generatedConfigPath]);
+    return { type: "d1", name, migrationsDir: migration.migrationsDir, migrationsSha256: migration.migrationsSha256 };
+  }
+
   async seedResource(type, name, seed) {
     if (type === "d1") {
-      await this.runner.run(["d1", "execute", name, "--remote", "--file", seed.file, "-y"]);
+      await this.runner.run(["d1", "execute", name, "--remote", "--file", seed.file, "--config", seed.generatedConfigPath, "-y"]);
       return { type, name, seed };
     }
     if (type === "r2") {
@@ -587,7 +600,7 @@ export class LiveCloudflareApi {
       name: component.name,
       versionId: exact.version_id,
       deploymentId: deployment.id,
-      previewUrl: await this.getWorkerPreviewUrl(component.name),
+      previewUrl: component.generatedConfig?.workers_dev === false ? undefined : await this.getWorkerPreviewUrl(component.name),
     };
   }
 
@@ -669,6 +682,7 @@ async function loadComponents(recipe, root, stackSlug) {
     const cwd = path.resolve(root, component.cwd ?? path.dirname(component.config));
     const baseName = component.name ?? config.name;
     const assetState = await hashComponentAssets(root, config, component, configPath);
+    const d1Migrations = await collectD1Migrations(config, cwd);
     if (!baseName) {
       throw new Error(`cloudflare.components[${index}] must define a name or config.name`);
     }
@@ -685,8 +699,50 @@ async function loadComponents(recipe, root, stackSlug) {
       stackSlug,
       assetsSha256: assetState.sha256,
       missingAssets: assetState.missing,
+      d1Migrations,
     };
   }));
+}
+
+async function collectD1Migrations(config, cwd) {
+  const entries = {};
+  for (const database of config.d1_databases ?? []) {
+    if (!database.migrations_dir) continue;
+    const dir = path.resolve(cwd, database.migrations_dir);
+    entries[database.binding] = await hashDirectory(dir);
+  }
+  return entries;
+}
+
+async function hashDirectory(dir) {
+  const files = await listFilesRecursive(dir);
+  const records = [];
+  for (const file of files) {
+    const bytes = await readFile(file);
+    records.push({
+      path: path.relative(dir, file),
+      sha256: sha256Hex(bytes),
+    });
+  }
+  return {
+    dir,
+    files: records,
+    sha256: sha256Hex(stableJson(records)),
+  };
+}
+
+async function listFilesRecursive(dir) {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await listFilesRecursive(fullPath));
+    } else if (entry.isFile()) {
+      files.push(fullPath);
+    }
+  }
+  return files.sort();
 }
 
 function normalizeSeed(root, seed) {
@@ -697,11 +753,11 @@ function normalizeSeed(root, seed) {
   };
 }
 
-function planComponent(component, componentByBaseName, stackSlug, stateDir) {
-  const generatedConfig = rewriteConfig(component, componentByBaseName, stackSlug);
-  const configSha256 = sha256Hex(stableJson(generatedConfig));
+function planComponent(component, componentByBaseName, stackSlug, stateDir, primaryPreviewName) {
   const generatedConfigPath = path.join(stateDir, "configs", `${component.previewName}.wrangler.jsonc`);
-  const resourceOperations = planResourceOperations(component, generatedConfig, stackSlug);
+  const generatedConfig = rewriteConfig(component, componentByBaseName, stackSlug, primaryPreviewName, path.dirname(generatedConfigPath));
+  const configSha256 = sha256Hex(stableJson(generatedConfig));
+  const resourceOperations = planResourceOperations(component, generatedConfig, stackSlug, generatedConfigPath);
   const versionTag = `acceptance-${stackSlug}`;
   const previewAlias = `accept-${stackSlug}`;
   const message = `Nib acceptance preview ${stackSlug}`;
@@ -743,29 +799,38 @@ function planComponent(component, componentByBaseName, stackSlug, stateDir) {
   };
 }
 
-function rewriteConfig(component, componentByBaseName, stackSlug) {
+function rewriteConfig(component, componentByBaseName, stackSlug, primaryPreviewName, generatedConfigDir) {
   const config = structuredClone(component.baseConfig);
   config.name = component.previewName;
-  config.workers_dev = true;
+  config.workers_dev = component.primary === true;
+  config.preview_urls = false;
   delete config.routes;
   delete config.route;
   delete config.domains;
   delete config.triggers;
   delete config.send_email;
+  const publicOrigin = previewUrlTemplate(primaryPreviewName, stackSlug);
   config.vars = {
     ...(config.vars ?? {}),
     ENVIRONMENT: "acceptance-preview",
-    PUBLIC_ORIGIN: previewUrlTemplate(component.previewName, stackSlug),
-    NIB_ACCEPTANCE_ORIGIN: previewUrlTemplate(component.previewName, stackSlug),
+    PUBLIC_ORIGIN: publicOrigin,
+    NIB_ACCEPTANCE_ORIGIN: publicOrigin,
     ACCEPTANCE_PREVIEW_STACK: stackSlug,
   };
 
   if (Array.isArray(config.d1_databases)) {
-    config.d1_databases = config.d1_databases.map((database) => ({
-      ...database,
-      database_name: buildResourceName(database.database_name ?? database.binding, stackSlug),
-      database_id: `__created_by_nib_acceptance_${slug(database.binding ?? "db")}__`,
-    }));
+    config.d1_databases = config.d1_databases.map((database) => {
+      const migrationState = component.d1Migrations?.[database.binding];
+      const migrationsDir = migrationState
+        ? path.relative(generatedConfigDir, migrationState.dir) || "."
+        : database.migrations_dir;
+      return {
+        ...database,
+        migrations_dir: migrationsDir,
+        database_name: buildResourceName(database.database_name ?? database.binding, stackSlug),
+        database_id: `__created_by_nib_acceptance_${slug(database.binding ?? "db")}__`,
+      };
+    });
   }
   if (Array.isArray(config.r2_buckets)) {
     config.r2_buckets = config.r2_buckets.map((bucket) => ({
@@ -805,7 +870,7 @@ function rewriteConfig(component, componentByBaseName, stackSlug) {
   return config;
 }
 
-function planResourceOperations(component, config, stackSlug) {
+function planResourceOperations(component, config, stackSlug, generatedConfigPath) {
   const operations = [];
   for (const database of config.d1_databases ?? []) {
     operations.push({
@@ -816,6 +881,21 @@ function planResourceOperations(component, config, stackSlug) {
       name: database.database_name,
       idempotencyKey: `${stackSlug}:d1:${database.database_name}`,
     });
+    const migrationState = component.d1Migrations?.[database.binding];
+    if (migrationState) {
+      operations.push({
+        type: "d1",
+        action: "migrate",
+        component: component.previewName,
+        binding: database.binding,
+        name: database.database_name,
+        generatedConfigPath,
+        migrationsDir: migrationState.dir,
+        migrationsSha256: migrationState.sha256,
+        files: migrationState.files,
+        idempotencyKey: `${stackSlug}:d1-migrate:${database.binding}:${migrationState.sha256}`,
+      });
+    }
   }
   for (const bucket of config.r2_buckets ?? []) {
     operations.push({
@@ -856,6 +936,7 @@ function planResourceOperations(component, config, stackSlug) {
       component: component.previewName,
       binding: seed.binding,
       name: findD1Name(config, seed.binding),
+      generatedConfigPath,
       file: seed.file,
       sha256: seed.sha256,
       idempotencyKey: `${stackSlug}:d1-seed:${seed.binding}:${seed.file}`,
@@ -905,28 +986,34 @@ function assertNoMissingAssets(plan) {
   }
 }
 
-async function applyResourceOperations(api, plan, journal) {
+async function applyCreateOperations(api, plan, journal) {
   const createdResources = [];
-  for (const operation of plan.operations) {
-    if (operation.action === "create") {
-      const prior = findJournalEntry(journal, operation.idempotencyKey, operation.name);
-      if (prior?.result) {
-        createdResources.push(prior.result);
-        continue;
-      }
-      const result = await api.createResource(operation.type, operation.name, operation);
-      await appendJournalEntry(plan, journal, {
-        key: operation.idempotencyKey,
-        target: operation.name,
-        action: operation.action,
-        type: operation.type,
-        result,
-      });
-      createdResources.push(result);
-    } else if (operation.action === "seed") {
+  for (const operation of plan.operations.filter((entry) => entry.action === "create")) {
+    const prior = findJournalEntry(journal, operation.idempotencyKey, operation.name);
+    if (prior?.result) {
+      createdResources.push(prior.result);
+      continue;
+    }
+    const result = await api.createResource(operation.type, operation.name, operation);
+    await appendJournalEntry(plan, journal, {
+      key: operation.idempotencyKey,
+      target: operation.name,
+      action: operation.action,
+      type: operation.type,
+      result,
+    });
+    createdResources.push(result);
+  }
+  return createdResources;
+}
+
+async function applyDataOperations(api, plan, journal, createdResources) {
+  for (const operation of plan.operations.filter((entry) => entry.action === "migrate" || entry.action === "seed")) {
+    if (operation.action === "migrate") {
       const prior = findJournalEntry(journal, operation.idempotencyKey, operation.name);
       if (prior?.result) continue;
-      await api.seedResource(operation.type, operation.name, operation);
+      const owned = requireOwnedD1Resource(createdResources, operation);
+      await api.applyD1Migrations(operation.name, operation);
       await appendJournalEntry(plan, journal, {
         key: operation.idempotencyKey,
         target: operation.name,
@@ -935,13 +1022,31 @@ async function applyResourceOperations(api, plan, journal) {
         result: {
           type: operation.type,
           name: operation.name,
-          file: operation.file,
-          key: operation.key,
+          databaseId: owned.id,
+          migrationsDir: operation.migrationsDir,
+          migrationsSha256: operation.migrationsSha256,
         },
       });
+      continue;
     }
+    const prior = findJournalEntry(journal, operation.idempotencyKey, operation.name);
+    if (prior?.result) continue;
+    const owned = operation.type === "d1" ? requireOwnedD1Resource(createdResources, operation) : undefined;
+    await api.seedResource(operation.type, operation.name, operation);
+    await appendJournalEntry(plan, journal, {
+      key: operation.idempotencyKey,
+      target: operation.name,
+      action: operation.action,
+      type: operation.type,
+      result: {
+        type: operation.type,
+        name: operation.name,
+        databaseId: owned?.id,
+        file: operation.file,
+        key: operation.key,
+      },
+    });
   }
-  return createdResources;
 }
 
 async function loadJournal(plan) {
@@ -987,6 +1092,14 @@ async function appendJournalEntry(plan, journal, entry) {
   await writeFile(journal.path, `${JSON.stringify({ ...journal, path: undefined }, null, 2)}\n`);
 }
 
+function requireOwnedD1Resource(createdResources, operation) {
+  const owned = createdResources.find((resource) => resource.type === "d1" && resource.name === operation.name);
+  if (!owned?.id) {
+    throw new Error(`Cloudflare D1 ${operation.name} requires owned database id proof before ${operation.action}`);
+  }
+  return owned;
+}
+
 function applyCreatedResourceIds(plan, createdResources) {
   const byKey = new Map(createdResources.map((resource) => [resourceKey(resource.type, resource.name), resource]));
   for (const component of plan.components) {
@@ -1010,10 +1123,12 @@ function refreshComponentDigests(plan) {
 }
 
 async function applyActualPreviewOrigins(api, plan) {
+  const primary = plan.components.find((component) => component.name === plan.primaryComponent);
+  if (!primary) throw new Error(`Cloudflare preview primary component ${plan.primaryComponent} is missing`);
+  const origin = await api.getWorkerPreviewUrl(primary.name);
+  if (!origin) throw new Error(`Cloudflare preview URL could not be determined for ${primary.name}`);
+  primary.actualPreviewUrl = origin;
   for (const component of plan.components) {
-    const origin = await api.getWorkerPreviewUrl(component.name);
-    if (!origin) throw new Error(`Cloudflare preview URL could not be determined for ${component.name}`);
-    component.actualPreviewUrl = origin;
     component.generatedConfig.vars = {
       ...(component.generatedConfig.vars ?? {}),
       PUBLIC_ORIGIN: origin,
@@ -1199,6 +1314,13 @@ async function validateOwnedStateForTeardown(state) {
   const planSnapshot = JSON.parse(await readFile(planPath, "utf8"));
   if (planSnapshot.contract !== PREVIEW_CONTRACT || planSnapshot.stackSlug !== state.stackSlug || planSnapshot.planSha256 !== state.planSha256) {
     throw new Error("Cloudflare preview teardown materialized plan does not match owned state");
+  }
+  for (const migration of planSnapshot.operations?.filter((operation) => operation.action === "migrate" && operation.type === "d1") ?? []) {
+    const createEntry = findJournalEntry(journal, `${state.stackSlug}:d1:${migration.name}`, migration.name);
+    const migrationEntry = findJournalEntry(journal, migration.idempotencyKey, migration.name);
+    if (!createEntry?.result?.id || migrationEntry?.result?.databaseId !== createEntry.result.id || migrationEntry?.result?.migrationsSha256 !== migration.migrationsSha256) {
+      throw new Error(`Cloudflare preview teardown journal is missing D1 migration proof for ${migration.name}`);
+    }
   }
   for (const component of state.components ?? []) {
     const entry = findJournalEntry(journal, "deploy-worker", component.name);

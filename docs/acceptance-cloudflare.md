@@ -65,14 +65,16 @@ For stateful Workers, the adapter:
 1. Rewrites Worker names to `*-acc-*`.
 2. Removes production routes, custom domains, cron triggers, and email bindings.
 3. Rewrites D1, R2, queue, and service-binding targets to preview names.
-4. Creates isolated resources and applies seed fixtures.
-5. Deploys service-binding dependencies before callers using generated per-revision Worker names.
-6. Reads the active deployed version ID for each component from the Cloudflare deployments API.
-7. Verifies the active deployed version ID and Worker preview URL for every component, including service-binding dependencies.
-8. Writes the acceptance manifest with component version IDs, configuration digests, asset digests, and the preview URL.
-9. Writes `state.json` with the owned preview Workers, isolated resources, R2 fixture object keys, and journal path.
+4. Enables `workers_dev` only for the primary preview Worker and forces `preview_urls = false`; service-binding dependencies stay private and do not receive public version preview URLs.
+5. Points `PUBLIC_ORIGIN` and `NIB_ACCEPTANCE_ORIGIN` for every generated component at the primary public preview origin.
+6. Creates isolated resources, writes generated Wrangler config with the created D1 database IDs, applies D1 migrations from the source `migrations_dir`, then applies seed fixtures through the same generated config.
+7. Deploys service-binding dependencies before callers using generated per-revision Worker names.
+8. Reads the active deployed version ID for each component from the Cloudflare deployments API.
+9. Verifies the active deployed version ID for every component and verifies the primary Worker preview URL.
+10. Writes the acceptance manifest with component version IDs, configuration digests, asset digests, and the preview URL.
+11. Writes `state.json` with the owned preview Workers, isolated resources, R2 fixture object keys, and journal path.
 
-If a planned Cloudflare Worker or resource name already exists and is not already recorded in the same plan journal, deployment stops before creation. Use a new commit/revision or teardown the prior stack. If a run fails after creating resources, retry the same recipe/revision/state directory; the journal skips completed operations and resumes the exact plan.
+If a planned Cloudflare Worker or resource name already exists and is not already recorded in the same plan journal, deployment stops before creation. Use a new commit/revision or teardown the prior stack. If a run fails after creating resources, migrations, or seeds, retry the same recipe/revision/state directory; the journal skips completed operations and resumes the exact plan. D1 migration and seed steps require the recorded created database ID, so a journal entry without D1 ownership proof is not enough to mutate schema or data.
 
 ## Publish And Verify
 
