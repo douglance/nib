@@ -4,7 +4,9 @@ import {
   isPublicDiscovery,
   isPublicMcpDiscoveryRequest,
   isPublicPage,
+  isPublicReviewCapabilityRoute,
   isSiteAsset,
+  legacyReviewInterfaceRedirect,
 } from "./routes";
 
 describe("site routing", () => {
@@ -31,6 +33,33 @@ describe("site routing", () => {
   it("does not classify MCP as a site route", () => {
     expect(isPublicPage("/mcp")).toBe(false);
     expect(isPrivatePage("/mcp")).toBe(false);
+  });
+
+  it("routes account-scoped review capabilities to the web interface", () => {
+    const accountId = "11111111-1111-4111-8111-111111111111";
+    const requestId = "22222222-2222-4222-8222-222222222222";
+    const base = `/r/${accountId}/${requestId}`;
+
+    expect(isPublicReviewCapabilityRoute(base)).toBe(true);
+    expect(isPublicReviewCapabilityRoute(`${base}/data`)).toBe(true);
+    expect(isPublicReviewCapabilityRoute(`${base}/respond`)).toBe(true);
+    expect(isPublicReviewCapabilityRoute(`${base}/attachments/${requestId}`)).toBe(true);
+    expect(isPublicReviewCapabilityRoute(`/r/${requestId}`)).toBe(false);
+    expect(isPublicReviewCapabilityRoute(`/r/not-an-account/${requestId}`)).toBe(false);
+  });
+
+  it("canonicalizes legacy review links into the web interface", () => {
+    const accountId = "11111111-1111-4111-8111-111111111111";
+    const requestId = "22222222-2222-4222-8222-222222222222";
+    const response = legacyReviewInterfaceRedirect(
+      new URL(`https://nibtool.com/r/${requestId}`),
+      accountId,
+    );
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      `https://nibtool.com/r/${accountId}/${requestId}`,
+    );
   });
 
   it("publishes agent discovery without publishing the generation transport", () => {

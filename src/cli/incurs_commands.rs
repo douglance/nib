@@ -5,8 +5,7 @@
 //! compatibility adapter without exposing a second public parser.
 
 use super::{
-    fields, AwaitSubmitArgs, FeedbackArgs, FeedbackUi, RecordStartArgs, RequestReviewArgs,
-    ReviewArgs,
+    fields, AwaitSubmitArgs, FeedbackArgs, RecordStartArgs, RequestReviewArgs, ReviewArgs,
 };
 use async_trait::async_trait;
 use incurs::{
@@ -28,7 +27,6 @@ use std::process::{Command as ProcessCommand, Stdio};
 struct FeedbackHandler;
 struct ReviewHandler;
 struct AwaitSubmitHandler;
-struct CreateReviewHandler;
 struct StartRecordingHandler;
 struct RecordingStatusHandler;
 struct StopRecordingHandler;
@@ -105,16 +103,6 @@ struct RecordingArgs {
 struct RequestArgs {
     /// Durable request ID.
     request_id: String,
-}
-
-#[derive(Debug, Deserialize, incurs::Options)]
-struct CreateRequestOptions {
-    /// Question shown to the reviewer.
-    #[incurs(alias = "m")]
-    question: Option<String>,
-    /// Image-only annotation prompt JSON.
-    #[incurs(alias = "a")]
-    annotations: Option<String>,
 }
 
 #[derive(Debug, Deserialize, incurs::Options)]
@@ -341,16 +329,6 @@ fn error(message: impl ToString) -> CommandResult {
     }
 }
 
-fn ui(value: Option<&Value>) -> Result<FeedbackUi, CommandResult> {
-    match value.and_then(Value::as_str).unwrap_or("native") {
-        "native" | "gui" => Ok(FeedbackUi::Native),
-        "terminal" => Ok(FeedbackUi::Terminal),
-        "web" => Ok(FeedbackUi::Web),
-        "auto" => Ok(FeedbackUi::Auto),
-        other => Err(error(format!("invalid --ui value: {other}"))),
-    }
-}
-
 #[async_trait]
 impl CommandHandler for FeedbackHandler {
     async fn run(&self, ctx: CommandContext) -> CommandResult {
@@ -375,30 +353,15 @@ impl CommandHandler for FeedbackHandler {
                 .get("timeout")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
-            ui: match ui(ctx.options.get("ui")) {
-                Ok(ui) => ui,
-                Err(result) => return result,
-            },
             detach: ctx
                 .options
                 .get("detach")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         };
-        if args.ui == FeedbackUi::Native {
-            match super::commands::run_native_feedback_value(&args).await {
-                Ok(value) => ok(value),
-                Err(feedback_error) => error(feedback_error),
-            }
-        } else {
-            match super::commands::run_feedback(&args).await {
-                Ok(()) => CommandResult::Ok {
-                    data: json!({"completed": true}),
-                    cta: None,
-                    exit_code: None,
-                },
-                Err(command_error) => error(command_error),
-            }
+        match super::web_feedback::run_value(&args).await {
+            Ok(value) => ok(value),
+            Err(feedback_error) => error(feedback_error),
         }
     }
 }
@@ -475,39 +438,6 @@ fn ok(value: impl serde::Serialize) -> CommandResult {
             exit_code: None,
         },
         Err(serialization_error) => error(serialization_error),
-    }
-}
-
-#[async_trait]
-impl CommandHandler for CreateReviewHandler {
-    async fn run(&self, ctx: CommandContext) -> CommandResult {
-        let file = match fields::path_arg(&ctx.args, "file") {
-            Ok(file) => file,
-            Err(result) => return result,
-        };
-        let question = ctx
-            .options
-            .get("question")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        let annotations = ctx
-            .options
-            .get("annotations")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
-        match tokio::task::spawn_blocking(move || {
-            super::web_feedback::create_review_request(
-                &file,
-                question.as_deref(),
-                annotations.as_deref(),
-            )
-        })
-        .await
-        {
-            Ok(Ok(result)) => ok(result),
-            Ok(Err(err)) => error(err),
-            Err(err) => error(err),
-        }
     }
 }
 
@@ -783,59 +713,6 @@ fn mcp_options(policy: Policy) -> McpCommandOptions {
 }
 
 fn typed_request_group() -> Cli {
-    let create = CommandDef::typed::<
-        FileArgs,
-        CreateRequestOptions,
-        (),
-        super::web_feedback::PublishedFeedback,
-        _,
-        _,
-    >(
-        "create",
-        |ctx: TypedContext<FileArgs, CreateRequestOptions, ()>| async move {
-            let file = ctx.args.file;
-            let question = ctx.options.question;
-            let annotations = ctx.options.annotations;
-            match tokio::task::spawn_blocking(move || {
-                super::web_feedback::create_review_request(
-                    &file,
-                    question.as_deref(),
-                    annotations.as_deref(),
-                )
-            })
-            .await
-            {
-                Ok(Ok(published)) => {
-                    let cta = CtaBlock {
-                        commands: vec![CtaEntry::Detailed {
-                            command: format!("request wait {}", published.request_id),
-                            description: Some("Wait for the final response".into()),
-                        }],
-                        description: Some("Continue this durable request:".into()),
-                    };
-                    TypedResult::ok_with_cta(published, cta)
-                }
-                Ok(Err(request_error)) => {
-                    TypedResult::error("REQUEST_CREATE_FAILED", request_error.to_string())
-                }
-                Err(join_error) => {
-                    TypedResult::error("REQUEST_CREATE_FAILED", join_error.to_string())
-                }
-            }
-        },
-    )
-    .description("Publish a durable image or MP4/H.264 review and return immediately")
-    .examples(vec![Example {
-        command: "review.mp4 -m \"Check the transition\"".into(),
-        description: Some("Publish a nonblocking video review".into()),
-    }])
-    .hint("Use request wait with the returned request ID.")
-    .mcp(mcp_options(Policy {
-        mcp_name: Some("create_review_request"),
-        ..EXTERNAL_EFFECT
-    }))
-    .done();
-
     let wait = CommandDef::typed::<RequestArgs, WaitOptions, (), Value, _, _>(
         "wait",
         |ctx: TypedContext<RequestArgs, WaitOptions, ()>| async move {
@@ -849,12 +726,12 @@ fn typed_request_group() -> Cli {
             }
         },
     )
-    .description("Wait for a durable request to receive its final response")
+    .description("Wait for a durable request to receive its final response, then apply the feedback and continue the original task")
     .examples(vec![Example {
         command: "req_123".into(),
         description: Some("Resume the same durable request wait".into()),
     }])
-    .hint("Timeouts do not create a second request; resume with the same request ID.")
+    .hint("Timeouts do not create a second request; resume with the same request ID. Keep the agent workflow active while waiting. Read the returned decision, comment, and annotations, then continue the authorized work without waiting for another chat message. A completed review request does not complete the original task. Treat comments as usable guidance and ask again only when another answer would help or approval is explicitly required.")
     .mcp(mcp_options(Policy {
         read_only: true,
         idempotent: true,
@@ -890,8 +767,7 @@ fn typed_request_group() -> Cli {
     .done();
 
     Cli::create("request")
-        .description("Create, review, and wait for durable human requests")
-        .command("create", create)
+        .description("Review or resume waiting for an existing durable human request")
         .command("review", review)
         .command("wait", wait)
 }
@@ -1260,17 +1136,6 @@ fn image_group() -> Cli {
                         false,
                         'm',
                     ),
-                    fields::field_with_default(
-                        "feedbackUi",
-                        "Review surface",
-                        FieldType::Enum(vec![
-                            "native".into(),
-                            "terminal".into(),
-                            "web".into(),
-                            "auto".into(),
-                        ]),
-                        json!("native"),
-                    ),
                 ],
                 Policy {
                     open_world: true,
@@ -1285,7 +1150,7 @@ pub fn register(cli: Cli) -> Cli {
     let feedback = documented(
         command_with_policy(
             "feedback",
-            "Ask a human for visual feedback in the native Nib app and wait for the final response",
+            "Ask a human for feedback, clarification, or reassurance on every registered Nib device, then use the response and continue the task",
             vec![fields::field(
                 "file",
                 "Image, .nib, or MP4/H.264 file",
@@ -1315,17 +1180,6 @@ pub fn register(cli: Cli) -> Cli {
                     't',
                 ),
                 fields::field_with_default(
-                    "ui",
-                    "Review surface",
-                    FieldType::Enum(vec![
-                        "native".into(),
-                        "terminal".into(),
-                        "web".into(),
-                        "auto".into(),
-                    ]),
-                    json!("native"),
-                ),
-                fields::field_with_default(
                     "detach",
                     "Explicitly publish without waiting",
                     FieldType::Boolean,
@@ -1339,287 +1193,11 @@ pub fn register(cli: Cli) -> Cli {
             },
         ),
         &[
-            ("review.png", "Review an image in the native app"),
-            ("demo.mp4", "Review a video and wait for the response"),
-            (
-                "review.png --ui web",
-                "Explicitly use the browser review surface",
-            ),
+            ("review.png", "Ask every registered device to review an image"),
+            ("demo.mp4", "Ask every registered device to review a video"),
         ],
-        Some("Attached native review is the default. Use request create when the caller explicitly wants a nonblocking request."),
+        Some("Reach for Nib whenever human direction, clarification, a preference, or reassurance would help. Ask a focused question with relevant media for context. Nib is a lightweight nudge, not a mandatory approval gate. One account-wide request reaches every registered device. Keep the workflow active while waiting; resume the same running process or recover with nib request wait REQUEST_ID. Read the decision, comment, and annotations, apply the feedback, and continue the authorized work in the same turn. Comments are usable guidance and rejection means revise; ask again only when another answer would help or approval is explicitly required. Use --detach only when the caller explicitly asks not to wait."),
     );
-
-    #[cfg(any())]
-    {
-        let _request = Cli::create("request")
-            .description("Create and wait for durable human requests")
-            .command(
-                "create",
-                documented(
-                    with_output_schema::<super::web_feedback::PublishedFeedback>(
-                        command_with_policy(
-                            "create",
-                            "Publish a durable image or MP4/H.264 review and return immediately",
-                            vec![fields::field(
-                                "file",
-                                "Image, .nib, or MP4/H.264 file",
-                                FieldType::String,
-                                true,
-                            )],
-                            vec![
-                                fields::field_with_alias(
-                                    "question",
-                                    "Question shown to the reviewer",
-                                    FieldType::String,
-                                    false,
-                                    'm',
-                                ),
-                                fields::field_with_alias(
-                                    "annotations",
-                                    "Image-only annotation prompt JSON",
-                                    FieldType::String,
-                                    false,
-                                    'a',
-                                ),
-                            ],
-                            Box::new(CreateReviewHandler),
-                            Policy {
-                                mcp_name: Some("create_review_request"),
-                                ..EXTERNAL_EFFECT
-                            },
-                        ),
-                    ),
-                    &[(
-                        "request create review.mp4 -m \"Check the transition\"",
-                        "Publish a nonblocking video review",
-                    )],
-                    Some("Use request wait with the returned request ID."),
-                ),
-            )
-            .command(
-                "wait",
-                documented(
-                    with_output_schema::<Value>(command_with_policy(
-                        "wait",
-                        "Wait for a durable request to receive its final response",
-                        vec![fields::field(
-                            "requestId",
-                            "Durable request ID",
-                            FieldType::String,
-                            true,
-                        )],
-                        vec![fields::field_with_alias_and_default(
-                            "timeout",
-                            "Seconds to wait; zero waits indefinitely",
-                            FieldType::Number,
-                            json!(0),
-                            't',
-                        )],
-                        Box::new(RequestWaitHandler),
-                        Policy {
-                            read_only: true,
-                            idempotent: true,
-                            open_world: true,
-                            mcp_name: Some("wait_for_request"),
-                            ..EXTERNAL_EFFECT
-                        },
-                    )),
-                    &[(
-                        "request wait req_123",
-                        "Resume the same durable request wait",
-                    )],
-                    Some(
-                        "Timeouts do not create a second request; resume with the same request ID.",
-                    ),
-                ),
-            );
-
-        let _record = Cli::create("record")
-        .description("Record the screen and manage durable recording workers")
-        .command(
-            "start",
-            documented(
-                with_output_schema::<crate::media::RecordingState>(command_with_policy(
-                    "start",
-                    "Start a durable macOS screen recording and return its ID",
-                    vec![],
-                    vec![
-                        fields::field("output", "Output MP4 path", FieldType::String, false),
-                        fields::field("duration", "Timed duration in seconds", FieldType::Number, false),
-                        fields::field("display", "Display number", FieldType::Number, false),
-                        fields::field("window", "CoreGraphics window ID", FieldType::Number, false),
-                        fields::field("region", "x,y,width,height", FieldType::String, false),
-                        fields::field_with_default("interactive", "Use interactive target selection", FieldType::Boolean, json!(false)),
-                        fields::field_with_default("systemAudio", "Include system audio", FieldType::Boolean, json!(false)),
-                        fields::field_with_default("microphone", "Include the default microphone", FieldType::Boolean, json!(false)),
-                        fields::field_with_default("cursor", "Include the cursor", FieldType::Boolean, json!(true)),
-                        fields::field_with_default("showClicks", "Show pointer clicks", FieldType::Boolean, json!(false)),
-                    ],
-                    Box::new(StartRecordingHandler),
-                    Policy {
-                        mcp_name: Some("start_recording"),
-                        ..LOCAL_EFFECT
-                    },
-                )),
-                &[
-                    ("record start --duration 5", "Record five silent seconds"),
-                    (
-                        "record start --system-audio",
-                        "Explicitly include system audio",
-                    ),
-                ],
-                Some("Recording is silent unless system audio or microphone capture is explicitly requested."),
-            ),
-        )
-        .command(
-            "status",
-            with_output_schema::<crate::media::RecordingState>(command_with_policy(
-                "status",
-                "Read one durable recording or the active recording",
-                vec![fields::field(
-                    "recordingId",
-                    "Recording ID; omit to select the active recording",
-                    FieldType::String,
-                    false,
-                )],
-                vec![],
-                Box::new(RecordingStatusHandler),
-                Policy {
-                    mcp_name: Some("recording_status"),
-                    ..LOCAL_READ
-                },
-            )),
-        )
-        .command(
-            "stop",
-            documented(
-                with_output_schema::<crate::media::RecordingState>(command_with_policy(
-                    "stop",
-                    "Idempotently stop and finalize a durable recording",
-                    vec![fields::field(
-                        "recordingId",
-                        "Recording ID; omit to select the active recording",
-                        FieldType::String,
-                        false,
-                    )],
-                    vec![],
-                    Box::new(StopRecordingHandler),
-                    Policy {
-                        idempotent: true,
-                        mcp_name: Some("stop_recording"),
-                        ..LOCAL_EFFECT
-                    },
-                )),
-                &[("record stop rec_123", "Stop a recording")],
-                Some("Stopping an already finalized recording returns its final state."),
-            ),
-        )
-        .command(
-            "wait",
-            documented(
-                with_output_schema::<crate::media::RecordingState>(command_with_policy(
-                    "wait",
-                    "Wait for a durable recording to complete or fail",
-                    vec![fields::field(
-                        "recordingId",
-                        "Recording ID",
-                        FieldType::String,
-                        true,
-                    )],
-                    vec![fields::field_with_alias_and_default(
-                        "timeout",
-                        "Seconds to wait; zero waits indefinitely",
-                        FieldType::Number,
-                        json!(0),
-                        't',
-                    )],
-                    Box::new(WaitRecordingHandler),
-                    Policy {
-                        mcp_name: Some("wait_for_recording"),
-                        ..LOCAL_READ
-                    },
-                )),
-                &[("record wait rec_123", "Wait for recording completion")],
-                None,
-            ),
-        );
-
-        let _media = Cli::create("media")
-            .description("Inspect and derive supported media files")
-            .command(
-                "inspect",
-                with_output_schema::<crate::media::MediaInfo>(command_with_policy(
-                    "inspect",
-                    "Validate MP4/H.264 media and return its descriptor",
-                    vec![fields::field(
-                        "file",
-                        "MP4/H.264 file",
-                        FieldType::String,
-                        true,
-                    )],
-                    vec![],
-                    Box::new(InspectMediaHandler),
-                    Policy {
-                        mcp_name: Some("inspect_media"),
-                        ..LOCAL_READ
-                    },
-                )),
-            )
-            .command(
-                "poster",
-                documented(
-                    command_with_policy(
-                        "poster",
-                        "Extract a representative PNG poster from MP4/H.264 media",
-                        vec![fields::field(
-                            "file",
-                            "MP4/H.264 file",
-                            FieldType::String,
-                            true,
-                        )],
-                        vec![fields::field(
-                            "output",
-                            "Output PNG path",
-                            FieldType::String,
-                            false,
-                        )],
-                        Box::new(PosterMediaHandler),
-                        Policy {
-                            mcp_name: Some("extract_poster"),
-                            ..LOCAL_EFFECT
-                        },
-                    ),
-                    &[("media poster demo.mp4", "Extract a reviewable poster")],
-                    Some("The resulting PNG can be passed directly to feedback."),
-                ),
-            )
-            .command(
-                "transcribe",
-                with_output_schema::<crate::media::TranscriptResult>(command_with_policy(
-                    "transcribe",
-                    "Request an on-device transcript and preserve explicit unavailable state",
-                    vec![fields::field(
-                        "file",
-                        "MP4/H.264 file",
-                        FieldType::String,
-                        true,
-                    )],
-                    vec![fields::field(
-                        "locale",
-                        "BCP-47 locale hint",
-                        FieldType::String,
-                        false,
-                    )],
-                    Box::new(TranscribeMediaHandler),
-                    Policy {
-                        mcp_name: Some("transcribe_media"),
-                        ..LOCAL_READ
-                    },
-                )),
-            );
-
-        let _ = (_request, _record, _media);
-    }
 
     // Typed groups are the canonical request, recording, and media contracts.
     let request = typed_request_group();
@@ -1736,17 +1314,6 @@ fn register_flat_core(cli: Cli) -> Cli {
                     't',
                 ),
                 fields::field_with_default(
-                    "ui",
-                    "Review surface",
-                    FieldType::Enum(vec![
-                        "native".into(),
-                        "terminal".into(),
-                        "web".into(),
-                        "auto".into(),
-                    ]),
-                    json!("native"),
-                ),
-                fields::field_with_default(
                     "detach",
                     "Explicitly return after publishing; false is required unless the caller asks not to wait",
                     FieldType::Boolean,
@@ -1810,34 +1377,6 @@ fn register_flat_core(cli: Cli) -> Cli {
                 ),
             ],
             Box::new(AwaitSubmitHandler),
-        ),
-    )
-    .command(
-        "create_review",
-        command(
-            "create_review",
-            "Publish a durable image or MP4/H.264 review and return its request ID",
-            vec![fields::field(
-                "file",
-                "Image, .nib, or MP4/H.264 file",
-                FieldType::String,
-                true,
-            )],
-            vec![
-                fields::field(
-                    "question",
-                    "Question shown to the reviewer",
-                    FieldType::String,
-                    false,
-                ),
-                fields::field(
-                    "annotations",
-                    "Image-only annotation prompt JSON",
-                    FieldType::String,
-                    false,
-                ),
-            ],
-            Box::new(CreateReviewHandler),
         ),
     )
     .command(
@@ -2640,7 +2179,6 @@ mod tests {
             .try_tool_catalog()
             .expect("the canonical command graph must not expose duplicate tool names");
         for name in [
-            "create_review_request",
             "open_review_request",
             "wait_for_request",
             "start_recording",
@@ -2691,12 +2229,28 @@ mod tests {
     }
 
     #[test]
-    fn native_attached_feedback_is_the_catalog_default() {
+    fn feedback_is_the_only_review_creation_tool() {
         let catalog = super::super::build_cli().tool_catalog();
         let feedback = catalog.get("feedback").unwrap();
-        assert_eq!(
-            feedback.input_schema["properties"]["ui"]["default"],
-            "native"
+        assert!(
+            feedback.input_schema["properties"].get("ui").is_none(),
+            "feedback must not expose a device or review-surface selector"
+        );
+        assert!(
+            feedback.input_schema["properties"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|name| !name.contains("device") && !name.contains("target")),
+            "feedback must not expose a device-target selector"
+        );
+        assert!(
+            catalog.get("create_review_request").is_none(),
+            "feedback must be the only tool that creates review requests"
+        );
+        assert!(
+            feedback.description.contains("every registered Nib device"),
+            "feedback must document its account-wide fanout"
         );
         assert_eq!(
             feedback.input_schema["properties"]["detach"]["default"],

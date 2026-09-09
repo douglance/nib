@@ -31,6 +31,16 @@ export function responseChoiceValue(
   return nonEmptyString(choices[index]);
 }
 
+export function visualResponseError(decision: string, comment: string): string | null {
+  if (decision && !["approve", "reject", "comment"].includes(decision)) {
+    return "Visual review decision must be approve, reject, or comment";
+  }
+  if ((!decision || decision === "comment") && !comment) {
+    return "A comment response requires nonempty text";
+  }
+  return null;
+}
+
 export async function commitFirstResponse<
   Response extends CoordinatedResponse,
   Request extends CoordinatedRequest<Response>

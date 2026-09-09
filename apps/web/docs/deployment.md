@@ -8,7 +8,7 @@ The canonical production origin is `https://nibtool.com`. Nib has one passwordle
 | Stripe API key | A live restricted key is deployed. | Verify checkout whenever the key or price configuration changes. |
 | Billable Usage API | Optional: restricted alpha; current Wrangler OAuth grant has no billing permission. | Add a read-only API token only when Cloudflare grants account access. Customer billing does not depend on it. |
 
-Protected execution fails closed without a valid Nib account session.
+Protected execution fails closed without a valid Nib account session. Apply the additive `0013_billing_reconciliation.sql` and `0014_metering_safe_retries.sql` migrations before deploying the billing reconciliation and metering retry handlers. Older Worker versions tolerate the added columns, but rolling back the retry handler removes duplicate-charge protection.
 
 ## 1. Cloudflare resources
 
@@ -36,6 +36,8 @@ The current model input shapes come from Cloudflare's [Nano Banana 2](https://de
 ## 3. Configure Stripe
 
 The live Stripe account contains the products, prices, meter, and webhook described in [`billing.md`](billing.md). The deployed price IDs are in `wrangler.jsonc`; the canonical webhook target is `https://nibtool.com/billing/webhook`.
+
+`STRIPE_PORTAL_CONFIGURATION_ID` must identify Nib's active portal configuration, `bpc_1U3InjGHuCWtbWKO5bH7t1qe` in live mode. Never use the shared Stripe account's default configuration: it belongs to another product. Browser form submissions to `/billing/portal` return a 303 redirect; API clients requesting JSON receive the session object. Missing portal configuration returns 503 without creating a session.
 
 Create and rotate the live restricted key on the [Stripe API keys page](https://dashboard.stripe.com/apikeys) with only the permissions required by [`billing.md`](billing.md). Stripe displays the key once. Paste it directly into Wrangler; do not save it in the repository or send it through chat:
 
@@ -101,7 +103,7 @@ Verify, in order:
 3. An unauthenticated MCP `tools/call` cannot invoke generation.
 4. One verified unsubscribed identity receives one Fast 1K image, then receives `FREE_TRIAL_USED` on a second generation.
 5. A fourth trial identity in one network cohort receives `FREE_TRIAL_NETWORK_LIMIT`.
-6. One paid Fast 1K generation creates a D1 usage row and exactly one Stripe `nib_usage_cents` meter event.
+6. One paid Fast 1K generation creates a D1 usage row and exactly one Stripe meter event under the configured `STRIPE_USAGE_EVENT_NAME` (`visualize_usage_cents` for the existing live meter).
 7. Default-to-High change and cancellation update authorization correctly.
 
 The 2026-08-13 production canary created a live-mode $9.99 default-plan Checkout Session through an authenticated Nib account, with automatic tax, billing address, tax ID, and individual-name collection enabled. The same canary account was then permanently deleted through `DELETE /api/account`.

@@ -6,6 +6,8 @@
   "scripts": {
     "check": "tsc --noEmit",
     "test": "vitest run",
+    "test:review-smoke": "node --test scripts/review-interface-smoke.node.mjs",
+    "smoke:review": "node scripts/review-interface-smoke.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "tail": "wrangler tail"

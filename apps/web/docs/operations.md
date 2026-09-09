@@ -20,7 +20,7 @@ Cloudflare observability is enabled in [`wrangler.jsonc`](../wrangler.jsonc). Mo
 - Workflow retries, terminal failures, and duration by quality/resolution.
 - Durable Object `RATE_LIMITED`, `CONCURRENCY_LIMIT`, and `QUEUE_FULL` results.
 - Queue retries and dead-letter growth.
-- D1 `usage_ledger` rows in `queued` state older than ten minutes.
+- D1 `usage_ledger` rows in `queued` state older than ten minutes, split by `reconciliation_required`.
 - R2 artifact count by expiration day.
 - AI Gateway provider errors and Unified Billing credit balance.
 - `cloudflare_usage_daily` freshness and any missing cost fields from the restricted-alpha Billable Usage API.
@@ -33,7 +33,8 @@ Do not log prompts, reference data URIs, inline image base64, Stripe secrets, or
 | --- | --- | --- |
 | Model/provider transient error | Workflow retries three times with exponential backoff | Inspect AI Gateway and Workflow logs |
 | Model terminal error | Job becomes `failed`; gate and references release | Confirm error class; run a 1K canary |
-| Queue/Stripe error | Queue retries; daily cron reconciles unsent ledger | Inspect DLQ and Stripe response |
+| Queue/Stripe error | Queue retries; daily cron requeues safe unsent ledger rows | Inspect DLQ and Stripe response |
+| Metering reconciliation hold | Row remains `queued` with `reconciliation_required = 1`; cron will not requeue it | Compare D1 with Stripe meter summaries or invoices before changing the row |
 | Artifact expiry | Daily cron deletes R2 object and clears D1 key | No action unless cleanup falls behind |
 | Canceled subscription | Webhook clears authorization | Verify webhook delivery/signature |
 | Cloudflare usage sync error | Cron logs the error and leaves customer traffic unchanged | Verify API access; do not alter customer invoices |
@@ -46,7 +47,7 @@ At `03:17 UTC`, the scheduled handler:
 1. Selects up to 500 expired artifact rows.
 2. Deletes their R2 objects.
 3. Clears their D1 artifact keys.
-4. Requeues up to 500 unsent usage ledger rows older than five minutes.
+4. Requeues up to 500 safe unsent usage ledger rows older than five minutes.
 5. If configured, fetches and replaces the previous UTC day's account-level Cloudflare usage summaries.
 
 Implementation: [`runMaintenance`](../worker/src/generation.ts), scheduled by [`wrangler.jsonc`](../wrangler.jsonc).
@@ -55,6 +56,7 @@ Implementation: [`runMaintenance`](../worker/src/generation.ts), scheduled by [`
 
 - Disable checkout if paid canaries fail; do not accept payment for an unavailable model path.
 - Keep generation and metering facts separate: a succeeded artifact with an unsent ledger is a billing-delivery incident, not a generation failure.
-- Never replay Stripe usage with a new identifier. Reuse the stored ledger identifier.
+- Never replay Stripe usage with a new identifier. Reuse the stored ledger identifier and the stored idempotency key/body while the Stripe replay window is safe.
+- Never automatically resend a `usage_ledger` row marked `reconciliation_required = 1`; reconcile it against Stripe first.
 - Never make the R2 bucket public to work around artifact delivery problems.
 - Never use `cloudflare_usage_daily` as a customer billing or entitlement source.

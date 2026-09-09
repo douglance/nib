@@ -59,6 +59,8 @@ export interface Env {
   DEFAULT_PRICE_ID: string;
   HIGH_PRICE_ID: string;
   USAGE_PRICE_ID: string;
+  STRIPE_USAGE_EVENT_NAME: string;
+  STRIPE_PORTAL_CONFIGURATION_ID: string;
   TRIAL_NETWORK_IDENTITIES_30D: string;
   TRIAL_GLOBAL_DAILY_LIMIT: string;
   TRIAL_NETWORK_SECRET: string;

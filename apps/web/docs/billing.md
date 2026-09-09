@@ -25,7 +25,7 @@ The Worker permits at most three distinct trial identities from one keyed IPv4 `
 | Standard | `google/nano-banana-2` | $0.22 | $0.32 | $0.48 |
 | Pro | `google/nano-banana-pro` | $0.43 | $0.43 | $0.75 |
 
-The service records usage only after a successful image fetch and R2 write. `usage_cents` is a whole-number Stripe meter value, so the meter is named `nib_usage_cents`.
+The service records usage only after a successful image fetch and R2 write. `usage_cents` is a whole-number Stripe meter value. `STRIPE_USAGE_EVENT_NAME` must match the event name of the meter attached to `USAGE_PRICE_ID`. The existing live meter accepts `visualize_usage_cents`; that identifier is retained even though the customer-facing product is named Nib Cloud Usage. Missing configuration leaves messages queued for retry without sending usage or marking it delivered.
 
 ## Stripe objects
 
@@ -33,21 +33,48 @@ The live Stripe account contains:
 
 1. A `$9.99/month` recurring Default price.
 2. A `$29.99/month` recurring High price.
-3. A meter named `nib_usage_cents` with sum aggregation.
+3. An active meter accepting `visualize_usage_cents` with sum aggregation.
 4. A metered recurring price attached to that meter, with a one-cent unit amount.
-5. A Customer Portal configuration that permits plan changes and cancellation.
+5. A Nib-specific Customer Portal configuration for cancellation, invoices, and payment details.
+
+Portal sessions explicitly select `STRIPE_PORTAL_CONFIGURATION_ID`; the shared Stripe account's default portal belongs to another product. Nib's live configuration is `bpc_1U3InjGHuCWtbWKO5bH7t1qe`, with canonical `nibtool.com` return, privacy, and terms links. HTML form requests redirect to Stripe; JSON clients receive the session object.
+
+Stripe's portal cannot update subscriptions with usage-based billing or multiple products. Plan switching uses Nib's authenticated `POST /billing/plan` API and still needs a visible account-page control. Do not describe portal plan switching as available for Nib. See [Stripe's portal limitations](https://docs.stripe.com/customer-management).
+
+### Account-page API contract
+
+The plan-switching account-page design is awaiting approval. The supporting form and private-status APIs are deployed; this does not make the unfinished page a complete self-service billing interface.
+
+`GET /billing/status` uses the verified session's account ID, never a caller-selected account. It returns `{subscribed: boolean, plan: "default" | "high", hasBillingCustomer: boolean}` with `Cache-Control: private, no-store`. `subscribed: false` must not be presented as a paid subscription even if the saved `plan` value is Default or High. `hasBillingCustomer` lets former subscribers access invoices and payment details after cancellation; it must not grant generation access. Deleted accounts return 404; unauthenticated requests return 401. This is the latest reconciled entitlement, not a fresh Stripe query.
+
+`POST /billing/plan` accepts the existing JSON `{plan: "default" | "high"}` contract and HTML form data with the same `plan` field. JSON clients retain the Stripe response. The handler changes only the existing recurring item, leaves metered usage attached, and requests proration on the next invoice. It does not grant local access before webhook reconciliation.
+
+For clients accepting HTML, the handler redirects with 303 to `/account` and these bounded outcome parameters:
+
+| `plan_change` | Meaning | Account-page behavior |
+| --- | --- | --- |
+| `submitted` | Stripe accepted the update; `plan` contains the requested plan. | Refresh billing status; do not infer confirmed access from the query string. |
+| `invalid` | The submitted plan or request body was invalid. | Ask the user to select a supported plan. |
+| `no_subscription` | No active subscription/item is attached to the account. | Offer subscription checkout, not another plan mutation. |
+| `failed` | Stripe rejected the mutation with a non-server error. | Show a recoverable error without claiming the plan changed. |
+| `unknown` | The connection failed or Stripe returned a server error; the update may have happened. | Check current status before suggesting another submission. |
+
+The handler never automatically retries a plan mutation after an ambiguous response. Status-query failure is also not evidence of subscription cancellation; the UI must show an unavailable state rather than replacing it with an unsubscribed state.
 
 Checkout contains the selected recurring price and the shared metered price. It collects the customer's name, billing address, and supported tax ID, and enables Stripe Tax automatic calculation. A returning tenant reuses its existing Stripe customer so Checkout can update the saved name and billing address instead of creating a duplicate customer.
 
-Stripe subscription metadata carries `tenant_id` and `plan`. The Worker verifies webhook signatures, stores each successfully applied Stripe event ID once, and treats only `active` or `trialing` subscriptions as authorized. Subscription events upsert the account so an event that arrives before `checkout.session.completed` still establishes the correct customer and recurring item. Cancellation or any inactive status clears the local subscription gate. If event processing fails, the Worker releases the event ID before returning an error so Stripe can retry it. Source: [`worker/src/billing.ts`](../worker/src/billing.ts).
+Stripe subscription metadata carries `account_id` and `plan`. The Worker verifies webhook signatures and reconciles the customer's current Stripe subscriptions instead of applying event snapshots in delivery order. Only an `active` or `trialing` subscription with the configured monthly and metered usage prices grants access; the paid price determines the plan. A delayed checkout cannot restore canceled access or undo a plan change, and cancellation of an old subscription cannot revoke its active replacement.
 
-The production restricted key needs write permission only for the Stripe resources that the Worker calls:
+The access update and processed event ID commit together in a D1 batch. Migration `0013_billing_reconciliation.sql` adds the account's last billing-event marker. If another event changes that marker while Stripe is being read, the stale reconciliation fails and Stripe retries it against fresh state. Provider or database failures leave the event unprocessed. Plan-change requests update Stripe; the resulting webhook owns the local access change. Source: [`worker/src/billing-webhook.ts`](../worker/src/billing-webhook.ts).
+
+The production restricted key needs subscription read access for reconciliation and write access for the mutations below:
 
 | Stripe endpoint | Worker action |
 | --- | --- |
 | `/v1/checkout/sessions` | Create a subscription checkout session. |
 | `/v1/billing_portal/sessions` | Create a customer portal session. |
 | `/v1/subscriptions/{id}` | Change the recurring plan price. |
+| `GET /v1/subscriptions` | Reconcile the customer's current subscriptions across all pages. |
 | `/v1/billing/meter_events` | Send successful image usage. |
 | `/v1/customers/{id}` | Delete the Stripe customer and cancel active billing before account deletion. |
 
@@ -74,6 +101,10 @@ D1 state = sent
 ```
 
 The event identifier is `nib_<job-id>`, so Queue retries and scheduled reconciliation cannot create a second logical event. The daily cron requeues ledger rows still in `queued` state after five minutes. Stripe's endpoint and identifier semantics are documented in the [meter event API](https://docs.stripe.com/api/billing/meter-event/create).
+
+Before the first Stripe request, the Queue consumer freezes the meter event name, Stripe customer, usage value, event timestamp, and first-attempt time onto the `usage_ledger` row. Later Queue deliveries ignore the message's customer and value fields and replay the stored payload with the same Stripe `Idempotency-Key`. Rows already marked `sent` are acknowledged without another Stripe call.
+
+If a first attempt is older than the Stripe idempotency and identifier safety window, or Stripe reports that the identifier already exists outside the cached response path, Nib leaves the row in `queued` state with `reconciliation_required = 1`. Cron excludes those rows; an operator must compare the ledger row with Stripe meter summaries or invoices before marking it sent or retrying it with a new action.
 
 ## Webhooks
 

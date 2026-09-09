@@ -7,6 +7,7 @@ import {
   runMaintenance,
 } from "./generation";
 import {
+  billingStatus,
   changePlan,
   consumeMetering,
   createCheckout,
@@ -22,7 +23,9 @@ import {
   isPublicDiscovery,
   isPublicMcpDiscoveryRequest,
   isPublicPage,
+  isPublicReviewCapabilityRoute,
   isSiteAsset,
+  legacyReviewInterfaceRedirect,
 } from "./routes";
 import { searchDiscoveryResponse } from "./search-discovery";
 import { agentApiResponse } from "./agent-api";
@@ -56,8 +59,17 @@ export default {
     ) {
       return appleAppSiteAssociation();
     }
-    if (url.pathname.startsWith("/r/") && request.method === "GET")
-      return reviewLanding(url);
+    if (isPublicReviewCapabilityRoute(url.pathname))
+      return env.REVIEW.fetch(withoutTrustedContext(request));
+    if (url.pathname.startsWith("/r/") && request.method === "GET") {
+      const account = await verifiedAccount(request, env);
+      if (!account) {
+        const signIn = new URL("/auth/sign-in", url);
+        signIn.searchParams.set("returnTo", url.pathname);
+        return Response.redirect(signIn, 302);
+      }
+      return legacyReviewInterfaceRedirect(url, account.id);
+    }
     if (request.method === "GET") {
       const discovery = searchDiscoveryResponse(
         url.pathname,
@@ -98,9 +110,11 @@ export default {
     if (url.pathname === "/billing/checkout" && request.method === "POST")
       return createCheckout(request, accountId, env);
     if (url.pathname === "/billing/portal" && request.method === "POST")
-      return createPortal(accountId, env);
+      return createPortal(accountId, env, request);
     if (url.pathname === "/billing/plan" && request.method === "POST")
       return changePlan(request, accountId, env);
+    if (url.pathname === "/billing/status" && request.method === "GET")
+      return billingStatus(accountId, env);
     if (url.pathname.startsWith("/artifacts/") && request.method === "GET") {
       return artifactResponse(
         request,
@@ -186,20 +200,6 @@ function appleAppSiteAssociation(): Response {
   }, { headers: { "cache-control": "public, max-age=3600" } });
 }
 
-function reviewLanding(url: URL): Response {
-  const requestId = url.pathname.slice(3).split("/")[0] ?? "";
-  if (!/^[A-Za-z0-9_-]{1,128}$/.test(requestId))
-    return new Response("Not found", { status: 404 });
-  const deepLink = `nib://request/${encodeURIComponent(requestId)}`;
-  return new Response(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Open in Nib</title><style>body{font:16px system-ui;max-width:32rem;margin:15vh auto;padding:1.5rem;color:#171717}a{display:inline-block;padding:.75rem 1rem;background:#171717;color:white;border-radius:.65rem;text-decoration:none}</style><main><h1>Open this review in Nib</h1><p>The review belongs to your Nib account.</p><a href="${deepLink}">Open Nib</a></main></html>`, {
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      "cache-control": "public, max-age=300",
-      "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; navigate-to 'self' nib:; base-uri 'none'; frame-ancestors 'none'",
-    },
-  });
-}
-
 async function withTrustedTenant(
   request: Request,
   tenantId: string,
@@ -233,7 +233,7 @@ async function siteResponse(
   );
   headers.set(
     "content-security-policy",
-    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; form-action 'self' https://checkout.stripe.com https://billing.stripe.com; frame-ancestors 'none'",
   );
   return new Response(response.body, {
     status: response.status,

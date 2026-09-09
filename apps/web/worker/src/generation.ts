@@ -356,7 +356,8 @@ export async function runMaintenance(env: Env): Promise<void> {
   const pending = await env.DB.prepare(
     `SELECT l.identifier, l.account_id, l.usage_cents, a.stripe_customer_id
      FROM usage_ledger l JOIN accounts a ON a.account_id = l.account_id
-     WHERE l.state = 'queued' AND l.created_at <= unixepoch() - 300 AND a.stripe_customer_id IS NOT NULL
+     WHERE l.state = 'queued' AND l.reconciliation_required = 0
+       AND l.created_at <= unixepoch() - 300 AND a.stripe_customer_id IS NOT NULL
      LIMIT 500`,
   ).all<{ identifier: string; account_id: string; usage_cents: number; stripe_customer_id: string }>();
   await Promise.all(

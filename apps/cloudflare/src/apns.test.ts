@@ -11,6 +11,83 @@ describe("Cloud APNs fanout", () => {
     });
   });
 
+  it("accepts the complete legacy credential family retained by production", async () => {
+    const legacyEnv = {
+      APNS_TEAM_ID: "TEAM123",
+      APNS_KEY_ID: "KEY123",
+      APNS_PRIVATE_KEY: await testPrivateKey()
+    } as unknown as Parameters<typeof apnsReadiness>[0];
+
+    expect(apnsReadiness(legacyEnv)).toMatchObject({
+      apnsConfigured: true,
+      apnsMissing: [],
+      apnsIssues: []
+    });
+  });
+
+  it("uses a complete legacy family instead of mixing partial modern credentials", async () => {
+    const legacyEnv = {
+      NIB_APNS_TEAM_ID: "INCOMPLETE_MODERN_TEAM",
+      APNS_TEAM_ID: "LEGACY_TEAM",
+      APNS_KEY_ID: "LEGACY_KEY",
+      APNS_PRIVATE_KEY: await testPrivateKey()
+    } as unknown as Parameters<typeof sendApnsFanout>[0];
+    let authorization = "";
+
+    const results = await sendApnsFanout(legacyEnv, [{
+      id: "iphone",
+      token: "token-ios",
+      apnsTopic: "com.douglance.nib",
+      apnsEnvironment: "sandbox"
+    }], { type: "test" }, (async (_input, init) => {
+      authorization = new Headers(init?.headers).get("authorization") || "";
+      return new Response(null, { status: 200 });
+    }) as typeof fetch);
+
+    expect(results[0]).toMatchObject({ sent: true, status: 200 });
+    expect(jwtHeader(authorization).kid).toBe("LEGACY_KEY");
+  });
+
+  it("prefers a complete modern credential family over legacy credentials", async () => {
+    const privateKey = await testPrivateKey();
+    const env = {
+      NIB_APNS_TEAM_ID: "MODERN_TEAM",
+      NIB_APNS_KEY_ID: "MODERN_KEY",
+      NIB_APNS_PRIVATE_KEY: privateKey,
+      APNS_TEAM_ID: "LEGACY_TEAM",
+      APNS_KEY_ID: "LEGACY_KEY",
+      APNS_PRIVATE_KEY: privateKey
+    };
+    let authorization = "";
+
+    const results = await sendApnsFanout(env, [{
+      id: "iphone",
+      token: "token-ios",
+      apnsTopic: "com.douglance.nib",
+      apnsEnvironment: "sandbox"
+    }], { type: "test" }, (async (_input, init) => {
+      authorization = new Headers(init?.headers).get("authorization") || "";
+      return new Response(null, { status: 200 });
+    }) as typeof fetch);
+
+    expect(results[0]).toMatchObject({ sent: true, status: 200 });
+    expect(jwtHeader(authorization).kid).toBe("MODERN_KEY");
+  });
+
+  it("rejects a malformed complete legacy private key", () => {
+    const legacyEnv = {
+      APNS_TEAM_ID: "TEAM123",
+      APNS_KEY_ID: "KEY123",
+      APNS_PRIVATE_KEY: "not-a-private-key"
+    } as unknown as Parameters<typeof apnsReadiness>[0];
+
+    expect(apnsReadiness(legacyEnv)).toMatchObject({
+      apnsConfigured: false,
+      apnsKeyConfigured: true,
+      apnsKeyReadable: false
+    });
+  });
+
   it("maps request choices to native action categories", () => {
     expect(apnsCategory({ choices: ["Ship", "Hold", "Revise"] })).toBe("NIB_SHIP_HOLD_REVISE");
     expect(apnsCategory({ choices: ["Approve", "Reject"] })).toBe("NIB_APPROVE_REJECT");
@@ -64,6 +141,18 @@ describe("Cloud APNs fanout", () => {
       "api.sandbox.push.apple.com"
     ]);
     expect(calls.every((call) => new Headers(call.init.headers).get("apns-push-type") === "alert")).toBe(true);
+    expect(calls.map((call) => (call.body.nib as Record<string, unknown>).requestId)).toEqual([
+      "request-1",
+      "request-1",
+      "request-1",
+      "request-1"
+    ]);
+    expect(calls.map((call) => (call.body.nib as Record<string, unknown>).deviceId)).toEqual([
+      "iphone",
+      "mac",
+      "vision",
+      "watch"
+    ]);
 
     calls.length = 0;
     await sendApnsFanout(env, devices, {
@@ -76,6 +165,46 @@ describe("Cloud APNs fanout", () => {
     expect(calls.every((call) => new Headers(call.init.headers).get("apns-push-type") === "background")).toBe(true);
     expect(calls.every((call) => (call.body.aps as Record<string, unknown>)["content-available"] === 1)).toBe(true);
     expect(calls.every((call) => (call.body.nib as Record<string, unknown>).type === "request-resolved")).toBe(true);
+  });
+
+  it("starts delivery to every registered device before any delivery completes", async () => {
+    const privateKey = await testPrivateKey();
+    const devices = ["iphone", "mac", "vision", "watch"].map((id) => ({
+      id,
+      token: `token-${id}`,
+      apnsTopic: `com.douglance.nib.${id}`,
+      apnsEnvironment: "sandbox" as const
+    }));
+    const started: string[] = [];
+    let releaseAll: (() => void) | undefined;
+    const allStarted = new Promise<void>((resolve) => { releaseAll = resolve; });
+    const fetcher = async (input: string | URL | Request) => {
+      started.push(new URL(String(input)).pathname.split("/").pop() || "");
+      if (started.length === devices.length) releaseAll?.();
+      await allStarted;
+      return new Response(null, { status: 200 });
+    };
+
+    const fanout = sendApnsFanout({
+      NIB_APNS_TEAM_ID: "TEAM123",
+      NIB_APNS_KEY_ID: "KEY123",
+      NIB_APNS_PRIVATE_KEY: privateKey
+    }, devices, {
+      type: "visual-review",
+      requestId: "request-shared-by-all-devices"
+    }, fetcher as typeof fetch);
+
+    await Promise.race([
+      allStarted,
+      new Promise<never>((_, reject) => setTimeout(
+        () => reject(new Error(`only ${started.length} device deliveries started concurrently`)),
+        250
+      ))
+    ]);
+    expect(started).toEqual(devices.map((device) => device.token));
+    const results = await fanout;
+    expect(results).toHaveLength(devices.length);
+    expect(results.every((result) => result.sent)).toBe(true);
   });
 
   it("keeps collapse identifiers within the APNs 64-byte limit", async () => {
@@ -165,4 +294,10 @@ async function testPrivateKey(): Promise<string> {
   for (const byte of bytes) binary += String.fromCharCode(byte);
   const encoded = btoa(binary).match(/.{1,64}/g)?.join("\n") || "";
   return `-----BEGIN PRIVATE KEY-----\n${encoded}\n-----END PRIVATE KEY-----`;
+}
+
+function jwtHeader(authorization: string): { kid?: string } {
+  const encoded = authorization.replace(/^bearer\s+/i, "").split(".")[0] || "";
+  const padded = encoded.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(encoded.length / 4) * 4, "=");
+  return JSON.parse(atob(padded)) as { kid?: string };
 }

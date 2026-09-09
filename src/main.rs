@@ -125,9 +125,6 @@ async fn run_compat() -> Result<()> {
         Command::Capture(args) => cli::run_capture(&args),
         Command::Feedback(args) => cli::run_feedback(&args).await,
         Command::Review(args) => cli::run_review(&args).await,
-        Command::Request(RequestCommand::Create(args)) => {
-            cli::web_feedback::run_request_create(&args)
-        }
         Command::Request(RequestCommand::Wait(args)) => {
             cli::web_feedback::run_request_wait(&args).await
         }

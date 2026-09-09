@@ -33,7 +33,9 @@
     "TRIAL_GLOBAL_DAILY_LIMIT": "50",
     "DEFAULT_PRICE_ID": "price_1U0444GHuCWtbWKOy5hXi8aH",
     "HIGH_PRICE_ID": "price_1U0444GHuCWtbWKOZknqhPjf",
-    "USAGE_PRICE_ID": "price_1U044nGHuCWtbWKOAGw6Xy9Y"
+    "USAGE_PRICE_ID": "price_1U044nGHuCWtbWKOAGw6Xy9Y",
+    "STRIPE_USAGE_EVENT_NAME": "visualize_usage_cents",
+    "STRIPE_PORTAL_CONFIGURATION_ID": "bpc_1U3InjGHuCWtbWKO5bH7t1qe"
   },
   "d1_databases": [
     {

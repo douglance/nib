@@ -137,9 +137,6 @@ pub enum TileCommand {
 
 #[derive(Subcommand, Debug)]
 pub enum RequestCommand {
-    /// Publish a durable visual review and return immediately
-    Create(RequestCreateArgs),
-
     /// Wait for a published request to receive a response
     Wait(RequestWaitArgs),
 
@@ -235,7 +232,7 @@ pub struct FeedbackArgs {
     /// Image or .nib file to get feedback on
     pub file: PathBuf,
 
-    /// Question to display in the selected review surface
+    /// Question shown on every registered Nib device
     #[arg(short = 'm', long)]
     pub message: Option<String>,
 
@@ -247,22 +244,9 @@ pub struct FeedbackArgs {
     #[arg(short = 't', long, default_value = "0")]
     pub timeout: u64,
 
-    /// Human review surface
-    #[arg(long, value_enum, default_value = "native")]
-    pub ui: FeedbackUi,
-
     /// Explicitly publish without waiting; only use when the caller requests it
     #[arg(long)]
     pub detach: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum FeedbackUi {
-    #[value(name = "native", alias = "gui")]
-    Native,
-    Terminal,
-    Web,
-    Auto,
 }
 
 #[derive(Parser, Debug)]
@@ -273,20 +257,6 @@ pub struct ReviewArgs {
     /// Review request shown above the decision controls
     #[arg(short = 'm', long)]
     pub message: Option<String>,
-}
-
-#[derive(Parser, Debug)]
-pub struct RequestCreateArgs {
-    /// Image, .nib, or MP4/H.264 file to review
-    pub file: PathBuf,
-
-    /// Question shown to the reviewer
-    #[arg(short = 'm', long)]
-    pub question: Option<String>,
-
-    /// Image-only annotation prompt JSON
-    #[arg(short = 'a', long)]
-    pub annotations: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -427,7 +397,7 @@ pub struct AnnotationAddArgs {
     /// Image file to annotate
     pub file: PathBuf,
 
-    /// Annotation type (rectangle, arrow, highlight, text, number, line, ellipse, blur)
+    /// Annotation type (rectangle/box, arrow, highlight, text, number, line, ellipse, blur, crop)
     #[arg(short = 't', long, default_value = "rectangle")]
     pub annotation_type: String,
 
@@ -586,13 +556,9 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub feedback: bool,
 
-    /// Message to show in the feedback GUI (question for the human, used with --feedback)
+    /// Question shown on every registered Nib device when used with --feedback
     #[arg(short = 'm', long)]
     pub message: Option<String>,
-
-    /// Human review surface used with --feedback
-    #[arg(long, value_enum, default_value = "native")]
-    pub feedback_ui: FeedbackUi,
 }
 
 #[derive(Parser, Debug)]
@@ -621,7 +587,7 @@ pub struct GridArgs {
     #[arg(short = 's', long, default_value = "100")]
     pub spacing: u32,
 
-    /// Region to focus on (format: "x1,y1,x2,y2")
+    /// Region to focus on: x1,y1,x2,y2, or legacy x,y,width,height when corners are reversed
     #[arg(short = 'r', long)]
     pub region: Option<String>,
 
@@ -812,14 +778,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn feedback_defaults_to_native_attached_review() {
+    fn feedback_is_the_only_review_creation_command() {
         let cli = Cli::try_parse_from(["nib", "feedback", "review.png"]).unwrap();
         let Command::Feedback(args) = cli.command else {
             panic!("expected feedback command");
         };
-        assert_eq!(args.ui, FeedbackUi::Native);
         assert_eq!(args.timeout, 0);
         assert!(!args.detach, "feedback must wait unless detach is explicit");
+
+        assert!(
+            Cli::try_parse_from(["nib", "feedback", "review.png", "--ui", "web"]).is_err(),
+            "feedback must not ask callers to select a review surface"
+        );
+        assert!(
+            Cli::try_parse_from(["nib", "feedback", "review.png", "--device", "iphone"]).is_err(),
+            "feedback must not ask callers to select a device"
+        );
+        assert!(
+            Cli::try_parse_from(["nib", "request", "create", "review.png"]).is_err(),
+            "feedback must be the only public review-creation command"
+        );
+        assert!(
+            Cli::try_parse_from([
+                "nib",
+                "generate",
+                "review",
+                "--width",
+                "1",
+                "--height",
+                "1",
+                "--feedback-ui",
+                "native",
+            ])
+            .is_err(),
+            "generated feedback must use the same device-agnostic review bus"
+        );
     }
 
     #[test]

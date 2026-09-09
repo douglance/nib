@@ -2,6 +2,9 @@ export interface ApnsEnv {
   NIB_APNS_TEAM_ID?: string;
   NIB_APNS_KEY_ID?: string;
   NIB_APNS_PRIVATE_KEY?: string;
+  APNS_TEAM_ID?: string;
+  APNS_KEY_ID?: string;
+  APNS_PRIVATE_KEY?: string;
 }
 
 export interface ApnsDevice {
@@ -45,22 +48,23 @@ export interface ApnsPayload {
 }
 
 export function apnsReadiness(env: ApnsEnv): ApnsReadiness {
+  const credentials = selectApnsCredentialFamily(env);
   const required: Array<[string, string | undefined]> = [
-    ["NIB_APNS_TEAM_ID", env.NIB_APNS_TEAM_ID],
-    ["NIB_APNS_KEY_ID", env.NIB_APNS_KEY_ID],
-    ["NIB_APNS_PRIVATE_KEY", env.NIB_APNS_PRIVATE_KEY]
+    [`${credentials.prefix}_TEAM_ID`, credentials.teamId],
+    [`${credentials.prefix}_KEY_ID`, credentials.keyId],
+    [`${credentials.prefix}_PRIVATE_KEY`, credentials.privateKey]
   ];
   const apnsMissing = required.filter(([, value]) => !value?.trim()).map(([name]) => name);
   const apnsIssues = [...apnsMissing];
-  if (env.NIB_APNS_PRIVATE_KEY && !env.NIB_APNS_PRIVATE_KEY.includes("BEGIN PRIVATE KEY")) {
-    apnsIssues.push("NIB_APNS_PRIVATE_KEY must contain a PKCS#8 .p8 private key");
+  if (credentials.privateKey && !credentials.privateKey.includes("BEGIN PRIVATE KEY")) {
+    apnsIssues.push(`${credentials.prefix}_PRIVATE_KEY must contain a PKCS#8 .p8 private key`);
   }
   return {
     apnsConfigured: apnsIssues.length === 0,
     apnsEnvironment: null,
     apnsTopic: null,
-    apnsKeyConfigured: Boolean(env.NIB_APNS_PRIVATE_KEY?.trim()),
-    apnsKeyReadable: Boolean(env.NIB_APNS_PRIVATE_KEY?.includes("BEGIN PRIVATE KEY")),
+    apnsKeyConfigured: Boolean(credentials.privateKey?.trim()),
+    apnsKeyReadable: Boolean(credentials.privateKey?.includes("BEGIN PRIVATE KEY")),
     apnsMissing,
     apnsIssues
   };
@@ -86,7 +90,12 @@ export async function sendApnsFanout(
       attempts: 0
     }));
   }
-  const jwt = await apnsJwt(env as Required<Pick<ApnsEnv, "NIB_APNS_TEAM_ID" | "NIB_APNS_KEY_ID" | "NIB_APNS_PRIVATE_KEY">>);
+  const credentials = selectApnsCredentialFamily(env);
+  const jwt = await apnsJwt({
+    NIB_APNS_TEAM_ID: credentials.teamId!.trim(),
+    NIB_APNS_KEY_ID: credentials.keyId!.trim(),
+    NIB_APNS_PRIVATE_KEY: credentials.privateKey!.trim()
+  });
   return Promise.all(devices.map(async (device) => {
     try {
       const attempts = await sendApnsToDevice(env, jwt, device, payload, fetcher);
@@ -112,6 +121,41 @@ export async function sendApnsFanout(
       };
     }
   }));
+}
+
+interface ApnsCredentialFamily {
+  prefix: "NIB_APNS" | "APNS";
+  teamId?: string;
+  keyId?: string;
+  privateKey?: string;
+}
+
+function selectApnsCredentialFamily(env: ApnsEnv): ApnsCredentialFamily {
+  const modern = {
+    prefix: "NIB_APNS" as const,
+    teamId: env.NIB_APNS_TEAM_ID,
+    keyId: env.NIB_APNS_KEY_ID,
+    privateKey: env.NIB_APNS_PRIVATE_KEY
+  };
+  const legacy = {
+    prefix: "APNS" as const,
+    teamId: env.APNS_TEAM_ID,
+    keyId: env.APNS_KEY_ID,
+    privateKey: env.APNS_PRIVATE_KEY
+  };
+  if (completeApnsCredentialFamily(modern)) return modern;
+  if (completeApnsCredentialFamily(legacy)) return legacy;
+  if (hasApnsCredentialValue(modern)) return modern;
+  if (hasApnsCredentialValue(legacy)) return legacy;
+  return modern;
+}
+
+function completeApnsCredentialFamily(credentials: ApnsCredentialFamily): boolean {
+  return Boolean(credentials.teamId?.trim() && credentials.keyId?.trim() && credentials.privateKey?.trim());
+}
+
+function hasApnsCredentialValue(credentials: ApnsCredentialFamily): boolean {
+  return Boolean(credentials.teamId?.trim() || credentials.keyId?.trim() || credentials.privateKey?.trim());
 }
 
 async function sendApnsToDevice(

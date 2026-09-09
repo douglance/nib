@@ -1,7 +1,4 @@
-use super::{
-    commands::ensure_feedback_nib, FeedbackArgs, FeedbackUi, RequestCreateArgs, RequestReviewArgs,
-    RequestWaitArgs,
-};
+use super::{commands::ensure_feedback_nib, FeedbackArgs, RequestReviewArgs, RequestWaitArgs};
 use crate::core::{ImageSource, NibImage};
 use crate::storage::{export, nib_file::NibFile};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
@@ -88,22 +85,19 @@ impl fmt::Display for WaitError {
 }
 
 pub async fn run(args: &FeedbackArgs) -> Result<(), WebFeedbackError> {
-    let published = create_review_request(
+    let value = run_value(args).await?;
+    println!("{}", serde_json::to_string(&value).unwrap_or_default());
+    Ok(())
+}
+
+pub(crate) async fn run_value(args: &FeedbackArgs) -> Result<Value, WebFeedbackError> {
+    let published = publish_feedback_request(
         &args.file,
         args.message.as_deref(),
         args.annotations.as_deref(),
     )?;
-    finish_published(args, published).await
-}
-
-async fn finish_published(
-    args: &FeedbackArgs,
-    published: PublishedFeedback,
-) -> Result<(), WebFeedbackError> {
     print_wait_handle(&published);
-    let value = finish_published_value(args, published).await?;
-    println!("{}", serde_json::to_string(&value).unwrap_or_default());
-    Ok(())
+    finish_published_value(args, published).await
 }
 
 async fn finish_published_value(
@@ -124,18 +118,17 @@ async fn finish_published_value(
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("nib"))
+        && !visual.annotations.is_empty()
     {
-        if !visual.annotations.is_empty() {
-            visual.derivative_file = Some(
-                merge_annotations(&published.file, &visual.annotations)
-                    .map_err(WebFeedbackError::after_publish)?,
-            );
-        }
+        visual.derivative_file = Some(
+            merge_annotations(&published.file, &visual.annotations)
+                .map_err(WebFeedbackError::after_publish)?,
+        );
     }
     serde_json::to_value(visual).map_err(|error| WebFeedbackError::after_publish(error.to_string()))
 }
 
-pub(crate) fn create_review_request(
+fn publish_feedback_request(
     file: &Path,
     message: Option<&str>,
     annotations: Option<&str>,
@@ -161,21 +154,6 @@ pub(crate) fn create_review_request(
     } else {
         create_feedback_request(file, message, annotations)
     }
-}
-
-pub fn run_request_create(args: &RequestCreateArgs) -> crate::core::Result<()> {
-    let published = create_review_request(
-        &args.file,
-        args.question.as_deref(),
-        args.annotations.as_deref(),
-    )
-    .map_err(|error| crate::core::NibError::Other(error.to_string()))?;
-    println!(
-        "{}",
-        serde_json::to_string(&published)
-            .map_err(|error| crate::core::NibError::Other(error.to_string()))?
-    );
-    Ok(())
 }
 
 pub async fn run_request_wait(args: &RequestWaitArgs) -> crate::core::Result<()> {
@@ -216,7 +194,6 @@ pub(crate) async fn review_request_value(args: &RequestReviewArgs) -> crate::cor
         message: Some(downloaded.prompt.clone()),
         annotations: None,
         timeout: 0,
-        ui: FeedbackUi::Native,
         detach: false,
     };
     let response = super::commands::run_native_feedback_value(&feedback).await?;
@@ -377,7 +354,7 @@ pub(crate) fn create_feedback_request(
     let canonical = std::fs::read(&nib_path).map_err(|error| {
         WebFeedbackError::after_publish(format!("Failed to read {}: {error}", nib_path.display()))
     })?;
-    upload_attachment(
+    let published = upload_attachment(
         &agent,
         &base_url,
         &request.id,
@@ -403,12 +380,7 @@ pub(crate) fn create_feedback_request(
     .and_then(|_| publish_request(&agent, &base_url, &request.id))
     .map_err(WebFeedbackError::before_publish)?;
 
-    Ok(PublishedFeedback {
-        url: request_url(&base_url, &request.id),
-        request_id: request.id,
-        file: nib_path,
-        status: "open",
-    })
+    Ok(published_feedback(&published, nib_path, &base_url))
 }
 
 fn create_video_review_request(
@@ -486,14 +458,14 @@ fn create_video_review_request(
         &json!({"metadata":{"subject":subject}}),
     )
     .map_err(WebFeedbackError::before_publish)?;
-    publish_request(&agent, &base_url, &request.id).map_err(WebFeedbackError::before_publish)?;
+    let published = publish_request(&agent, &base_url, &request.id)
+        .map_err(WebFeedbackError::before_publish)?;
 
-    Ok(PublishedFeedback {
-        url: request_url(&base_url, &request.id),
-        request_id: request.id,
-        file: file.to_path_buf(),
-        status: "open",
-    })
+    Ok(published_feedback(
+        &published,
+        file.to_path_buf(),
+        &base_url,
+    ))
 }
 
 fn create_pdf_review_request(
@@ -556,14 +528,14 @@ fn create_pdf_review_request(
         &json!({"metadata":{"subject":subject}}),
     )
     .map_err(WebFeedbackError::before_publish)?;
-    publish_request(&agent, &base_url, &request.id).map_err(WebFeedbackError::before_publish)?;
+    let published = publish_request(&agent, &base_url, &request.id)
+        .map_err(WebFeedbackError::before_publish)?;
 
-    Ok(PublishedFeedback {
-        url: request_url(&base_url, &request.id),
-        request_id: request.id,
-        file: file.to_path_buf(),
-        status: "open",
-    })
+    Ok(published_feedback(
+        &published,
+        file.to_path_buf(),
+        &base_url,
+    ))
 }
 
 fn print_wait_handle(request: &PublishedFeedback) {
@@ -686,11 +658,16 @@ fn upload_file(
         .map_err(|error| format!("Invalid portal attachment response: {error}"))
 }
 
-fn publish_request(agent: &ureq::Agent, base_url: &str, request_id: &str) -> Result<(), String> {
+fn publish_request(
+    agent: &ureq::Agent,
+    base_url: &str,
+    request_id: &str,
+) -> Result<PortalRequest, String> {
     authorize(agent.post(&format!("{base_url}/api/requests/{request_id}/publish")))
         .call()
-        .map(|_| ())
-        .map_err(http_error)
+        .map_err(http_error)?
+        .into_json()
+        .map_err(|error| format!("Invalid portal publish response: {error}"))
 }
 
 pub(crate) async fn wait_for_request(
@@ -788,6 +765,32 @@ fn request_url(base_url: &str, request_id: &str) -> String {
     format!("{base_url}/r/{request_id}")
 }
 
+fn published_feedback(request: &PortalRequest, file: PathBuf, base_url: &str) -> PublishedFeedback {
+    PublishedFeedback {
+        url: review_url(base_url, request),
+        request_id: request.id.clone(),
+        file,
+        status: "open",
+    }
+}
+
+fn review_url(base_url: &str, request: &PortalRequest) -> String {
+    request
+        .review_url
+        .as_deref()
+        .filter(|url| !url.trim().is_empty())
+        .or_else(|| request.metadata.get("reviewUrl").and_then(Value::as_str))
+        .filter(|url| !url.trim().is_empty())
+        .map(|url| {
+            if url.starts_with("http://") || url.starts_with("https://") {
+                url.to_string()
+            } else {
+                format!("{base_url}{url}")
+            }
+        })
+        .unwrap_or_else(|| request_url(base_url, &request.id))
+}
+
 fn get_request(
     agent: &ureq::Agent,
     base_url: &str,
@@ -831,7 +834,10 @@ fn response_payload(response: PortalResponse) -> Value {
 fn visual_response(response: &Value) -> Result<VisualResponse, String> {
     let response: VisualResponse = serde_json::from_value(response.clone())
         .map_err(|error| format!("Invalid visual review response: {error}"))?;
-    if response.contract != "nib.visual-review/v1" && response.contract != "nib.review/v2" {
+    if response.contract != "nib.visual-review/v1"
+        && response.contract != "nib.review/v2"
+        && response.contract != "nib.review/v3"
+    {
         return Err(format!(
             "Unsupported visual review contract: {}",
             response.contract
@@ -948,6 +954,8 @@ fn request_source() -> String {
 #[derive(Debug, Deserialize)]
 struct PortalRequest {
     id: String,
+    #[serde(default, rename = "reviewUrl")]
+    review_url: Option<String>,
     #[serde(default)]
     title: String,
     #[serde(default)]
@@ -1028,6 +1036,39 @@ mod tests {
         .unwrap();
         assert_eq!(response.contract, "nib.visual-review/v1");
         assert_eq!(response.decision, "approve");
+    }
+
+    #[test]
+    fn published_feedback_uses_the_server_capability_url() {
+        let request: PortalRequest = serde_json::from_value(json!({
+            "id":"req-1",
+            "metadata":{"reviewUrl":"https://nibtool.com/r/account-1/req-1"}
+        }))
+        .unwrap();
+
+        assert_eq!(
+            review_url("https://nibtool.com", &request),
+            "https://nibtool.com/r/account-1/req-1"
+        );
+    }
+
+    #[test]
+    fn publish_request_returns_the_server_capability_record() {
+        let base_url = mock_portal(vec![(
+            200,
+            json!({
+                "id":"req-1",
+                "metadata":{"reviewUrl":"https://nibtool.com/r/account-1/req-1"}
+            })
+            .to_string(),
+        )]);
+
+        let published = publish_request(&portal_agent(), &base_url, "req-1").unwrap();
+
+        assert_eq!(
+            review_url(&base_url, &published),
+            "https://nibtool.com/r/account-1/req-1"
+        );
     }
 
     #[test]

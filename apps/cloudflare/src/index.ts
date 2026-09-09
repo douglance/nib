@@ -1,8 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import { apnsReadiness, sendApnsFanout, type ApnsPayload } from "./apns";
+import { accountInboxName, canonicalAccountId } from "./account-inbox";
 import { NibFileBackend } from "./nib-files";
 import { purgeReviewAccount } from "./account-data";
-import { commitFirstResponse, responseChoiceValue } from "./response-coordinator";
+import { commitFirstResponse, responseChoiceValue, visualResponseError } from "./response-coordinator";
+import { isPublishedVisualReview, parseReviewRoute, publicAttachmentUrl, publicResponseUrl, publicReviewRecord, reviewPage, reviewPath } from "./review-page";
 
 interface Env {
   REQUESTS: DurableObjectNamespace<AccountReviewHub>;
@@ -96,12 +98,36 @@ export default {
     if (url.pathname === "/.well-known/apple-app-site-association" || url.pathname === "/apple-app-site-association") {
       return json({ applinks: { apps: [], details: [{ appID: "2AS3V73632.com.douglance.nib", paths: ["/r/*"] }] } });
     }
+    const reviewRoute = parseReviewRoute(url.pathname);
+    if (reviewRoute) {
+      if (reviewRoute.action === "page" && request.method === "GET") {
+        return reviewPage(reviewRoute.accountId, reviewRoute.requestId);
+      }
+      if (reviewRoute.action === "attachment" && request.method === "GET") {
+        if (!reviewRoute.attachmentId) return json({ error: "Attachment not found" }, 404);
+        return attachmentResponse(
+          reviewRoute.accountId,
+          reviewRoute.attachmentId,
+          env,
+          url.searchParams.get("access") || "",
+          true
+        );
+      }
+      if (reviewRoute.action === "data" && request.method === "GET") {
+        const item = await fetchAccountRequest(env, reviewRoute.accountId, reviewRoute.requestId, url.origin);
+        return item ? json(publicReviewRecord(item, reviewRoute.accountId)) : json({ error: "Request not found" }, 404);
+      }
+      if (reviewRoute.action === "respond" && request.method === "POST") {
+        return respondPublicReview(env, reviewRoute.accountId, reviewRoute.requestId, request, url.origin);
+      }
+      return json({ error: "Method not allowed" }, 405);
+    }
     if (url.pathname.startsWith("/r/") && request.method === "GET") {
-      return requestPage(url.pathname.split("/")[2] ?? "");
+      return json({ error: "Not found" }, 404);
     }
     const accountId = trustedAccountId(request);
     if (!accountId) return unauthorized();
-    const stub = env.REQUESTS.get(env.REQUESTS.idFromName(`account:${accountId}`));
+    const stub = env.REQUESTS.get(env.REQUESTS.idFromName(accountInboxName(accountId)));
     if (url.pathname.startsWith("/attachments/") && request.method === "GET") {
       return attachmentResponse(accountId, url.pathname.split("/")[2] ?? "", env);
     }
@@ -184,6 +210,7 @@ export class AccountReviewHub extends DurableObject<Env> {
       return json({ recorded: true });
     }
     if (url.pathname === "/api/requests/socket") return this.openSocket(request);
+    const accountId = request.headers.get("x-nib-account-id") || "invalid";
     if (url.pathname === "/api/requests") {
       if (request.method === "GET") return json(await this.list());
       if (request.method === "POST") return json(await this.create(await request.json<JsonObject>(), url.origin), 201);
@@ -194,13 +221,14 @@ export class AccountReviewHub extends DurableObject<Env> {
     const action = match[2];
     if (!action && request.method === "GET") return this.itemResponse(id);
     if (!action && request.method === "PATCH") return this.patch(id, await request.json<JsonObject>());
-    if (action === "publish" && request.method === "POST") return this.publish(id, url.origin);
+    if (action === "publish" && request.method === "POST") return this.publish(id, url.origin, accountId);
     if (action === "respond" && request.method === "POST") {
       return this.respond(
         id,
         await request.json<JsonObject>(),
         request.headers.get("idempotency-key") || "",
-        url.origin
+        url.origin,
+        accountId
       );
     }
     if ((action === "attachments" || action === "response-attachments") && request.method === "POST") {
@@ -395,7 +423,7 @@ export class AccountReviewHub extends DurableObject<Env> {
     return json(attachment, 201);
   }
 
-  private async publish(id: string, origin: string): Promise<Response> {
+  private async publish(id: string, origin: string, accountId: string): Promise<Response> {
     const item = await this.get(id);
     if (!item) return json({ error: "Request not found" }, 404);
     if (item.publishedAt) return json(item);
@@ -431,6 +459,8 @@ export class AccountReviewHub extends DurableObject<Env> {
     }
     item.publishedAt = new Date().toISOString();
     item.updatedAt = item.publishedAt;
+    item.metadata.accountId = accountId;
+    item.metadata.reviewUrl = reviewPath(origin, accountId, item.id);
     await this.put(item);
     this.broadcast("published", item);
     const sent = await this.deliver(requestNotificationPayload(item, origin));
@@ -443,15 +473,16 @@ export class AccountReviewHub extends DurableObject<Env> {
     return json(item);
   }
 
-  private async respond(id: string, input: JsonObject, headerIdempotencyKey: string, origin: string): Promise<Response> {
+  private async respond(
+    id: string,
+    input: JsonObject,
+    headerIdempotencyKey: string,
+    origin: string,
+    accountId: string
+  ): Promise<Response> {
     const item = await this.get(id);
     if (!item) return json({ error: "Request not found" }, 404);
     const idempotencyKey = (headerIdempotencyKey || text(input.idempotencyKey)).slice(0, 200);
-    if (item.responses.length) {
-      return idempotencyKey && item.responses[0].idempotencyKey === idempotencyKey
-        ? json(item)
-        : json({ error: "Request already has a response", request: item }, 409);
-    }
     if (item.kind === "visual-review" && !item.publishedAt) return json({ error: "Visual review is not published" }, 409);
     const now = new Date().toISOString();
     const decision = responseChoiceValue(
@@ -459,6 +490,10 @@ export class AccountReviewHub extends DurableObject<Env> {
       item.kind === "visual-review" ? ["approve", "reject"] : item.choices
     );
     const comment = text(input.comment) || text(input.text);
+    if (item.kind === "visual-review") {
+      const error = visualResponseError(decision, comment);
+      if (error) return json({ error }, 400);
+    }
     const annotations = Array.isArray(input.annotations) ? input.annotations : [];
     const subject = object(item.metadata.subject);
     const primary = object(subject.primary);
@@ -473,7 +508,7 @@ export class AccountReviewHub extends DurableObject<Env> {
     const visualData = item.kind === "visual-review" ? {
       contract: text(item.metadata.contract).startsWith("nib.review/")
         ? text(item.metadata.contract)
-        : "nib.review-response/v1",
+        : "nib.visual-review/v1",
       decision: decision || "comment",
       comment: comment || null,
       annotations
@@ -513,7 +548,7 @@ export class AccountReviewHub extends DurableObject<Env> {
       status: accepted.status,
       responseId: response.id,
       tag: `request:${accepted.id}`,
-      url: `${origin}/r/${encodeURIComponent(accepted.id)}`
+      url: reviewPath(origin, accountId, accepted.id)
     });
     return json(accepted);
   }
@@ -569,10 +604,82 @@ export class AccountReviewHub extends DurableObject<Env> {
   }
 }
 
-async function attachmentResponse(accountId: string, id: string, env: Env): Promise<Response> {
+async function fetchAccountRequest(
+  env: Env,
+  accountId: string,
+  requestId: string,
+  origin: string
+): Promise<RequestRecord | null> {
+  const response = await fetchAccountRequestAction(env, accountId, requestId, "", new Request(`${origin}/api/requests/${requestId}`), origin);
+  if (response.status === 404) return null;
+  if (!response.ok) return null;
+  const item = await response.json<RequestRecord>();
+  return isPublishedVisualReview(item) ? item : null;
+}
+
+function fetchAccountRequestAction(
+  env: Env,
+  accountId: string,
+  requestId: string,
+  action: "" | "respond",
+  source: Request,
+  origin: string
+): Promise<Response> {
+  const headers = new Headers(source.headers);
+  headers.set("x-nib-auth-subject", accountId);
+  headers.set("x-nib-account-id", accountId);
+  const path = action
+    ? `/api/requests/${encodeURIComponent(requestId)}/${action}`
+    : `/api/requests/${encodeURIComponent(requestId)}`;
+  const forwarded = new Request(`${origin}${path}`, {
+    method: source.method,
+    headers,
+    body: source.body,
+    redirect: "manual"
+  });
+  return env.REQUESTS
+    .get(env.REQUESTS.idFromName(accountInboxName(accountId)))
+    .fetch(forwarded);
+}
+
+async function respondPublicReview(
+  env: Env,
+  accountId: string,
+  requestId: string,
+  source: Request,
+  origin: string
+): Promise<Response> {
+  if (!await fetchAccountRequest(env, accountId, requestId, origin)) {
+    return json({ error: "Request not found" }, 404);
+  }
+  const response = await fetchAccountRequestAction(env, accountId, requestId, "respond", source, origin);
+  const body = await response.json<JsonObject>().catch(() => null);
+  if (!body) return response;
+  if (response.ok) return json(publicReviewRecord(body as unknown as RequestRecord, accountId), response.status);
+  const request = object(body.request);
+  if (request.id) {
+    return json({
+      error: text(body.error) || "Request already has a response",
+      request: publicReviewRecord(request as unknown as RequestRecord, accountId)
+    }, response.status);
+  }
+  return json({ error: text(body.error) || "The response was not accepted" }, response.status);
+}
+
+async function attachmentResponse(
+  accountId: string,
+  id: string,
+  env: Env,
+  accessToken = "",
+  requireAccess = false
+): Promise<Response> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: "Attachment not found" }, 404);
   const object = await env.MEDIA.get(`accounts/${accountId}/attachments/${id}`);
   if (!object) return json({ error: "Attachment not found" }, 404);
+  const expected = object.customMetadata?.accessHash;
+  if (requireAccess && (!accessToken || !expected || expected !== await sha256(accessToken))) {
+    return json({ error: "Attachment not found" }, 404);
+  }
   const headers = new Headers(corsHeaders());
   object.writeHttpMetadata(headers);
   headers.set("etag", object.httpEtag);
@@ -581,10 +688,7 @@ async function attachmentResponse(accountId: string, id: string, env: Env): Prom
 }
 
 function trustedAccountId(request: Request): string | null {
-  const accountId = request.headers.get("x-nib-account-id")?.trim() ?? "";
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(accountId)
-    ? accountId
-    : null;
+  return canonicalAccountId(request.headers.get("x-nib-account-id") ?? "");
 }
 
 function unauthorized(): Response {
@@ -614,16 +718,14 @@ async function sha256(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
-
-
-function requestPage(id: string): Response {
-  const native = `nib://request/${encodeURIComponent(id)}`;
-  const html = `<!doctype html><meta name="viewport" content="width=device-width"><title>Nib review</title><style>body{font:16px system-ui;max-width:42rem;margin:10vh auto;padding:2rem;color:#171717}a{display:inline-block;padding:.8rem 1rem;background:#18181b;color:white;border-radius:.6rem;text-decoration:none}</style><h1>Nib review</h1><p>Open this request in the installed Nib app.</p><a href="${native}">Open Nib</a>`;
-  return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", ...corsHeaders() } });
-}
-
 function requestNotificationPayload(item: RequestRecord, origin: string): ApnsPayload {
   const rich = item.attachments.find((attachment) => attachment.type === "image" && attachment.url);
+  const accountId = text(item.metadata.accountId);
+  const reviewUrl = text(item.metadata.reviewUrl)
+    || (accountId ? reviewPath(origin, accountId, item.id) : `${origin}/r/${encodeURIComponent(item.id)}`);
+  const richURL = rich && accountId
+    ? new URL(publicAttachmentUrl(accountId, item.id, rich), origin).toString()
+    : null;
   return {
     type: item.kind,
     requestId: item.id,
@@ -634,17 +736,19 @@ function requestNotificationPayload(item: RequestRecord, origin: string): ApnsPa
     allowText: item.allowText,
     projectId: text(item.target.projectId) || undefined,
     projectName: text(item.target.projectName) || undefined,
-    url: `${origin}/r/${encodeURIComponent(item.id)}`,
-    responseUrl: `${origin}/api/requests/${encodeURIComponent(item.id)}/respond`,
+    url: reviewUrl,
+    responseUrl: accountId
+      ? publicResponseUrl(origin, accountId, item.id)
+      : `${origin}/api/requests/${encodeURIComponent(item.id)}/respond`,
     tag: `request:${item.id}`,
     priority: item.priority,
     createdAt: item.createdAt,
-    richAttachment: rich ? {
+    richAttachment: rich && richURL ? {
       id: rich.id,
       name: rich.name,
       type: rich.type,
       contentType: rich.contentType,
-      url: new URL(rich.url, origin).toString()
+      url: richURL
     } : undefined
   };
 }

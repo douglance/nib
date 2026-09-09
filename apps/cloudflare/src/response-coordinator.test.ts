@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { commitFirstResponse, responseChoiceValue, type ResponseTransaction } from "./response-coordinator";
+import {
+  commitFirstResponse,
+  responseChoiceValue,
+  visualResponseError,
+  type ResponseTransaction
+} from "./response-coordinator";
 
 interface TestResponse {
   id: string;
@@ -20,6 +25,17 @@ describe("response coordination", () => {
     expect(responseChoiceValue({ decision: " hold ", choiceIndex: 0 }, ["Approve"])).toBe("hold");
     expect(responseChoiceValue({ choiceIndex: 9 }, ["Approve"])).toBe("");
     expect(responseChoiceValue({ choiceIndex: 0 }, ["approve", "reject"])).toBe("approve");
+  });
+
+  it("shares one validation contract across every visual-review client", () => {
+    expect(visualResponseError("approve", "")).toBeNull();
+    expect(visualResponseError("reject", "Needs work")).toBeNull();
+    expect(visualResponseError("comment", "Tighten the spacing")).toBeNull();
+    expect(visualResponseError("", "A comment without an explicit decision")).toBeNull();
+    expect(visualResponseError("comment", "")).toBe("A comment response requires nonempty text");
+    expect(visualResponseError("ship", "")).toBe(
+      "Visual review decision must be approve, reject, or comment"
+    );
   });
 
   it("commits one simultaneous response and returns exact retries", async () => {

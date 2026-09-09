@@ -9,6 +9,7 @@
 //! This format enables visual communication between humans (GUI) and LLM agents (CLI).
 
 use crate::StorageResult;
+use fs2::FileExt;
 use nib_core::{
     Annotation, AnnotationId, AnnotationType, ArrowHead, AssetData, BlurIntensity, Color, Point,
     Region, Severity, StorageError, StrokeStyle, TextAlign,
@@ -16,6 +17,7 @@ use nib_core::{
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -49,6 +51,7 @@ pub struct NibFile {
     conn: Connection,
     path: PathBuf,
     read_only: bool,
+    _managed_sidecar_lock: Option<File>,
 }
 
 impl NibFile {
@@ -85,6 +88,7 @@ impl NibFile {
             conn,
             path: path.to_path_buf(),
             read_only: false,
+            _managed_sidecar_lock: None,
         };
 
         nib_file.init_schema()?;
@@ -117,6 +121,7 @@ impl NibFile {
             conn,
             path: path.to_path_buf(),
             read_only: true,
+            _managed_sidecar_lock: None,
         };
 
         nib_file.set_read_pragmas()?;
@@ -130,6 +135,15 @@ impl NibFile {
         if !source_path.exists() {
             return Err(StorageError::NotFound(source_path.display().to_string()));
         }
+
+        let lock_path = derivative_lock_path(source_path);
+        let derivative_lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock_path)?;
+        FileExt::lock_exclusive(&derivative_lock)?;
 
         let derivative_path = next_derivative_path(source_path)?;
         if let Some(parent) = derivative_path.parent() {
@@ -167,12 +181,66 @@ impl NibFile {
         Self::open_editable_derivative(path)
     }
 
+    /// Open the stable `.nib` sidecar owned by a source image, creating it when needed.
+    ///
+    /// Unlike an explicit `.nib` input, this sidecar is mutable tool-owned state. A
+    /// cross-process advisory lock is held for the lifetime of the returned handle so
+    /// concurrent CLI annotations serialize and accumulate instead of racing schema
+    /// creation or branching into unrelated derivatives.
+    pub fn open_or_create_managed_sidecar(
+        path: &Path,
+        image_data: &[u8],
+        format: &str,
+        width: u32,
+        height: u32,
+    ) -> StorageResult<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let lock_path = managed_sidecar_lock_path(path);
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock_path)?;
+        FileExt::lock_exclusive(&lock)?;
+
+        let mut nib_file = if path.exists() {
+            match Self::open_writable_existing(path).and_then(|nib_file| {
+                nib_file.validate_managed_sidecar()?;
+                Ok(nib_file)
+            }) {
+                Ok(nib_file) => nib_file,
+                Err(error) if is_recoverable_managed_sidecar_error(&error) => {
+                    let quarantined = quarantine_managed_sidecar(path)?;
+                    let nib_file = Self::create(path, image_data, format, width, height)?;
+                    nib_file.set_metadata("recovered_from_path", &quarantined.to_string_lossy())?;
+                    nib_file
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            Self::create(path, image_data, format, width, height)?
+        };
+        nib_file._managed_sidecar_lock = Some(lock);
+        Ok(nib_file)
+    }
+
+    fn validate_managed_sidecar(&self) -> StorageResult<()> {
+        self.get_image()?;
+        self.annotation_count()?;
+        Ok(())
+    }
+
     fn open_writable_existing(path: &Path) -> StorageResult<Self> {
         let conn = Connection::open(path)?;
         let nib_file = Self {
             conn,
             path: path.to_path_buf(),
             read_only: false,
+            _managed_sidecar_lock: None,
         };
 
         nib_file.set_pragmas()?;
@@ -1673,6 +1741,58 @@ fn string_to_blur_intensity(s: &str) -> BlurIntensity {
         "pixelate" => BlurIntensity::Pixelate,
         _ => BlurIntensity::Medium,
     }
+}
+
+fn managed_sidecar_lock_path(path: &Path) -> PathBuf {
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    PathBuf::from(lock_path)
+}
+
+fn derivative_lock_path(path: &Path) -> PathBuf {
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".derive.lock");
+    PathBuf::from(lock_path)
+}
+
+fn is_recoverable_managed_sidecar_error(error: &StorageError) -> bool {
+    match error {
+        StorageError::InvalidFormat(_) => true,
+        StorageError::Database(message) => [
+            "no such table",
+            "file is not a database",
+            "database disk image is malformed",
+            "query returned no rows",
+        ]
+        .iter()
+        .any(|needle| message.to_ascii_lowercase().contains(needle)),
+        StorageError::Io(_) | StorageError::NotFound(_) => false,
+    }
+}
+
+fn quarantine_managed_sidecar(path: &Path) -> StorageResult<PathBuf> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    for attempt in 0..1000 {
+        let suffix = if attempt == 0 {
+            format!(".corrupt-{timestamp}")
+        } else {
+            format!(".corrupt-{timestamp}-{attempt}")
+        };
+        let mut candidate = path.as_os_str().to_os_string();
+        candidate.push(suffix);
+        let candidate = PathBuf::from(candidate);
+        if !candidate.exists() {
+            std::fs::rename(path, &candidate)?;
+            return Ok(candidate);
+        }
+    }
+    Err(StorageError::InvalidFormat(format!(
+        "Could not allocate quarantine path for: {}",
+        path.display()
+    )))
 }
 
 fn next_derivative_path(source_path: &Path) -> StorageResult<PathBuf> {

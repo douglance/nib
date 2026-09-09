@@ -2,7 +2,7 @@
 
 use super::args::*;
 use crate::capture::{generate_tiles, screen, TiledCapture};
-use crate::collab::{session::Session, types::ClientType};
+use crate::collab::{log::SessionManager, session::Session, types::ClientType};
 use crate::core::TileConfig;
 use crate::core::{qml, NibImage, Result, TileBounds, TileId};
 #[cfg(feature = "gui")]
@@ -19,6 +19,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// Execute the capture command
 pub fn run_capture(args: &CaptureArgs) -> Result<()> {
     tracing::info!(?args, "Running capture");
+
+    if args.tiled && args.tile_size == 0 {
+        return Err(crate::core::NibError::Other(
+            "Tile size must be greater than zero".to_string(),
+        ));
+    }
 
     // Handle delay
     if args.delay > 0 {
@@ -517,10 +523,7 @@ fn run_annotations_nib(args: &AnnotationListArgs) -> Result<()> {
 
 /// Add an annotation to an image
 pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
-    use crate::core::{
-        Annotation, AnnotationType, ArrowHead, BlurIntensity, Color, Point, Region, StrokeStyle,
-        TextAlign,
-    };
+    use crate::core::Annotation;
 
     tracing::info!(?args, "Running annotation add");
 
@@ -531,8 +534,15 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
         ));
     }
 
+    validate_annotation_args(args)?;
+
     // Parse color from hex string
-    let color = parse_hex_color(&args.color).unwrap_or(Color::RED);
+    let color = parse_hex_color(&args.color).ok_or_else(|| {
+        crate::core::NibError::Other(format!(
+            "Invalid annotation color '{}'. Expected #RRGGBB or #RRGGBBAA",
+            args.color
+        ))
+    })?;
 
     // Check if this is a .nib file (SQLite format) or regular image (JSON sidecar)
     let is_nib_file = args.file.extension().map(|e| e == "nib").unwrap_or(false);
@@ -541,82 +551,7 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
         // Handle .nib SQLite format
         let nib = NibFile::open_editable(&args.file)?;
 
-        // Create the annotation type based on args
-        let annotation_type = match args.annotation_type.as_str() {
-            "rectangle" => AnnotationType::Box {
-                region: Region::new(args.x, args.y, args.width, args.height),
-                stroke_width: 2.0,
-                stroke_style: StrokeStyle::Solid,
-                filled: false,
-                corner_radius: 0.0,
-            },
-            "highlight" => AnnotationType::Highlight {
-                region: Region::new(args.x, args.y, args.width, args.height),
-                corner_radius: 0.0,
-            },
-            "blur" => AnnotationType::Blur {
-                region: Region::new(args.x, args.y, args.width, args.height),
-                intensity: BlurIntensity::Medium,
-            },
-            "crop" => AnnotationType::Crop {
-                region: Region::new(args.x, args.y, args.width, args.height),
-            },
-            "arrow" => AnnotationType::Arrow {
-                start: Point::new(args.x, args.y),
-                end: Point::new(args.x + args.width, args.y + args.height),
-                head: ArrowHead::End,
-                stroke_width: 2.0,
-            },
-            "line" => AnnotationType::Line {
-                start: Point::new(args.x, args.y),
-                end: Point::new(args.x + args.width, args.y + args.height),
-                stroke_width: 2.0,
-                stroke_style: StrokeStyle::Solid,
-            },
-            "ellipse" => AnnotationType::Ellipse {
-                center: Point::new(args.x + args.width / 2.0, args.y + args.height / 2.0),
-                radius_x: args.width / 2.0,
-                radius_y: args.height / 2.0,
-                stroke_width: 2.0,
-                filled: false,
-            },
-            "text" => AnnotationType::Text {
-                position: Point::new(args.x, args.y),
-                content: args.text.clone().unwrap_or_else(|| "Text".to_string()),
-                font_size: 32.0,
-                align: TextAlign::Left,
-                background: None,
-                max_width: None,
-            },
-            "number" => {
-                // Get next number value from existing annotations
-                let next_num = nib
-                    .list_annotations()?
-                    .iter()
-                    .filter_map(|a| {
-                        if let AnnotationType::Number { value, .. } = &a.annotation_type {
-                            Some(*value)
-                        } else {
-                            None
-                        }
-                    })
-                    .max()
-                    .unwrap_or(0)
-                    + 1;
-
-                AnnotationType::Number {
-                    position: Point::new(args.x, args.y),
-                    value: args.value.unwrap_or(next_num),
-                    radius: 16.0,
-                }
-            }
-            _ => {
-                return Err(crate::core::NibError::Other(format!(
-                    "Unknown annotation type: {}. Valid types: rectangle, arrow, line, ellipse, highlight, blur, text, number",
-                    args.annotation_type
-                )));
-            }
-        };
+        let annotation_type = annotation_type_from_args(args, &nib)?;
 
         // Create and add the annotation
         let annotation = Annotation::new(annotation_type).with_color(color);
@@ -644,105 +579,30 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
     // Handle regular image files - use .nib SQLite format
     let nib_path = args.file.with_extension("nib");
 
-    // Open existing .nib or create new one from the image
-    let nib = if nib_path.exists() {
-        NibFile::open_editable(&nib_path)?
-    } else {
-        // Create new .nib file from image
-        let image_data = std::fs::read(&args.file)?;
-        let img = image::load_from_memory(&image_data).map_err(|e| {
-            crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
-        })?;
-        let extension = args
-            .file
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("png")
-            .to_lowercase();
-        let format = match extension.as_str() {
-            "jpg" | "jpeg" => "jpeg",
-            "webp" => "webp",
-            _ => "png",
-        };
-        NibFile::create(&nib_path, &image_data, format, img.width(), img.height())?
+    let image_data = std::fs::read(&args.file)?;
+    let img = image::load_from_memory(&image_data).map_err(|e| {
+        crate::core::NibError::Image(crate::core::ImageError::DecodeError(e.to_string()))
+    })?;
+    let extension = args
+        .file
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+    let format = match extension.as_str() {
+        "jpg" | "jpeg" => "jpeg",
+        "webp" => "webp",
+        _ => "png",
     };
+    let nib = NibFile::open_or_create_managed_sidecar(
+        &nib_path,
+        &image_data,
+        format,
+        img.width(),
+        img.height(),
+    )?;
 
-    // Create the annotation type based on args
-    let annotation_type = match args.annotation_type.as_str() {
-        "rectangle" => AnnotationType::Box {
-            region: Region::new(args.x, args.y, args.width, args.height),
-            stroke_width: 2.0,
-            stroke_style: StrokeStyle::Solid,
-            filled: false,
-            corner_radius: 0.0,
-        },
-        "highlight" => AnnotationType::Highlight {
-            region: Region::new(args.x, args.y, args.width, args.height),
-            corner_radius: 0.0,
-        },
-        "blur" => AnnotationType::Blur {
-            region: Region::new(args.x, args.y, args.width, args.height),
-            intensity: BlurIntensity::Medium,
-        },
-        "crop" => AnnotationType::Crop {
-            region: Region::new(args.x, args.y, args.width, args.height),
-        },
-        "arrow" => AnnotationType::Arrow {
-            start: Point::new(args.x, args.y),
-            end: Point::new(args.x + args.width, args.y + args.height),
-            head: ArrowHead::End,
-            stroke_width: 2.0,
-        },
-        "line" => AnnotationType::Line {
-            start: Point::new(args.x, args.y),
-            end: Point::new(args.x + args.width, args.y + args.height),
-            stroke_width: 2.0,
-            stroke_style: StrokeStyle::Solid,
-        },
-        "ellipse" => AnnotationType::Ellipse {
-            center: Point::new(args.x + args.width / 2.0, args.y + args.height / 2.0),
-            radius_x: args.width / 2.0,
-            radius_y: args.height / 2.0,
-            stroke_width: 2.0,
-            filled: false,
-        },
-        "text" => AnnotationType::Text {
-            position: Point::new(args.x, args.y),
-            content: args.text.clone().unwrap_or_else(|| "Text".to_string()),
-            font_size: 32.0,
-            align: TextAlign::Left,
-            background: None,
-            max_width: None,
-        },
-        "number" => {
-            // Get next number value from existing annotations
-            let next_num = nib
-                .list_annotations()?
-                .iter()
-                .filter_map(|a| {
-                    if let AnnotationType::Number { value, .. } = &a.annotation_type {
-                        Some(*value)
-                    } else {
-                        None
-                    }
-                })
-                .max()
-                .unwrap_or(0)
-                + 1;
-
-            AnnotationType::Number {
-                position: Point::new(args.x, args.y),
-                value: args.value.unwrap_or(next_num),
-                radius: 16.0,
-            }
-        }
-        _ => {
-            return Err(crate::core::NibError::Other(format!(
-                "Unknown annotation type: {}. Valid types: rectangle, arrow, line, ellipse, highlight, blur, text, number",
-                args.annotation_type
-            )));
-        }
-    };
+    let annotation_type = annotation_type_from_args(args, &nib)?;
 
     // Create and add the annotation
     let annotation = Annotation::new(annotation_type).with_color(color);
@@ -765,6 +625,118 @@ pub fn run_annotation_add(args: &AnnotationAddArgs) -> Result<()> {
     println!("Saved to: {}", nib.path().display());
 
     Ok(())
+}
+
+fn validate_annotation_args(args: &AnnotationAddArgs) -> Result<()> {
+    if ![args.x, args.y, args.width, args.height]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return Err(crate::core::NibError::Other(
+            "Annotation coordinates and dimensions must be finite".to_string(),
+        ));
+    }
+
+    let annotation_type = args.annotation_type.trim().to_ascii_lowercase();
+    if matches!(
+        annotation_type.as_str(),
+        "rectangle" | "box" | "highlight" | "blur" | "crop" | "ellipse"
+    ) && (args.width <= 0.0 || args.height <= 0.0)
+    {
+        return Err(crate::core::NibError::Other(
+            "Annotation width and height must be greater than zero".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn annotation_type_from_args(
+    args: &AnnotationAddArgs,
+    nib: &NibFile,
+) -> Result<crate::core::AnnotationType> {
+    use crate::core::{
+        AnnotationType, ArrowHead, BlurIntensity, Point, Region, StrokeStyle, TextAlign,
+    };
+
+    let annotation_type = args.annotation_type.trim().to_ascii_lowercase();
+    match annotation_type.as_str() {
+        "rectangle" | "box" => Ok(AnnotationType::Box {
+            region: Region::new(args.x, args.y, args.width, args.height),
+            stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
+            filled: false,
+            corner_radius: 0.0,
+        }),
+        "highlight" => Ok(AnnotationType::Highlight {
+            region: Region::new(args.x, args.y, args.width, args.height),
+            corner_radius: 0.0,
+        }),
+        "blur" => Ok(AnnotationType::Blur {
+            region: Region::new(args.x, args.y, args.width, args.height),
+            intensity: BlurIntensity::Medium,
+        }),
+        "crop" => Ok(AnnotationType::Crop {
+            region: Region::new(args.x, args.y, args.width, args.height),
+        }),
+        "arrow" => Ok(AnnotationType::Arrow {
+            start: Point::new(args.x, args.y),
+            end: Point::new(args.x + args.width, args.y + args.height),
+            head: ArrowHead::End,
+            stroke_width: 2.0,
+        }),
+        "line" => Ok(AnnotationType::Line {
+            start: Point::new(args.x, args.y),
+            end: Point::new(args.x + args.width, args.y + args.height),
+            stroke_width: 2.0,
+            stroke_style: StrokeStyle::Solid,
+        }),
+        "ellipse" => Ok(AnnotationType::Ellipse {
+            center: Point::new(args.x + args.width / 2.0, args.y + args.height / 2.0),
+            radius_x: args.width / 2.0,
+            radius_y: args.height / 2.0,
+            stroke_width: 2.0,
+            filled: false,
+        }),
+        "text" => Ok(AnnotationType::Text {
+            position: Point::new(args.x, args.y),
+            content: args.text.clone().unwrap_or_else(|| "Text".to_string()),
+            font_size: 32.0,
+            align: TextAlign::Left,
+            background: None,
+            max_width: None,
+        }),
+        "number" => {
+            let value = if let Some(value) = args.value {
+                value
+            } else {
+                nib.list_annotations()?
+                    .iter()
+                    .filter_map(|annotation| match &annotation.annotation_type {
+                        AnnotationType::Number { value, .. } => Some(*value),
+                        _ => None,
+                    })
+                    .max()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        crate::core::NibError::Other(
+                            "Automatic number annotation value is exhausted; provide --value explicitly"
+                                .to_string(),
+                        )
+                    })?
+            };
+            Ok(AnnotationType::Number {
+                position: Point::new(args.x, args.y),
+                value,
+                radius: 16.0,
+            })
+        }
+        _ => Err(crate::core::NibError::Other(format!(
+            "Unknown annotation type: {}. Valid types: rectangle (or box), arrow, line, ellipse, highlight, blur, crop, text, number",
+            args.annotation_type
+        ))),
+    }
 }
 
 /// Parse a hex color string (e.g., "#ff0000" or "#ff0000ff") into a Color
@@ -1260,6 +1232,16 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
             crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
         ));
     }
+    if args.spacing == 0 {
+        return Err(crate::core::NibError::Other(
+            "Grid spacing must be greater than zero".to_string(),
+        ));
+    }
+    if args.major_interval == 0 {
+        return Err(crate::core::NibError::Other(
+            "Grid major interval must be greater than zero".to_string(),
+        ));
+    }
 
     // Load the image
     let image_data = std::fs::read(&args.file)?;
@@ -1270,7 +1252,7 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
 
     // Parse region if provided
     let region = if let Some(ref region_str) = args.region {
-        Some(parse_grid_region(region_str)?)
+        Some(parse_grid_region(region_str, width, height)?)
     } else {
         None
     };
@@ -1314,8 +1296,8 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
             }
         }
 
-        vertical_coords.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        horizontal_coords.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        vertical_coords.sort_by(f64::total_cmp);
+        horizontal_coords.sort_by(f64::total_cmp);
         vertical_coords.dedup();
         horizontal_coords.dedup();
 
@@ -1352,10 +1334,12 @@ pub fn run_grid(args: &GridArgs) -> Result<()> {
 
         // If region specified, crop the output
         let final_img = if let Some(ref bounds) = region {
-            let x = bounds.min_x.max(0.0) as u32;
-            let y = bounds.min_y.max(0.0) as u32;
-            let w = (bounds.width() as u32).min(width - x);
-            let h = (bounds.height() as u32).min(height - y);
+            let x = bounds.min_x.floor() as u32;
+            let y = bounds.min_y.floor() as u32;
+            let max_x = (bounds.min_x + bounds.width()).ceil().min(width as f64) as u32;
+            let max_y = (bounds.min_y + bounds.height()).ceil().min(height as f64) as u32;
+            let w = max_x.saturating_sub(x);
+            let h = max_y.saturating_sub(y);
             image::imageops::crop_imm(&output_img, x, y, w, h).to_image()
         } else {
             output_img
@@ -1908,8 +1892,16 @@ fn get_nib_session_info(path: &PathBuf) -> Result<Option<serde_json::Value>> {
     }
 }
 
-/// Parse a grid region string in "x1,y1,x2,y2" format
-fn parse_grid_region(region_str: &str) -> Result<crate::core::tile::TileBounds> {
+/// Parse and clamp a grid region.
+///
+/// The canonical format is `x1,y1,x2,y2`. Earlier generated Nib skills used
+/// `x,y,width,height`, so a non-increasing corner pair is interpreted using
+/// that legacy format instead of reaching image cropping with zero dimensions.
+fn parse_grid_region(
+    region_str: &str,
+    image_width: u32,
+    image_height: u32,
+) -> Result<crate::core::tile::TileBounds> {
     use crate::core::tile::TileBounds;
 
     let parts: Vec<&str> = region_str.split(',').collect();
@@ -1933,7 +1925,39 @@ fn parse_grid_region(region_str: &str) -> Result<crate::core::tile::TileBounds> 
         crate::core::NibError::Other(format!("Invalid y2 coordinate: {}", parts[3]))
     })?;
 
-    Ok(TileBounds::from_corners(x1, y1, x2, y2))
+    if ![x1, y1, x2, y2]
+        .iter()
+        .all(|coordinate| coordinate.is_finite())
+    {
+        return Err(crate::core::NibError::Other(format!(
+            "Invalid region '{}': coordinates must be finite numbers",
+            region_str
+        )));
+    }
+
+    let (left, top, right, bottom) = if x2 > x1 && y2 > y1 {
+        (x1, y1, x2, y2)
+    } else if x2 > 0.0 && y2 > 0.0 {
+        (x1, y1, x1 + x2, y1 + y2)
+    } else {
+        return Err(crate::core::NibError::Other(format!(
+            "Invalid region '{}': width and height must be positive",
+            region_str
+        )));
+    };
+
+    let left = left.max(0.0).min(image_width as f64);
+    let top = top.max(0.0).min(image_height as f64);
+    let right = right.max(0.0).min(image_width as f64);
+    let bottom = bottom.max(0.0).min(image_height as f64);
+    if right <= left || bottom <= top {
+        return Err(crate::core::NibError::Other(format!(
+            "Grid region '{}' does not overlap image {}x{}",
+            region_str, image_width, image_height
+        )));
+    }
+
+    Ok(TileBounds::from_corners(left, top, right, bottom))
 }
 
 /// Migrate a single image file to .nib format
@@ -2101,6 +2125,12 @@ pub fn run_tile_query(args: &TileQueryArgs, format: &OutputFormat) -> Result<()>
 
     let max_zoom = capture.manifest.tile_config.max_zoom;
     let zoom = args.zoom.unwrap_or(max_zoom);
+    if capture.manifest.levels.get(zoom as usize).is_none() {
+        return Err(crate::core::NibError::Other(format!(
+            "Invalid zoom level {}. Max is {}",
+            zoom, max_zoom
+        )));
+    }
 
     // Parse and execute query
     if let Some(ref point_str) = args.point {
@@ -2398,6 +2428,12 @@ fn parse_point(point_str: &str) -> Result<(f64, f64)> {
         .parse::<f64>()
         .map_err(|_| crate::core::NibError::Other(format!("Invalid y coordinate: {}", parts[1])))?;
 
+    if !x.is_finite() || !y.is_finite() {
+        return Err(crate::core::NibError::Other(
+            "Point coordinates must be finite".to_string(),
+        ));
+    }
+
     Ok((x, y))
 }
 
@@ -2428,7 +2464,25 @@ fn parse_tile_region(region_str: &str) -> Result<TileBounds> {
         .parse::<f64>()
         .map_err(|_| crate::core::NibError::Other(format!("Invalid height: {}", parts[3])))?;
 
-    Ok(TileBounds::from_corners(x, y, x + width, y + height))
+    if ![x, y, width, height].iter().all(|value| value.is_finite()) {
+        return Err(crate::core::NibError::Other(
+            "Region coordinates and dimensions must be finite".to_string(),
+        ));
+    }
+    if width <= 0.0 || height <= 0.0 {
+        return Err(crate::core::NibError::Other(
+            "Region width and height must be greater than zero".to_string(),
+        ));
+    }
+    let max_x = x + width;
+    let max_y = y + height;
+    if !max_x.is_finite() || !max_y.is_finite() {
+        return Err(crate::core::NibError::Other(
+            "Region bounds must be finite".to_string(),
+        ));
+    }
+
+    Ok(TileBounds::from_corners(x, y, max_x, max_y))
 }
 
 /// Execute the export command (export .nib to PNG/JSON/QML)
@@ -2593,7 +2647,6 @@ pub async fn run_generate(args: &super::args::GenerateArgs, format: &OutputForma
             message: args.message.clone(),
             annotations: None,
             timeout: 0,
-            ui: args.feedback_ui,
             detach: false,
         };
         run_feedback(&feedback_args).await?;
@@ -2698,72 +2751,13 @@ pub fn run_windows(args: &WindowsArgs) -> Result<()> {
     Ok(())
 }
 
-/// Ask human for visual feedback via GUI
-///
-/// This command is optimized for Claude-human collaboration:
-/// 1. Try connecting to existing GUI session
-/// 2. If no session and not --no-gui, spawn GUI subprocess
-/// 3. Retry connection with backoff
-/// 4. Send annotations (--annotations) and message (-m) if provided
-/// 5. Request quit after response if --quit-after
-/// 6. Wait for SendToAgent response
-/// 7. Print JSON and optionally render
+/// Publish one durable review to the account-wide inbox and wait for the first response.
+/// Every registered device receives the same request; callers never choose a device.
 pub async fn run_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
     tracing::info!(?args, "Running feedback");
-    validate_feedback_options(args)?;
-
-    let extension = args
-        .file
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .unwrap_or_default();
-    let video = extension.eq_ignore_ascii_case("mp4");
-    let pdf = extension.eq_ignore_ascii_case("pdf");
-    if video {
-        let unsupported = match args.ui {
-            FeedbackUi::Terminal => Some("E_VIDEO_TERMINAL_UNSUPPORTED"),
-            _ => None,
-        };
-        if let Some(code) = unsupported {
-            return Err(crate::core::NibError::Other(format!(
-                "{code}: video review requires the web surface in this build; run: nib feedback {} --ui web",
-                args.file.display()
-            )));
-        }
-    }
-    if pdf && args.ui == FeedbackUi::Terminal {
-        return Err(crate::core::NibError::Other(format!(
-            "E_PDF_TERMINAL_UNSUPPORTED: PDF review requires a visual surface; run: nib feedback {} --ui web",
-            args.file.display()
-        )));
-    }
-
-    match args.ui {
-        FeedbackUi::Native => {
-            let value = run_native_feedback_value(args).await?;
-            println!("{}", serde_json::to_string(&value).unwrap_or_default());
-            Ok(())
-        }
-        FeedbackUi::Terminal => return run_terminal_feedback(args).await,
-        FeedbackUi::Web => {
-            return super::web_feedback::run(args)
-                .await
-                .map_err(|error| crate::core::NibError::Other(error.to_string()))
-        }
-        FeedbackUi::Auto => super::web_feedback::run(args)
-            .await
-            .map_err(|error| crate::core::NibError::Other(error.to_string())),
-    }
-}
-
-fn validate_feedback_options(args: &super::args::FeedbackArgs) -> Result<()> {
-    if args.ui == FeedbackUi::Native && args.detach {
-        return Err(crate::core::NibError::Other(
-            "E_NATIVE_DETACH_UNSUPPORTED: native feedback is an attached local review; use `nib request create <file>` for a durable detached request"
-                .into(),
-        ));
-    }
-    Ok(())
+    super::web_feedback::run(args)
+        .await
+        .map_err(|error| crate::core::NibError::Other(error.to_string()))
 }
 
 pub(crate) async fn run_native_feedback_value(
@@ -2838,7 +2832,7 @@ pub(crate) async fn run_native_feedback_value(
     let timeout_duration = feedback_timeout(args.timeout);
 
     // Step 1: Try connecting to an existing GUI session first
-    let session = match Session::connect(&session_path, ClientType::Cli).await {
+    let session = match connect_feedback_session(&session_path).await {
         Ok(session) => {
             tracing::info!("Connected to existing collab session");
             session
@@ -2862,7 +2856,7 @@ pub(crate) async fn run_native_feedback_value(
             let mut session_result = Err("No connection".to_string());
             for attempt in 1..=25 {
                 tokio::time::sleep(Duration::from_millis(200)).await;
-                match Session::connect(&session_path, ClientType::Cli).await {
+                match connect_feedback_session(&session_path).await {
                     Ok(s) => {
                         tracing::info!("Connected to collab session on attempt {}", attempt);
                         session_result = Ok(s);
@@ -2882,6 +2876,8 @@ pub(crate) async fn run_native_feedback_value(
             })?
         }
     };
+
+    let active_session_path = session.image_path().to_path_buf();
 
     // Step 5: Parse and send annotations if provided
     if let Some(ref annotations_json) = args.annotations {
@@ -2924,28 +2920,29 @@ pub(crate) async fn run_native_feedback_value(
             }
 
             // Render the annotations onto the image
-            let nib = NibFile::open(&session_path)?;
+            let nib = NibFile::open(&active_session_path)?;
             let all_annotations = nib.list_annotations()?;
             let assets = nib.get_all_assets()?;
             let (image_data, image_info) = nib.get_image()?;
 
-            let stem = session_path
+            let stem = active_session_path
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy();
-            let rendered_path = session_path.with_file_name(format!("{}.rendered.png", stem));
+            let rendered_path =
+                active_session_path.with_file_name(format!("{}.rendered.png", stem));
 
             let nib_image = NibImage {
                 image_data,
                 width: image_info.width,
                 height: image_info.height,
-                source: crate::core::ImageSource::File(session_path.clone()),
+                source: crate::core::ImageSource::File(active_session_path.clone()),
                 annotations: all_annotations,
                 assets,
                 title: None,
                 description: None,
                 tags: Vec::new(),
-                file_path: Some(session_path.clone()),
+                file_path: Some(active_session_path.clone()),
                 created_at: SystemTime::now(),
                 modified_at: SystemTime::now(),
             };
@@ -2969,8 +2966,41 @@ pub(crate) async fn run_native_feedback_value(
     }
 }
 
-/// Open the human-facing terminal review process. This command is normally
-/// launched in a temporary tmux window by `nib feedback --ui terminal`.
+async fn connect_feedback_session(source_path: &Path) -> std::result::Result<Session, String> {
+    if let Ok(session) = Session::connect(source_path, ClientType::Cli).await {
+        return Ok(session);
+    }
+
+    let manager = SessionManager::new(SessionManager::default_dir())
+        .map_err(|error| format!("Failed to create session manager: {error}"))?;
+    for session_path in feedback_session_paths(&manager, source_path)
+        .map_err(|error| format!("Failed to discover GUI session: {error}"))?
+    {
+        if let Ok(session) = Session::connect(&session_path, ClientType::Cli).await {
+            return Ok(session);
+        }
+    }
+
+    Err("No connection".to_string())
+}
+
+fn feedback_session_paths(manager: &SessionManager, source_path: &Path) -> Result<Vec<PathBuf>> {
+    let source_path = source_path.to_string_lossy();
+    let mut sessions: Vec<_> = manager
+        .list_sessions()?
+        .into_iter()
+        .filter(|session| session.socket_path.exists() && session.image_path.exists())
+        .filter_map(|session| {
+            let nib = NibFile::open(&session.image_path).ok()?;
+            let derived_from = nib.get_metadata("derived_from_path").ok().flatten()?;
+            (derived_from == source_path).then_some((session.last_modified, session.image_path))
+        })
+        .collect();
+    sessions.sort_by_key(|(last_modified, _)| std::cmp::Reverse(*last_modified));
+    Ok(sessions.into_iter().map(|(_, path)| path).collect())
+}
+
+/// Open the human-facing terminal reviewer for an existing local session.
 pub async fn run_review(args: &super::args::ReviewArgs) -> Result<()> {
     nib_tui::run_review(nib_tui::ReviewRequest {
         file: args.session.clone(),
@@ -2979,174 +3009,6 @@ pub async fn run_review(args: &super::args::ReviewArgs) -> Result<()> {
     .await
     .map(|_| ())
     .map_err(|e| crate::core::NibError::Other(e.to_string()))
-}
-
-async fn run_terminal_feedback(args: &super::args::FeedbackArgs) -> Result<()> {
-    if !args.file.exists() {
-        return Err(crate::core::NibError::Storage(
-            crate::core::StorageError::NotFound(format!("File not found: {}", args.file.display())),
-        ));
-    }
-    if std::env::var_os("TMUX").is_none() {
-        return Err(crate::core::NibError::Other(
-            "E_TMUX_REQUIRED: terminal feedback launches its reviewer in a temporary tmux window"
-                .into(),
-        ));
-    }
-    let terminal_report = nib_tui::TerminalReport::detect()
-        .map_err(|e| crate::core::NibError::Other(e.to_string()))?;
-
-    let nib_path = ensure_feedback_nib(&args.file)?;
-
-    if args.detach {
-        let response_path = feedback_response_path(&nib_path);
-        if let Some(parent) = response_path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let response_file = std::fs::File::create(&response_path)?;
-        let exe = std::env::current_exe()
-            .map_err(|e| crate::core::NibError::Other(format!("Failed to locate nib: {e}")))?;
-        let mut child = std::process::Command::new(exe);
-        child.args([
-            "feedback",
-            nib_path.to_string_lossy().as_ref(),
-            "--ui",
-            "terminal",
-            "--timeout",
-            &args.timeout.to_string(),
-        ]);
-        if let Some(message) = &args.message {
-            child.args(["--message", message]);
-        }
-        if let Some(annotations) = &args.annotations {
-            child.args(["--annotations", annotations]);
-        }
-        let child = child
-            .stdout(response_file)
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| {
-                crate::core::NibError::Other(format!(
-                    "Failed to start background feedback owner: {e}"
-                ))
-            })?;
-        let session_id = crate::collab::types::SessionId::from_file_path(&nib_path);
-        println!(
-            "{}",
-            serde_json::json!({
-                "event": "review_opening",
-                "session": session_id.to_string(),
-                "file": nib_path,
-                "response": response_path,
-                "owner_pid": child.id()
-            })
-        );
-        return Ok(());
-    }
-
-    let session = Session::open(&nib_path, ClientType::Cli)
-        .await
-        .map_err(crate::core::NibError::Other)?;
-
-    if let Some(ref annotations_json) = args.annotations {
-        let inputs = super::annotation_json::parse_annotations(annotations_json)
-            .map_err(crate::core::NibError::Other)?;
-        let data = inputs
-            .iter()
-            .map(|input| input.to_annotation_data())
-            .collect();
-        session
-            .send_annotations(data)
-            .map_err(crate::core::NibError::Other)?;
-    }
-
-    let exe = std::env::current_exe()
-        .map_err(|e| crate::core::NibError::Other(format!("Failed to locate nib: {e}")))?;
-    let mut command = format!(
-        "NIB_TMUX_BIN={} {} review {}",
-        shell_quote(&tmux_binary_path()),
-        shell_quote(&exe),
-        shell_quote(&nib_path)
-    );
-    if let Some(message) = &args.message {
-        command.push_str(" --message ");
-        command.push_str(&shell_quote_str(message));
-    }
-    let client_tty = terminal_report.client_tty.ok_or_else(|| {
-        crate::core::NibError::Other("E_TMUX_CLIENT: failed to identify current tmux client".into())
-    })?;
-    let client_session = terminal_report.client_session.ok_or_else(|| {
-        crate::core::NibError::Other(
-            "E_TMUX_CLIENT: failed to identify current tmux session".into(),
-        )
-    })?;
-    let window_target = format!("{client_session}:");
-    let window = std::process::Command::new(tmux_binary_path())
-        .args([
-            "new-window",
-            "-d",
-            "-P",
-            "-F",
-            "#{window_id}",
-            "-t",
-            &window_target,
-            "-n",
-            "nib-review",
-            &command,
-        ])
-        .output()
-        .map_err(|e| {
-            crate::core::NibError::Other(format!("Failed to create tmux review window: {e}"))
-        })?;
-    if !window.status.success() {
-        return Err(crate::core::NibError::Other(format!(
-            "Failed to create tmux review window: {}",
-            String::from_utf8_lossy(&window.stderr).trim()
-        )));
-    }
-    let review_window = String::from_utf8_lossy(&window.stdout).trim().to_string();
-    if review_window.is_empty() {
-        return Err(crate::core::NibError::Other(
-            "Failed to create tmux review window: tmux returned no window ID".into(),
-        ));
-    }
-    let switched = std::process::Command::new(tmux_binary_path())
-        .args(["switch-client", "-c", &client_tty, "-t", &review_window])
-        .output()
-        .map_err(|e| {
-            crate::core::NibError::Other(format!("Failed to show tmux review window: {e}"))
-        })?;
-    if !switched.status.success() {
-        let _ = std::process::Command::new(tmux_binary_path())
-            .args(["kill-window", "-t", &review_window])
-            .status();
-        return Err(crate::core::NibError::Other(format!(
-            "Failed to show tmux review window: {}",
-            String::from_utf8_lossy(&switched.stderr).trim()
-        )));
-    }
-
-    match session.wait_for_send(feedback_timeout(args.timeout)) {
-        Ok(payload) => {
-            println!("{payload}");
-            Ok(())
-        }
-        Err(error) if error.contains("Timeout") => {
-            let _ = std::process::Command::new(tmux_binary_path())
-                .args(["kill-window", "-t", &review_window])
-                .status();
-            println!("{}", serde_json::json!({"event":"timeout"}));
-            Ok(())
-        }
-        Err(error) => {
-            let _ = std::process::Command::new(tmux_binary_path())
-                .args(["kill-window", "-t", &review_window])
-                .status();
-            Err(crate::core::NibError::Other(format!(
-                "Wait failed: {error}"
-            )))
-        }
-    }
 }
 
 fn feedback_response_path(file: &Path) -> PathBuf {
@@ -3192,27 +3054,6 @@ pub(super) fn ensure_feedback_nib(file: &Path) -> Result<PathBuf> {
     Ok(nib_path)
 }
 
-fn shell_quote(path: &Path) -> String {
-    shell_quote_str(&path.to_string_lossy())
-}
-fn shell_quote_str(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn tmux_binary_path() -> PathBuf {
-    for path in [
-        "/opt/homebrew/bin/tmux",
-        "/usr/local/bin/tmux",
-        "/usr/bin/tmux",
-    ] {
-        let path = PathBuf::from(path);
-        if path.is_file() {
-            return path;
-        }
-    }
-    PathBuf::from("tmux")
-}
-
 fn feedback_timeout(seconds: u64) -> Option<Duration> {
     (seconds > 0).then(|| Duration::from_secs(seconds))
 }
@@ -3231,19 +3072,43 @@ mod tests {
     }
 
     #[test]
-    fn native_feedback_cannot_detach_or_publish_implicitly() {
-        let args = FeedbackArgs {
-            file: PathBuf::from("review.png"),
-            message: None,
-            annotations: None,
-            timeout: 0,
-            ui: FeedbackUi::Native,
-            detach: true,
+    fn native_feedback_finds_gui_editable_derivative_session() {
+        use crate::collab::{
+            log::SessionManager,
+            types::{SessionId, SessionState},
         };
 
-        let error = validate_feedback_options(&args).unwrap_err().to_string();
-        assert!(error.contains("E_NATIVE_DETACH_UNSUPPORTED"));
-        assert!(error.contains("nib request create"));
+        let temp_dir = TempDir::new().unwrap();
+        let source_path = temp_dir.path().join("review.nib");
+        let source = NibFile::create(
+            &source_path,
+            &solid_png(20, 20, [0, 0, 0, 255]),
+            "png",
+            20,
+            20,
+        )
+        .unwrap();
+        drop(source);
+
+        let derivative = NibFile::open_editable(&source_path).unwrap();
+        let derivative_path = derivative.path().to_path_buf();
+        drop(derivative);
+
+        let manager = SessionManager::new(temp_dir.path().join("sessions")).unwrap();
+        let socket_path = manager.socket_path(&derivative_path);
+        std::fs::write(&socket_path, []).unwrap();
+        manager
+            .save_session(&SessionState::new(
+                SessionId::from_file_path(&derivative_path),
+                derivative_path.clone(),
+                socket_path,
+            ))
+            .unwrap();
+
+        assert_eq!(
+            feedback_session_paths(&manager, &source_path).unwrap(),
+            vec![derivative_path]
+        );
     }
 
     /// Encode a solid-color `width`x`height` RGBA image as PNG bytes.
