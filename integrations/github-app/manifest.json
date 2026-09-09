@@ -1,0 +1,19 @@
+{
+  "name": "Nib Acceptance",
+  "description": "Stakeholder acceptance of an exact software build, with signed decisions and current gate checks.",
+  "url": "https://nibtool.com",
+  "hook_attributes": {
+    "url": "https://nibtool.com/api/acceptance/v1/github/webhook",
+    "active": true
+  },
+  "setup_url": "https://nibtool.com/acceptance",
+  "setup_on_update": true,
+  "public": true,
+  "request_oauth_on_install": false,
+  "default_permissions": {
+    "checks": "write",
+    "metadata": "read",
+    "pull_requests": "read"
+  },
+  "default_events": ["pull_request"]
+}

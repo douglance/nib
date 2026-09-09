@@ -2,9 +2,9 @@
 
 Nib acceptance records human approval for a specific project, subject, gate, manifest, and build. It is implemented in the public `apps/web` Worker under `/api/acceptance/v1`, with one `AcceptanceCoordinator` Durable Object per project.
 
-Acceptance is implemented in this checkout, but it is disabled by default in `apps/web/wrangler.jsonc` with `ACCEPTANCE_ENABLED = "false"`. A disabled global flag or disabled project fails closed and cannot satisfy a gate. Do not treat the feature as live customer validation until the Worker has been deployed, configured, and canaried in that environment.
+Acceptance is implemented in this checkout, but it is disabled by default in `apps/web/wrangler.jsonc` with `ACCEPTANCE_ENABLED = "false"`. A disabled global flag or disabled project fails closed and cannot satisfy a gate. When `ACCEPTANCE_ENABLED` is not `"true"`, the public API returns `503` for interactive, workflow-token, and gate routes. The signed GitHub webhook endpoint remains reachable so GitHub can revoke installations and record head changes while acceptance is paused. Do not treat the feature as live customer validation until the Worker has been deployed, configured, and canaried in that environment.
 
-## Setup Path
+## Setup path
 
 1. Sign in with a Nib account.
 2. Create a team.
@@ -15,6 +15,9 @@ Acceptance is implemented in this checkout, but it is disabled by default in `ap
 7. Publish an acceptance manifest from CI.
 8. Ask reviewers to open the review page, inspect the preview, and approve, reject, or request a revision.
 9. Gate deploys with live verification against the current approved review.
+
+
+For the self-serve GitHub path, register and install the Nib Acceptance GitHub App, then run the source Action's `link` mode from the target repository default branch. Until the Action is published as a reusable tagged action, use the checkout-relative Action path documented in [Nib Acceptance GitHub Action](../integrations/github-action/README.md).
 
 Acceptance is project-scoped. Custom roles, SSO, pricing, and a second provider are not implemented in this version.
 
@@ -33,9 +36,9 @@ Acceptance is project-scoped. Custom roles, SSO, pricing, and a second provider 
 
 Reviewers eligible at publish time are team owners, team admins, project admins, and project reviewers. Pending reads reconcile live membership and drop pending votes from reviewers who are no longer eligible. Settled history is retained.
 
-## Team And Project API
+## Team and project API
 
-Project, team, review, evidence, and customer webhook mutations require `Idempotency-Key`. GitHub OIDC token exchange and GitHub webhooks use their own OIDC or HMAC verification and do not require an idempotency key. JSON errors use:
+Project, team, review, evidence, customer webhook, and GitHub workflow-token mutations require `Idempotency-Key`. GitHub webhooks use HMAC verification and delivery-id replay protection; they do not require caller authentication. JSON errors use:
 
 ```json
 {"error":{"code":"idempotency_key_required","message":"Provide an Idempotency-Key of 1 to 200 characters."}}
@@ -164,7 +167,7 @@ Publish accepts `{manifest}`. The manifest hash is the SHA-256 of canonical JSON
 
 Direct evidence uploads to Nib are capped at 16 MiB. The Worker hashes each upload before it writes the content-addressed bytes to R2, so the upload body is buffered inside the 128 MiB Worker heap. Store larger artifacts outside Nib and put a stable `url`, `sha256`, and optional `contentType` in the manifest evidence descriptor. Nib validates Nib-owned evidence URLs against the same project and SHA-256 before publication; external evidence URLs are accepted as hashed references and must remain available to reviewers.
 
-## Route Reference
+## Route reference
 
 | Route | Method | Body |
 | --- | --- | --- |
@@ -208,7 +211,7 @@ Direct evidence uploads to Nib are capped at 16 MiB. The Worker hashes each uplo
 | `/api/acceptance/v1/projects/:projectId/integrations/github` | `GET` | None |
 | `/api/acceptance/v1/projects/:projectId/integrations/github` | `PUT`, `POST` | `{"installationId":"123456","repositoryId":"987654","owner":"douglance","name":"nib","ownershipOidcToken":"<fresh-default-branch-proof>","allowedWorkflows":["douglance/nib/.github/workflows/acceptance.yml@refs/heads/main"],"gates":["pilot-business-rules"]}` |
 | `/api/acceptance/v1/projects/:projectId/integrations/github?repository_id=987654` | `DELETE` | None |
-| `/api/acceptance/v1/github/token` | `POST` | `{"oidcToken":"<github-oidc-token>","projectId":"<project-id>","mode":"publish"}` |
+| `/api/acceptance/v1/github/token` | `POST` | `{"oidcToken":"<github-oidc-token>","projectId":"<project-id>","mode":"publish"}` with `Idempotency-Key`. `mode` is `publish` or `verify`. |
 | `/api/acceptance/v1/github/webhook` | `POST` | GitHub webhook JSON with `x-hub-signature-256`, `x-github-delivery`, and `x-github-event`. |
 | `/api/acceptance/v1/projects/:projectId/integrations/webhooks` | `GET` | None |
 | `/api/acceptance/v1/projects/:projectId/integrations/webhooks` | `POST` | `{"url":"https://example.com/nib-acceptance","description":"release checks","events":["acceptance.changed"]}` |
@@ -289,3 +292,7 @@ Offline verification checks only historical packet integrity and receipt signatu
 ```sh
 nib request verify "$REVIEW_ID" --offline --packet review.nib --jwks acceptance-jwks.json --format json
 ```
+
+## Day-30 completion boundary
+
+Day-30 completion is tracked separately in [Acceptance day-30 audit](acceptance-30d-audit.md). Source, local tests, and a GitHub App manifest are not enough to mark production registration, published examples, or an new-user review-without-help pilot complete.

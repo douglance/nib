@@ -12,7 +12,7 @@ inputs:
     description: Nib acceptance project id.
     required: true
   setup-token:
-    description: One-time Nib project admin token for link mode. Remove this secret after linking.
+    description: Existing individual Nib project-admin session token for link mode. Remove this secret after linking.
     required: false
   installation-id:
     description: GitHub App installation id for link mode.

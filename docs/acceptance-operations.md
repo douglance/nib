@@ -2,7 +2,7 @@
 
 Acceptance v1 is fail-closed. Keep `ACCEPTANCE_ENABLED` set to `"false"` until the production Worker has its secrets, migrations, Queue, Durable Object, email, GitHub App, and review notification path configured and verified.
 
-## Runtime Configuration
+## Runtime configuration
 
 `apps/web/wrangler.jsonc` declares the production bindings used by acceptance:
 
@@ -57,7 +57,7 @@ Enable acceptance only after the runtime can:
 
 Project admins can read acceptance usage metrics at `GET /api/acceptance/v1/projects/:projectId/metrics`. The response aggregates total event counts, distinct review and reviewer counts, first-use timestamps, GitHub install timing, and repeat usage. Metrics are written idempotently to `acceptance_usage_events`; they are product-usage telemetry, not evidence that a reviewer tested the preview.
 
-## GitHub Integration
+## GitHub integration
 
 GitHub integration requires a GitHub App, not arbitrary repository claims from callers. Configure the app credentials in Worker secrets, set the webhook URL to:
 
@@ -87,11 +87,13 @@ curl -X PUT "$NIB_ORIGIN/api/acceptance/v1/projects/$PROJECT_ID/integrations/git
 
 The Worker verifies the installation against GitHub and the signed ownership proof before saving it. The proof must identify the target repository, its actual default branch, and a `push` or `workflow_dispatch` event from an allowed workflow on that branch. Missing, forged, cross-repository, PR-event, and other-branch proofs fail closed. See GitHub's [OIDC claim reference](https://docs.github.com/en/actions/reference/security/oidc).
 
-During a workflow, `/api/acceptance/v1/github/token` returns a 10-minute bearer token scoped to `publish` or `verify` after checking GitHub OIDC. A workflow publication must match the repository ID, repository owner/name, workflow SHA, and pull-request subject derived from the trusted claims.
+During a workflow, `/api/acceptance/v1/github/token` requires `Idempotency-Key` and returns a 10-minute bearer token scoped to `publish` or `verify` after checking GitHub OIDC. A workflow publication must match the repository ID, repository owner/name, workflow SHA, and pull-request subject derived from the trusted claims. If the installation is disabled, removed, suspended, or no longer allows the workflow ref, stored workflow tokens stop authenticating.
 
-GitHub pull-request webhooks update stored pull heads. When the head SHA changes, current reviews for that pull-request subject are invalidated with reason `GitHub pull request head changed.`.
+GitHub pull-request webhooks update stored pull heads. When the head SHA changes, current reviews for that pull-request subject are invalidated with reason `GitHub pull request head changed.`. GitHub `installation` `deleted` or `suspend` events disable every stored repository for that installation and revoke its unexpired workflow tokens. GitHub `installation_repositories` `removed` events disable only the removed repositories and revoke their unexpired workflow tokens.
 
-## Cloudflare Acceptance Previews
+GitHub webhook handling stays reachable while `ACCEPTANCE_ENABLED` is `"false"` so pause and rollback do not leave repository access active. Other acceptance routes, including workflow-token exchange and gate verification, return `503` through the public API while the global flag is off.
+
+## Cloudflare acceptance previews
 
 Use the Cloudflare adapter in `integrations/cloudflare` for Cloudflare-backed manifests. The adapter is dry-run by default and requires `--allow-live` for live resource changes.
 
@@ -127,7 +129,7 @@ The `/verify` API fails closed for Cloudflare manifests unless the exact review 
 
 The `verify` scope authorizes automation to assert provider freshness. Grant it only to trusted workflows: Nib authenticates the report and limits its lifetime, but does not independently contact Cloudflare or receive a Cloudflare-signed proof.
 
-## Queues And Retries
+## Queues and retries
 
 `AcceptanceCoordinator` writes each mutation to Durable Object storage and an outbox. Its alarm sends outbox events to `ACCEPTANCE_EVENTS` and keeps retrying while unsent events remain.
 
@@ -145,13 +147,13 @@ curl -X POST "$NIB_ORIGIN/api/acceptance/v1/projects/$PROJECT_ID/integrations/we
 
 Customer webhook deliveries are signed with `x-nib-signature: t=<unix-seconds>,v1=<hmac-sha256>`, and use the per-webhook secret returned only at creation.
 
-## Current Validation Boundary
+## Current validation boundary
 
 The acceptance implementation in this checkout has source, native compile, and local test evidence only. Live deployment is not verified here: the GitHub default `douglance` token is invalid, and Wrangler account discovery on macOS exits through Keychain status 36. Native compile and tests do not prove device behavior.
 
-See [Acceptance v1 validation](acceptance-validation.md) for the executed checks and their limits.
+See [Acceptance v1 validation](acceptance-validation.md) for the executed checks and their limits. Use [Acceptance day-30 audit](acceptance-30d-audit.md) to track the production App registration, three published examples, and new-user review-without-help evidence required before calling the day-30 scope complete.
 
-## Receipt Rotation
+## Receipt rotation
 
 Accepted reviews receive a compact EdDSA JWS receipt. Acceptance v1 supports only Ed25519 JWKs in the Worker and local offline packet verifier.
 
@@ -168,10 +170,11 @@ To rotate keys:
 Rollback must preserve the fail-closed property:
 
 1. Set `ACCEPTANCE_ENABLED` back to `"false"` or disable the affected project.
-2. Verify live gates return `satisfied: false`.
-3. Leave D1 migrations in place. They are additive and forward-only.
-4. Inspect `nib-acceptance-events` and `nib-acceptance-events-dlq` before replaying anything.
-5. Replay only idempotent Queue, webhook, or GitHub reconciliation work after confirming the stored idempotency keys and current review state.
+2. Verify live gates and GitHub workflow-token exchange return `503` through the public API while signed GitHub webhooks still verify and record installation revocations.
+3. Verify live gates return `satisfied: false`.
+4. Leave D1 migrations in place. They are additive and forward-only.
+5. Inspect `nib-acceptance-events` and `nib-acceptance-events-dlq` before replaying anything.
+6. Replay only idempotent Queue, webhook, or GitHub reconciliation work after confirming the stored idempotency keys and current review state.
 
 For Cloudflare preview teardown, invalidate the acceptance review first and verify that it no longer satisfies the gate before deleting preview resources:
 

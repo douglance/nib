@@ -6,11 +6,11 @@ Implementation validation for `feat/acceptance-v1`, September 9, 2026. The imple
 
 | Area | Result | Durable execution |
 | --- | --- | --- |
-| Web Worker suite, including real workerd integration | 31 files, 209 tests passed | `01a0844c-7bba-7811-abaa-5663d3c22f2d` |
+| Web Worker suite, including real workerd integration | 31 files, 215 tests passed | `01a08460-6b4a-7320-9562-f512ec5b1e23` |
 | Existing review service and acceptance notification routing | 7 files, 38 tests passed | `01a0843a-867a-7200-bdee-5a43c0bbd89f` |
-| GitHub Action, including ownership-proof setup | 7 tests passed | `01a0844c-7c6e-7fe3-9425-11b353287b7b` |
-| Cloudflare adapter, including partial teardown retry | 18 tests passed | `01a0843b-f512-73a1-bd94-c0b2c38ba6b9` |
-| Web TypeScript | Passed | `01a0844c-7bba-7811-abaa-567c14d9b352` |
+| GitHub Action, including ownership-proof link mode | 7 tests passed | `01a08460-6c79-7ec2-b2b8-b025263adc47` |
+| Cloudflare adapter, including migration-before-seed, service-binding verification, provider attestation, and teardown retry | 21 tests passed | `01a0845f-c4dc-7010-a7c8-b9b2b40432f0` |
+| Web TypeScript | Passed | `01a08460-6bed-7471-a8e6-a987638720f2` |
 | Real Chrome desktop/mobile acceptance flow | Passed; screenshots inspected | `01a0843e-f63b-7470-829e-2cee5035071a` |
 | Rust CLI compatibility entrypoint against workerd | Export passed; offline historical receipt passed; superseded live gate failed with exit 1 | `01a08443-11b9-7c42-812d-65f84b84c47d` |
 | Default Rust CLI entrypoint against workerd | Export and historical receipt verification passed; superseded live gate failed with exit 1 | `01a08446-d4b0-7192-8d3a-ef5013649979` |
@@ -29,7 +29,7 @@ Security review rechecked the reported ownership, teardown, provider freshness, 
 
 The browser run used the real local API for team/project creation, wrong-email and valid invitation acceptance, viewer restrictions, comments, preview-open recording, two distinct reviewer approvals, and a superseding revision. Desktop and mobile captures were inspected after fixing dark navigation contrast, reviewer identity, duplicate-vote controls, and preview access on completed reviews. Keyboard order was sampled, and the inspected pages had no visible clipping or blocking unlabeled controls. The external preview URL was a test fixture; a click does not prove the preview's behavior.
 
-Repository installation linking separately requires a valid signed ownership proof from the target repository's default branch. JOSE-signed regression cases reject missing and forged proofs, another repository, another branch, and PR events before storing the installation. The Action's setup mode obtains this proof inside GitHub; no real GitHub setup workflow was executed locally. The final masked ownership-proof form field has focused template/type checks, following the broader browser run above.
+Repository installation linking separately requires a valid signed ownership proof from the target repository's default branch. JOSE-signed regression cases reject missing and forged proofs, another repository, another branch, and PR events before storing the installation. The Action's `link` mode obtains this proof inside GitHub; no real GitHub link workflow was executed locally. The final masked ownership-proof form field has focused template/type checks, following the broader browser run above. The disabled-state tests keep signed GitHub webhooks reachable while global acceptance is paused and return `503` for workflow-token and gate routes.
 
 ## Reproduce locally
 
@@ -54,4 +54,4 @@ The acceptance Worker and adapter checks are included in `.github/workflows/ci.y
 
 No production deployment, GitHub App installation, real email/APNs delivery, or physical-device acceptance was performed. GitHub account discovery reports the default `douglance` token invalid (`01a08424-2b6c-7173-9af0-0f2173b2487c`); Wrangler account discovery fails to read macOS Keychain with exit 36 (`01a08424-2bc3-7373-9c88-f4e5f2da9dc3`).
 
-`ACCEPTANCE_ENABLED` remains `false`. The production rollout still requires working credentials, migrations and bindings, receipt keys, GitHub App configuration, and the real multi-account pilot described in [Acceptance Operations](acceptance-operations.md). The unfamiliar-team onboarding and commercial outcomes have not been validated by local tests.
+`ACCEPTANCE_ENABLED` remains `false`. The production rollout still requires working credentials, migrations and bindings, receipt keys, GitHub App configuration, and the real multi-account pilot described in [Acceptance Operations](acceptance-operations.md). The day-30 completion audit is [Acceptance day-30 audit](acceptance-30d-audit.md); production App registration, three published examples, new-user review-without-help onboarding, and commercial outcomes have not been validated by local tests.
