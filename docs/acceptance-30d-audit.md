@@ -1,6 +1,6 @@
 # Acceptance day-30 audit
 
-Acceptance v1 is not day-30 complete. The source tree contains the acceptance API, local runtime validation, the GitHub Action source, Cloudflare preview tooling, and a GitHub App registration manifest. It does not contain live evidence that the production app was registered and deployed, that three end-to-end examples were published in production, or that new users reviewed without founder assistance.
+Acceptance v1 is not day-30 complete. The source tree contains the acceptance API, local runtime validation, the GitHub Action source, Cloudflare preview tooling, and a GitHub App registration manifest. The Workers are staged in production with acceptance disabled. GitHub App registration, three hosted end-to-end examples, and new users reviewing without founder assistance remain unverified.
 
 ## Requirement source
 
@@ -22,7 +22,7 @@ Do not mark this audit complete until each requirement below has live evidence.
 
 ## Evidence boundary
 
-Source and local validation currently support only implementation readiness. The validation record is [Acceptance v1 validation](acceptance-validation.md), including local Worker tests, GitHub Action tests, Cloudflare adapter tests, Rust checks, and browser flow evidence. That evidence does not prove production App registration, production deployment, production example publication, real email or APNs delivery, or independent pilot success.
+Source and local validation support implementation readiness; the [staged deployment record](acceptance-deployment-20260909.md) adds production Worker versions, migrations, Queues, keys, and live smoke checks. The validation record is [Acceptance v1 validation](acceptance-validation.md), including local Worker tests, GitHub Action tests, Cloudflare adapter tests, Rust checks, and browser flow evidence. That evidence does not prove GitHub App registration, hosted example publication, real email or APNs delivery, or independent pilot success.
 
 The checked-in `apps/web/wrangler.jsonc` keeps `ACCEPTANCE_ENABLED = "false"`. A disabled global flag means production acceptance gates fail closed until the live rollout steps in [Acceptance Operations](acceptance-operations.md) are completed and verified.
 
@@ -51,6 +51,7 @@ Use this protocol to prove the requirement that new users can review without hel
 
 ## Open blockers
 
-- GitHub credentials were unavailable in the last recorded validation pass: the default `douglance` token was invalid.
-- Wrangler production account discovery was unavailable in the last recorded validation pass because macOS Keychain returned status 36.
-- Implementation is recorded in `11a1d59`, with repository revocation in `6761d2b`, preview migration and privacy fixes in `2426c52`, and launch documentation in `78fbb31`. Treat the local validation as source evidence until a pushed commit and production deployment are recorded.
+- GitHub and Cloudflare access now work through apoc profile `lv`; both Nib workspace paths are mapped.
+- GitHub App registration remains incomplete; apoc has no connected browser bridge for that registration flow.
+- Hosted previews, actual notification delivery, GitHub checks/webhook consumption, and the unaided-team pilot still need live evidence.
+- Implementation is recorded in `11a1d59`, with repository revocation in `6761d2b`, preview migration and privacy fixes in `2426c52`, and launch documentation in `78fbb31`. Commit `4507426` is pushed and staged in production; see the deployment record for exact versions and the disabled feature flag.

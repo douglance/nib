@@ -149,7 +149,7 @@ Customer webhook deliveries are signed with `x-nib-signature: t=<unix-seconds>,v
 
 ## Current validation boundary
 
-The acceptance implementation in this checkout has source, native compile, and local test evidence only. Live deployment is not verified here: the GitHub default `douglance` token is invalid, and Wrangler account discovery on macOS exits through Keychain status 36. Native compile and tests do not prove device behavior.
+The acceptance implementation has source, native compile, local runtime, and [staged production deployment evidence](acceptance-deployment-20260909.md). Deployment access works through apoc's `lv` profile; earlier authentication failures used no workspace profile. Production health and disabled-gate checks passed. GitHub App registration, live notifications, hosted examples, and the unaided-team pilot remain unverified. Native compile and tests do not prove device behavior.
 
 See [Acceptance v1 validation](acceptance-validation.md) for the executed checks and their limits. Use [Acceptance day-30 audit](acceptance-30d-audit.md) to track the production App registration, three published examples, and new-user review-without-help evidence required before calling the day-30 scope complete.
 

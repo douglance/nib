@@ -56,6 +56,6 @@ The acceptance Worker and adapter checks are included in `.github/workflows/ci.y
 
 ## Deployment boundary
 
-No production deployment, GitHub App installation, real email/APNs delivery, or physical-device acceptance was performed. GitHub account discovery reports the default `douglance` token invalid (`01a0853a-a4a7-7312-8e95-d4e4b14d98c6`); Wrangler account discovery fails to read macOS Keychain with exit 36 (`01a0853a-a4bc-7f12-b76d-67cd1eadc0f1`).
+The [staged production deployment](acceptance-deployment-20260909.md) succeeded through apoc's `lv` profile after correcting workspace profile selection. The public and review Workers run source commit `4507426`; production migrations, Queues, and receipt keys are installed. Live health, JWKS, authentication boundaries, and disabled-gate behavior passed. Existing APNs secret bindings were retained.
 
-`ACCEPTANCE_ENABLED` remains `false`. The production rollout still requires working credentials, migrations and bindings, receipt keys, GitHub App configuration, and the real multi-account pilot described in [Acceptance Operations](acceptance-operations.md). The day-30 completion audit is [Acceptance day-30 audit](acceptance-30d-audit.md); production App registration, three published examples, new-user review-without-help onboarding, and commercial outcomes have not been validated by local tests.
+`ACCEPTANCE_ENABLED` remains `false`. The launch still requires GitHub App configuration, real isolated previews and notification delivery, and the multi-account pilot described in [Acceptance Operations](acceptance-operations.md). The [day-30 audit](acceptance-30d-audit.md) keeps three hosted examples and an unaided new-team review unverified.
