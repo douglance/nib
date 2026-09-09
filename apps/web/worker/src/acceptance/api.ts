@@ -33,6 +33,11 @@ export async function handleAcceptanceRequest(request: Request, env: AcceptanceA
       if (request.method !== "GET") throw new AcceptanceHttpError(405, "method_not_allowed", "Use GET.");
       return acceptanceJwksResponse(env);
     }
+    // Record signed revocations and head changes even while interactive acceptance is paused.
+    if (url.pathname === `${PREFIX}/github/webhook` && request.method === "POST") {
+      const webhook = await handleIntegrationRoutes(request, env, null);
+      if (webhook) return webhook;
+    }
     if (env.ACCEPTANCE_ENABLED !== "true") {
       return acceptanceJson({ satisfied: false, error: { code: "acceptance_disabled", message: "Acceptance is disabled. This gate cannot pass." } }, 503);
     }

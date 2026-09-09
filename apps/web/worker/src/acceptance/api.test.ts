@@ -139,6 +139,25 @@ describe("acceptance API authorization", () => {
     expect(coordinator.verify).not.toHaveBeenCalled();
   });
 
+  it("keeps signed GitHub lifecycle processing available while acceptance is disabled", async () => {
+    mocks.integrations.mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+    const req = new Request("https://nib.test/api/acceptance/v1/github/webhook", { method: "POST", body: "{}" });
+    const pausedEnv = { ...env, ACCEPTANCE_ENABLED: "false" };
+    expect((await handleAcceptanceRequest(req, pausedEnv))?.status).toBe(200);
+    expect(mocks.integrations).toHaveBeenCalledWith(req, pausedEnv, null);
+    expect(mocks.verifiedAccount).not.toHaveBeenCalled();
+    expect(coordinator.verify).not.toHaveBeenCalled();
+  });
+
+  it("preserves webhook signature rejection during the pause and does not open token exchange", async () => {
+    mocks.integrations.mockResolvedValue(new Response("invalid signature", { status: 401 }));
+    const pausedEnv = { ...env, ACCEPTANCE_ENABLED: "false" };
+    expect((await handleAcceptanceRequest(new Request("https://nib.test/api/acceptance/v1/github/webhook", { method: "POST", body: "{}" }), pausedEnv))?.status).toBe(401);
+    mocks.integrations.mockClear();
+    expect((await handleAcceptanceRequest(new Request("https://nib.test/api/acceptance/v1/github/token", { method: "POST", body: "{}" }), pausedEnv))?.status).toBe(503);
+    expect(mocks.integrations).not.toHaveBeenCalled();
+  });
+
   it("refuses a current approval when its provider version check is missing", async () => {
     mocks.providerFresh.mockResolvedValue(false);
     const response = await handleAcceptanceRequest(request(`/reviews/${reviewId}/verify`, { manifestHash: review.manifestHash }), env);

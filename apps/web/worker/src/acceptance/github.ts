@@ -152,11 +152,17 @@ export async function authenticateGithubWorkflow(db: D1Database, bearerToken: st
   if (!token) return null;
   const tokenHash = await sha256Hex(token);
   const row = await db.prepare(
-    `SELECT actor_id, project_id, scopes_json, repository_id, repository, workflow_ref, job_workflow_ref, sha, ref, event_name, github_actor
-       FROM acceptance_github_workflow_tokens
-      WHERE token_hash = ?
-        AND revoked_at IS NULL
-        AND expires_at > unixepoch()
+    `SELECT t.actor_id, t.project_id, t.scopes_json, t.repository_id, t.repository, t.workflow_ref,
+            t.job_workflow_ref, t.sha, t.ref, t.event_name, t.github_actor,
+            gi.allowed_workflows_json, gi.gates_json, gi.enabled
+       FROM acceptance_github_workflow_tokens t
+       JOIN acceptance_github_installations gi
+         ON gi.project_id = t.project_id
+        AND gi.repository_id = t.repository_id
+        AND gi.enabled = 1
+      WHERE t.token_hash = ?
+        AND t.revoked_at IS NULL
+        AND t.expires_at > unixepoch()
       LIMIT 1`,
   ).bind(tokenHash).first<{
     actor_id: string;
@@ -170,8 +176,12 @@ export async function authenticateGithubWorkflow(db: D1Database, bearerToken: st
     ref: string | null;
     event_name: string | null;
     github_actor: string | null;
+    allowed_workflows_json: string;
+    gates_json: string | null;
+    enabled: number;
   }>();
   if (!row) return null;
+  if (!workflowAllowed(row, row.workflow_ref, row.job_workflow_ref)) return null;
   const [repositoryOwner, repositoryName] = splitRepository(row.repository);
   return {
     id: row.actor_id,
@@ -567,6 +577,9 @@ async function deleteGitHubInstallation(request: Request, env: AcceptanceIntegra
   const mutation = env.DB.prepare(
     "UPDATE acceptance_github_installations SET enabled = 0, updated_at = unixepoch() WHERE project_id = ? AND repository_id = ?",
   ).bind(projectId, repositoryId);
+  const revokeTokens = env.DB.prepare(
+    "UPDATE acceptance_github_workflow_tokens SET revoked_at = COALESCE(revoked_at, unixepoch()) WHERE project_id = ? AND repository_id = ? AND revoked_at IS NULL",
+  ).bind(projectId, repositoryId);
   const stored = await withAtomicIdempotency(
     env.DB,
     projectId,
@@ -574,7 +587,7 @@ async function deleteGitHubInstallation(request: Request, env: AcceptanceIntegra
     key,
     await sha256Hex(JSON.stringify({ repositoryId })),
     { ok: true },
-    [mutation],
+    [mutation, revokeTokens],
   );
   return json(stored.result);
 }
@@ -709,6 +722,14 @@ async function consumeGitHubEvent(
   payload: Record<string, unknown>,
   env: AcceptanceIntegrationEnv,
 ): Promise<void> {
+  if (eventName === "installation") {
+    await consumeGitHubInstallationEvent(payload, env);
+    return;
+  }
+  if (eventName === "installation_repositories") {
+    await consumeGitHubInstallationRepositoriesEvent(payload, env);
+    return;
+  }
   if (eventName !== "pull_request") return;
   const action = stringValue(payload.action);
   if (!action || !["opened", "reopened", "synchronize"].includes(action)) return;
@@ -735,6 +756,78 @@ async function consumeGitHubEvent(
        updated_at = unixepoch()`,
   ).bind(repoId, number, sha, subject).run();
   await invalidatePullRequestCurrentReviews(env, repoId, subject, sha, previous?.head_sha !== sha);
+}
+
+async function consumeGitHubInstallationEvent(payload: Record<string, unknown>, env: AcceptanceIntegrationEnv): Promise<void> {
+  const action = stringValue(payload.action);
+  if (action !== "deleted" && action !== "suspend") return;
+  const installationId = integerString(objectValue(payload.installation)?.id);
+  if (!installationId) return;
+  await revokeGitHubInstallation(env, installationId);
+}
+
+async function consumeGitHubInstallationRepositoriesEvent(payload: Record<string, unknown>, env: AcceptanceIntegrationEnv): Promise<void> {
+  const action = stringValue(payload.action);
+  if (action !== "removed") return;
+  const installationId = integerString(objectValue(payload.installation)?.id);
+  if (!installationId) return;
+  const repositoryIds = repositoryIdsFromWebhookArray(payload.repositories_removed);
+  if (repositoryIds.length === 0) return;
+  for (const repositoryId of repositoryIds) await revokeGitHubRepository(env, installationId, repositoryId);
+}
+
+async function revokeGitHubInstallation(env: AcceptanceIntegrationEnv, installationId: string): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE acceptance_github_workflow_tokens
+          SET revoked_at = COALESCE(revoked_at, unixepoch())
+        WHERE revoked_at IS NULL
+          AND EXISTS (
+            SELECT 1
+              FROM acceptance_github_installations gi
+             WHERE gi.project_id = acceptance_github_workflow_tokens.project_id
+               AND gi.repository_id = acceptance_github_workflow_tokens.repository_id
+               AND gi.installation_id = ?
+               AND gi.enabled = 1
+          )`,
+    ).bind(installationId),
+    env.DB.prepare(
+      "UPDATE acceptance_github_installations SET enabled = 0, updated_at = unixepoch() WHERE installation_id = ? AND enabled = 1",
+    ).bind(installationId),
+  ]);
+}
+
+async function revokeGitHubRepository(env: AcceptanceIntegrationEnv, installationId: string, repositoryId: string): Promise<void> {
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE acceptance_github_workflow_tokens
+          SET revoked_at = COALESCE(revoked_at, unixepoch())
+        WHERE repository_id = ?
+          AND revoked_at IS NULL
+          AND EXISTS (
+            SELECT 1
+              FROM acceptance_github_installations gi
+             WHERE gi.project_id = acceptance_github_workflow_tokens.project_id
+               AND gi.repository_id = acceptance_github_workflow_tokens.repository_id
+               AND gi.installation_id = ?
+               AND gi.repository_id = ?
+               AND gi.enabled = 1
+          )`,
+    ).bind(repositoryId, installationId, repositoryId),
+    env.DB.prepare(
+      "UPDATE acceptance_github_installations SET enabled = 0, updated_at = unixepoch() WHERE installation_id = ? AND repository_id = ? AND enabled = 1",
+    ).bind(installationId, repositoryId),
+  ]);
+}
+
+function repositoryIdsFromWebhookArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids: string[] = [];
+  for (const item of value) {
+    const id = integerString(objectValue(item)?.id);
+    if (id && !ids.includes(id)) ids.push(id);
+  }
+  return ids;
 }
 
 async function invalidatePullRequestCurrentReviews(
@@ -935,7 +1028,7 @@ function gateEnabled(config: GitHubInstallationConfig, gate: string): boolean {
   return gates.length === 0 || gates.includes(gate);
 }
 
-function workflowAllowed(config: GitHubInstallationConfig, workflowRef: string, jobWorkflowRef: string | null): boolean {
+function workflowAllowed(config: Pick<GitHubInstallationConfig, "allowed_workflows_json">, workflowRef: string, jobWorkflowRef: string | null): boolean {
   const allowed = parseJsonArray(config.allowed_workflows_json);
   return allowed.includes(workflowRef) || Boolean(jobWorkflowRef && allowed.includes(jobWorkflowRef));
 }

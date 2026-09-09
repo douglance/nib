@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exportJWK, exportPKCS8, generateKeyPair, SignJWT } from "jose";
-import { hmacSha256Hex } from "./common";
+import { hmacSha256Hex, sha256Hex } from "./common";
 import { parseAcceptanceError } from "./contracts";
 import { validateGitHubWorkflowClaims } from "./github";
 import type { AcceptanceChangedEvent, AcceptanceIntegrationEnv } from "./integrations";
-import { assertGithubPublication, deliverAcceptanceEvent, handleIntegrationRoutes, reconcileGitHubAcceptanceChecks, refreshGitHubChecksForReview } from "./integrations";
+import { assertGithubPublication, authenticateGithubWorkflow, deliverAcceptanceEvent, handleIntegrationRoutes, reconcileGitHubAcceptanceChecks, refreshGitHubChecksForReview } from "./integrations";
 import { createAcceptanceTeamTestFixture, type AcceptanceTeamTestFixture } from "./team-test-db";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
@@ -399,6 +399,111 @@ describe("acceptance integrations", () => {
       status: 0,
       response_body: "Webhook URL is no longer a public HTTPS endpoint without redirects.",
     });
+  });
+
+  it("rejects issued GitHub workflow tokens after config unlink or allowlist narrowing", async () => {
+    const f = await sqliteFixture();
+    installGitHubRepository(f);
+    await insertGitHubWorkflowToken(f, { token: "workflow-token" });
+
+    await expect(authenticateGithubWorkflow(f.env.DB, "Bearer workflow-token")).resolves.toMatchObject({ repositoryId: "123" });
+    const deleted = await handleIntegrationRoutes(
+      new Request(`https://nib.test/api/acceptance/v1/projects/${projectId}/integrations/github?repository_id=123`, {
+        method: "DELETE",
+        headers: { "idempotency-key": "delete-github-123" },
+      }),
+      f.env,
+      { ...owner, sessionId: "session", sessionName: "owner", platform: "web" },
+    );
+    expect(deleted?.status).toBe(200);
+    await expect(authenticateGithubWorkflow(f.env.DB, "Bearer workflow-token")).resolves.toBeNull();
+    expect(f.sqlite.prepare("SELECT revoked_at FROM acceptance_github_workflow_tokens WHERE token_hash = ?")
+      .get(await sha256Hex("workflow-token"))?.revoked_at).toBeGreaterThan(0);
+
+    f.sqlite.prepare("UPDATE acceptance_github_installations SET enabled = 1, allowed_workflows_json = ? WHERE repository_id = ?")
+      .run(JSON.stringify(["nib/example/.github/workflows/other.yml@refs/heads/main"]), "123");
+    await insertGitHubWorkflowToken(f, { token: "workflow-token-2" });
+    await expect(authenticateGithubWorkflow(f.env.DB, "Bearer workflow-token-2")).resolves.toBeNull();
+  });
+
+  it("revokes mapped GitHub workflow tokens on signed installation suspend webhooks", async () => {
+    const f = await sqliteFixture();
+    installGitHubRepository(f);
+    await insertGitHubWorkflowToken(f, { token: "workflow-token" });
+    const payload = JSON.stringify({ action: "suspend", installation: { id: 456 } });
+    const signature = `sha256=${await hmacSha256Hex("secret", payload)}`;
+
+    const response = await handleIntegrationRoutes(githubWebhookRequest("delivery-suspend", payload, signature, "installation"), {
+      ...f.env,
+      GITHUB_WEBHOOK_SECRET: "secret",
+    }, null);
+
+    expect(response?.status).toBe(200);
+    expect(f.sqlite.prepare("SELECT enabled FROM acceptance_github_installations WHERE repository_id = ?").get("123")?.enabled).toBe(0);
+    expect(f.sqlite.prepare("SELECT revoked_at FROM acceptance_github_workflow_tokens WHERE token_hash = ?")
+      .get(await sha256Hex("workflow-token"))?.revoked_at).toBeGreaterThan(0);
+    await expect(authenticateGithubWorkflow(f.env.DB, "Bearer workflow-token")).resolves.toBeNull();
+  });
+
+  it("revokes only current matching installation repository tokens for signed installation_repositories webhooks", async () => {
+    const f = await sqliteFixture();
+    installGitHubRepository(f);
+    installGitHubRepository(f, {
+      id: "github-installation-other",
+      repositoryId: "999",
+      owner: "nib",
+      name: "other",
+      workflowRef: "nib/other/.github/workflows/acceptance.yml@refs/heads/main",
+    });
+    await insertGitHubWorkflowToken(f, { token: "removed-token" });
+    await insertGitHubWorkflowToken(f, {
+      token: "kept-token",
+      repositoryId: "999",
+      repository: "nib/other",
+      workflowRef: "nib/other/.github/workflows/acceptance.yml@refs/heads/main",
+      actorId: "github:999:nib/other/.github/workflows/acceptance.yml@refs/heads/main",
+    });
+    const payload = JSON.stringify({
+      action: "removed",
+      installation: { id: 456 },
+      repositories_removed: [{ id: 123, name: "example" }],
+    });
+    const signature = `sha256=${await hmacSha256Hex("secret", payload)}`;
+
+    const response = await handleIntegrationRoutes(githubWebhookRequest("delivery-repo-removed", payload, signature, "installation_repositories"), {
+      ...f.env,
+      GITHUB_WEBHOOK_SECRET: "secret",
+    }, null);
+
+    expect(response?.status).toBe(200);
+    expect(f.sqlite.prepare("SELECT enabled FROM acceptance_github_installations WHERE repository_id = ?").get("123")?.enabled).toBe(0);
+    expect(f.sqlite.prepare("SELECT enabled FROM acceptance_github_installations WHERE repository_id = ?").get("999")?.enabled).toBe(1);
+    await expect(authenticateGithubWorkflow(f.env.DB, "Bearer removed-token")).resolves.toBeNull();
+    await expect(authenticateGithubWorkflow(f.env.DB, "Bearer kept-token")).resolves.toMatchObject({ repositoryId: "999" });
+  });
+
+  it("does not revoke replacement installation tokens when an old repository removal arrives", async () => {
+    const f = await sqliteFixture();
+    installGitHubRepository(f, { installationId: "789" });
+    await insertGitHubWorkflowToken(f, { token: "replacement-token" });
+    const payload = JSON.stringify({
+      action: "removed",
+      installation: { id: 456 },
+      repositories_removed: [{ id: 123, name: "example" }],
+    });
+    const signature = `sha256=${await hmacSha256Hex("secret", payload)}`;
+
+    const response = await handleIntegrationRoutes(githubWebhookRequest("delivery-old-repo-removed", payload, signature, "installation_repositories"), {
+      ...f.env,
+      GITHUB_WEBHOOK_SECRET: "secret",
+    }, null);
+
+    expect(response?.status).toBe(200);
+    expect(f.sqlite.prepare("SELECT installation_id, enabled FROM acceptance_github_installations WHERE repository_id = ?")
+      .get("123")).toMatchObject({ installation_id: "789", enabled: 1 });
+    await expect(authenticateGithubWorkflow(f.env.DB, "Bearer replacement-token")).resolves.toMatchObject({ repositoryId: "123" });
+    expect(f.sqlite.prepare("SELECT revoked_at FROM acceptance_github_workflow_tokens WHERE token_hash = ?")
+      .get(await sha256Hex("replacement-token"))?.revoked_at).toBeNull();
   });
 
   it("links a GitHub installation only with signed default-branch repository ownership proof", async () => {
@@ -843,12 +948,12 @@ function pullRequestPayload(sha: string): string {
   });
 }
 
-function githubWebhookRequest(deliveryId: string, payload: string, signature: string): Request {
+function githubWebhookRequest(deliveryId: string, payload: string, signature: string, eventName = "pull_request"): Request {
   return new Request("https://nib.test/api/acceptance/v1/github/webhook", {
     method: "POST",
     headers: {
       "x-github-delivery": deliveryId,
-      "x-github-event": "pull_request",
+      "x-github-event": eventName,
       "x-hub-signature-256": signature,
     },
     body: payload,
@@ -985,21 +1090,65 @@ function githubLinkFetch(jwks: { keys: unknown[] }): typeof fetch {
   });
 }
 
-function installGitHubRepository(f: { sqlite: AcceptanceTeamTestFixture["sqlite"] }): void {
+function installGitHubRepository(f: { sqlite: AcceptanceTeamTestFixture["sqlite"] }, options: {
+  id?: string;
+  installationId?: string;
+  repositoryId?: string;
+  owner?: string;
+  name?: string;
+  workflowRef?: string;
+} = {}): void {
+  const repositoryOwner = options.owner ?? "nib";
+  const repositoryName = options.name ?? "example";
+  const workflowRef = options.workflowRef ?? `${repositoryOwner}/${repositoryName}/.github/workflows/acceptance.yml@refs/heads/main`;
   f.sqlite.prepare(
     `INSERT INTO acceptance_github_installations(
        id, project_id, installation_id, repository_id, repository_owner, repository_name,
        allowed_workflows_json, gates_json, enabled, created_by_account_id, created_at, updated_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, 1, 1)`,
   ).run(
-    "github-installation",
+    options.id ?? "github-installation",
     projectId,
-    "456",
-    "123",
-    "nib",
-    "example",
-    JSON.stringify(["nib/example/.github/workflows/acceptance.yml@refs/heads/main"]),
+    options.installationId ?? "456",
+    options.repositoryId ?? "123",
+    repositoryOwner,
+    repositoryName,
+    JSON.stringify([workflowRef]),
     owner.id,
+  );
+}
+
+async function insertGitHubWorkflowToken(f: { sqlite: AcceptanceTeamTestFixture["sqlite"] }, options: {
+  token: string;
+  actorId?: string;
+  projectId?: string;
+  scopes?: string[];
+  repositoryId?: string;
+  repository?: string;
+  workflowRef?: string;
+  sha?: string;
+  ref?: string;
+  eventName?: string;
+}): Promise<void> {
+  const repository = options.repository ?? "nib/example";
+  const workflowRef = options.workflowRef ?? "nib/example/.github/workflows/acceptance.yml@refs/heads/main";
+  f.sqlite.prepare(
+    `INSERT INTO acceptance_github_workflow_tokens(
+       token_hash, actor_id, project_id, scopes_json, repository_id, repository, workflow_ref,
+       job_workflow_ref, sha, ref, event_name, github_actor, expires_at, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, unixepoch() + 600, unixepoch())`,
+  ).run(
+    await sha256Hex(options.token),
+    options.actorId ?? `github:${options.repositoryId ?? "123"}:${workflowRef}`,
+    options.projectId ?? projectId,
+    JSON.stringify(options.scopes ?? ["publish"]),
+    options.repositoryId ?? "123",
+    repository,
+    workflowRef,
+    options.sha ?? "a".repeat(40),
+    options.ref ?? "refs/heads/main",
+    options.eventName ?? "push",
+    "octocat",
   );
 }
 
