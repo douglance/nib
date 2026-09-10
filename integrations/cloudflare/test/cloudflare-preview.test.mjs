@@ -150,6 +150,122 @@ test("live apply creates, seeds, deploys, and emits an exact manifest", async ()
   );
 });
 
+test("live apply bootstraps preview secrets before the captured final deployment", async () => {
+  const root = await fixtureRoot();
+  const recipe = recipeFor(root);
+  recipe.cloudflare.components[0].secrets = [
+    { name: "AUTH_RATE_LIMIT_SECRET", env: "NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET" },
+    { name: "ACCEPTANCE_SIGNING_JWK", env: "NIB_ACCEPTANCE_PREVIEW_ACCEPTANCE_SIGNING_JWK" },
+  ];
+  const api = new FakeCloudflareApi();
+  const result = await deployCloudflarePreview(recipe, {
+    root,
+    dryRun: false,
+    allowLive: true,
+    api,
+    env: {
+      ...process.env,
+      NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET: "preview-auth-secret",
+      NIB_ACCEPTANCE_PREVIEW_ACCEPTANCE_SIGNING_JWK: "preview-signing-jwk",
+    },
+  });
+  const primary = result.plan.components.find((component) => component.role === "primary");
+  const bootstrapIndex = api.calls.findIndex((call) => call[0] === "bootstrapWorker" && call[1] === primary.name);
+  const secretIndexes = api.calls
+    .map((call, index) => [call, index])
+    .filter(([call]) => call[0] === "setSecret" && call[1] === primary.name)
+    .map(([, index]) => index);
+  const finalDeployIndex = api.calls.findIndex((call) => call[0] === "deployWorker" && call[1] === primary.name);
+  assert.equal(bootstrapIndex >= 0, true);
+  assert.equal(secretIndexes.length, 2);
+  assert.equal(secretIndexes.every((index) => index > bootstrapIndex && index < finalDeployIndex), true);
+  assert.equal(JSON.stringify(api.calls).includes("preview-auth-secret"), false);
+  assert.equal(JSON.stringify(result.state).includes("preview-signing-jwk"), false);
+  const journal = JSON.parse(await readFile(result.state.journalPath, "utf8"));
+  const secretEntry = journal.operations.find((operation) => operation.action === "secret" && operation.target === primary.name);
+  assert.deepEqual(secretEntry.result, {
+    component: primary.name,
+    secrets: [
+      { name: "AUTH_RATE_LIMIT_SECRET", env: "NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET" },
+      { name: "ACCEPTANCE_SIGNING_JWK", env: "NIB_ACCEPTANCE_PREVIEW_ACCEPTANCE_SIGNING_JWK" },
+    ],
+  });
+});
+
+test("live apply requires Stripe preview secrets to use test-mode keys", async () => {
+  const root = await fixtureRoot();
+  const recipe = recipeFor(root);
+  recipe.cloudflare.components[0].secrets = [
+    { name: "STRIPE_SECRET_KEY", env: "NIB_ACCEPTANCE_PREVIEW_STRIPE_SECRET_KEY" },
+  ];
+  const api = new FakeCloudflareApi();
+  await assert.rejects(
+    deployCloudflarePreview(recipe, {
+      root,
+      dryRun: false,
+      allowLive: true,
+      api,
+      env: {
+        ...process.env,
+        NIB_ACCEPTANCE_PREVIEW_STRIPE_SECRET_KEY: "sk_live_must_not_enter_preview",
+      },
+    }),
+    /must be a Stripe test-mode secret key/,
+  );
+  assert.equal(api.calls.some((call) => call[0] === "setSecret"), false);
+});
+
+test("live apply validates preview secrets before any Cloudflare mutation", async () => {
+  const root = await fixtureRoot();
+  const recipe = recipeFor(root);
+  recipe.cloudflare.components[0].secrets = [
+    { name: "AUTH_RATE_LIMIT_SECRET", env: "NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET" },
+    { name: "STRIPE_SECRET_KEY", env: "NIB_ACCEPTANCE_PREVIEW_STRIPE_SECRET_KEY" },
+  ];
+  const api = new FakeCloudflareApi();
+  await assert.rejects(
+    deployCloudflarePreview(recipe, {
+      root,
+      dryRun: false,
+      allowLive: true,
+      api,
+      env: {
+        ...process.env,
+        NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET: "preview-auth-secret",
+        NIB_ACCEPTANCE_PREVIEW_STRIPE_SECRET_KEY: "sk_live_must_not_enter_preview",
+      },
+    }),
+    /must be a Stripe test-mode secret key/,
+  );
+  assert.equal(api.calls.some((call) => ["createResource", "applyD1Migrations", "seedResource", "bootstrapWorker", "setSecret", "deployWorker"].includes(call[0])), false);
+});
+
+test("live apply rejects unresolved hosted seed placeholders", async () => {
+  const root = await fixtureRoot();
+  await writeFile(path.join(root, "fixtures", "seed.sql"), "insert into account(id) values ('__NIB_ACCEPTANCE_PILOT_EMAIL__');\n");
+  await assert.rejects(
+    deployCloudflarePreview(recipeFor(root), { root, dryRun: false, allowLive: true, api: new FakeCloudflareApi() }),
+    /Prepare hosted pilot seed files/
+  );
+});
+
+test("LiveCloudflareApi writes secrets through Wrangler stdin", async () => {
+  const runnerCalls = [];
+  const api = new LiveCloudflareApi({
+    accountId: "acct",
+    apiToken: "token",
+    runner: { run: async (argv, options) => runnerCalls.push({ argv, input: options?.input }) },
+    fetchImpl: async () => jsonResponse({ success: true, result: {} }),
+  });
+  await api.setSecret("worker-acc-owned", "AUTH_RATE_LIMIT_SECRET", "secret-value", {
+    generatedConfigPath: "/tmp/generated.wrangler.jsonc",
+  });
+  assert.deepEqual(runnerCalls, [{
+    argv: ["secret", "put", "AUTH_RATE_LIMIT_SECRET", "--config", "/tmp/generated.wrangler.jsonc", "--name", "worker-acc-owned"],
+    input: "secret-value",
+  }]);
+});
+
 test("verification fails when a service-binding dependency serves the wrong version", async () => {
   const root = await fixtureRoot();
   const api = new FakeCloudflareApi();

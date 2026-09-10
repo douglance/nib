@@ -28,6 +28,17 @@ beforeEach(async () => {
 afterEach(() => fixture.sqlite.close());
 
 describe("team acceptance delivery", () => {
+  it("delivers pilot notifications only to listed accounts and projects", async () => {
+    const email = vi.fn(async () => {});
+    const pilot = { ...env, ACCEPTANCE_PILOT_ACCOUNT_IDS: "owner", ACCEPTANCE_PILOT_PROJECT_IDS: projectId };
+    await deliverAcceptanceNotifications(event, { ...pilot, ACCEPTANCE_PILOT_PROJECT_IDS: "" }, email);
+    expect(inbox).not.toHaveBeenCalled();
+    await deliverAcceptanceNotifications(event, pilot, email);
+    expect(email).toHaveBeenCalledTimes(1);
+    expect((email.mock.calls[0] as unknown[])[1]).toBe("owner@example.com");
+    expect(inbox).toHaveBeenCalledTimes(1);
+  });
+
   it("fans one canonical review out to eligible members, without replaying notifications on comments", async () => {
     const email = vi.fn(async () => {});
     await deliverAcceptanceNotifications(event, env, email);

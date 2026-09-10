@@ -2,6 +2,7 @@ import type { NibAccount } from "../account-auth";
 import type { AcceptanceChangedEvent, AcceptanceIntegrationEnv } from "./common";
 import {
   assertGithubPublication,
+  assertGithubVerification,
   authenticateGithubWorkflow,
   handleGitHubIntegrationRoute,
   publishGitHubChecksForAcceptanceEvent,
@@ -17,6 +18,7 @@ import {
 export type { AcceptanceChangedEvent, AcceptanceIntegrationEnv, AutomationActor } from "./common";
 export {
   assertGithubPublication,
+  assertGithubVerification,
   authenticateGithubWorkflow,
   deliverQueuedCustomerWebhooks,
   reconcileGitHubAcceptanceChecks,

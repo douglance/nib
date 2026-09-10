@@ -1,17 +1,19 @@
 import type { Env } from "../types";
 import type { AcceptanceEvent } from "./contracts";
 import { getProjectSettings, listProjectRecipients } from "./teams";
+import { isPilotAccountAllowed, isPilotProjectAllowed } from "./pilot";
 
 type NotificationEnv = Env;
 type MailSender = (env: NotificationEnv, email: string, title: string, body: string, messageId: string) => Promise<void>;
 
 export async function deliverAcceptanceNotifications(event: AcceptanceEvent, env: NotificationEnv, sendMail: MailSender = sendAcceptanceMail): Promise<void> {
+  if (!isPilotProjectAllowed(env, event.projectId)) return;
   const settings = await getProjectSettings(env.DB, event.projectId);
   if (!settings || !settings.enabled || env.ACCEPTANCE_ENABLED !== "true") return;
   const coordinator = env.ACCEPTANCE.get(env.ACCEPTANCE.idFromName(`project:${event.projectId}`));
   const review = await coordinator.getReview(event.reviewId);
   if (!review || review.state !== event.state || review.manifestHash !== event.manifestHash) return;
-  const recipients = await listProjectRecipients(env.DB, event.projectId);
+  const recipients = (await listProjectRecipients(env.DB, event.projectId)).filter(recipient => isPilotAccountAllowed(env, recipient.accountId));
   const link = new URL(`/acceptance/projects/${event.projectId}/reviews/${event.reviewId}`, env.PUBLIC_ORIGIN).toString();
   const title = review.state === "pending" ? `Review requested: ${review.manifest.title}` : `Review ${stateLabel(review.state)}: ${review.manifest.title}`;
   const body = `${review.manifest.change}\n\n${review.state === "pending" ? "Open the exact preview, check the requested behavior, and record your decision." : `The review is ${stateLabel(review.state)}.`}\n\n${link}\n\nThis decision applies to revision ${review.revision} and its recorded build. The connected workflow determines what happens next.`;

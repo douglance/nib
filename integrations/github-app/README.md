@@ -13,7 +13,7 @@ The App does not request repository-content write access, organization administr
 ## Register the hosted App
 
 1. Deploy the configured webhook receiver with acceptance still disabled. Confirm the production hostname and replace the URLs in `manifest.json` if hosting elsewhere.
-2. Register the App in the intended GitHub account using this configuration. For the manifest handshake, provide an operator-controlled `redirect_url` and an unguessable state value at registration time; neither is a reusable secret to commit in this file. Alternatively, enter the same fields in GitHub's App settings form.
+2. Register the App in the intended GitHub account using this configuration. The local helper below serves a review page, adds a one-time loopback `redirect_url`, sends an unguessable `state`, and exchanges GitHub's temporary `code` after GitHub redirects back. Alternatively, enter the same fields in GitHub's App settings form.
 3. Store the generated App ID, private key, and webhook secret as `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `GITHUB_WEBHOOK_SECRET` on the public Worker. Keep credential values out of repository files and terminal output.
 4. Complete the [deployment preflight](../../docs/acceptance-operations.md), enable acceptance, and create the pilot team and project. Install the App on the selected pilot repository. Run the [Action's link mode](../github-action/README.md) from its default branch to establish the Nib project association.
 5. Verify a real webhook delivery, pending check, accepted check, and a later revision that blocks reuse. Record the App slug, installation ID, repository ID, deployed revision, and evidence in the day-30 audit before treating registration as shipped.
@@ -21,3 +21,28 @@ The App does not request repository-content write access, organization administr
 GitHub documents the [manifest registration handshake](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest) and the [check-run permission requirements](https://docs.github.com/en/rest/checks/runs). A registration configuration alone does not complete that handshake.
 
 GitHub delivers installation and repository-access lifecycle events to Apps by default. The receiver continues validating and processing signed lifecycle webhooks when acceptance is paused; publishing, token exchange, and current-gate verification stay disabled. An unconfigured webhook secret returns `503` until the binding is installed. See [GitHub webhook events](https://docs.github.com/en/webhooks/webhook-events-and-payloads#installation).
+
+### Local manifest helper
+
+Start the review server from the repository root:
+
+```sh
+apoc execution start node \
+  --profile lv \
+  --idempotency-key nib-github-app-manifest-registration \
+  --cwd /Users/douglance/Developer/lb/nib-acceptance-v1 \
+  --purpose "Serve Nib GitHub App manifest registration helper" \
+  -- \
+  integrations/github-app/bin/nib-github-app-manifest.mjs \
+  serve \
+  --manifest \
+  integrations/github-app/manifest.json \
+  --host \
+  127.0.0.1 \
+  --port \
+  0
+```
+
+The helper binds only to loopback hosts and prints the assigned local review URL and callback URL after it binds, for example `http://127.0.0.1:<port>/` and `http://127.0.0.1:<port>/callback`. Open the review URL, inspect the concrete manifest, and submit the form only when ready to create the App in GitHub. The form posts to `https://github.com/settings/apps/new` with the checked-in manifest plus the loopback `redirect_url`.
+
+After GitHub redirects back, the helper validates `state`, exchanges the temporary `code` with GitHub's manifest conversion endpoint, and writes only the App ID, webhook secret, and PEM to a private `0600` JSON file under `integrations/github-app/.tmp/`. The browser response and terminal completion output contain only the App ID, App URL, and credential file path.

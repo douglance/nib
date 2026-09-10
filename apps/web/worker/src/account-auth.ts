@@ -1,6 +1,6 @@
 import type { Env } from "./types";
 
-const ORIGIN = "https://nibtool.com";
+const DEFAULT_ORIGIN = "https://nibtool.com";
 const COOKIE = "nib_session";
 const CHALLENGE_SECONDS = 10 * 60;
 
@@ -26,8 +26,8 @@ export interface NibAccount {
   platform: string;
 }
 
-export function accountOrigin(): string {
-  return ORIGIN;
+export function accountOrigin(env?: Pick<Env, "PUBLIC_ORIGIN"> | null): string {
+  return configuredPublicOrigin(env?.PUBLIC_ORIGIN) ?? DEFAULT_ORIGIN;
 }
 
 export function normalizeEmail(value: unknown): string | undefined {
@@ -107,7 +107,7 @@ export async function verifiedAccount(request: Request, env: Env): Promise<NibAc
 
 export async function handleAccountAuth(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
-  if (url.pathname === "/auth/sign-in" && request.method === "GET") return html(signInPage(safeAuthReturnTo(url.searchParams.get("returnTo"))));
+  if (url.pathname === "/auth/sign-in" && request.method === "GET") return html(signInPage(safeAuthReturnTo(url.searchParams.get("returnTo"), env)));
   if (url.pathname === "/auth/verify" && request.method === "GET") return html(verificationPage(url));
   if (url.pathname === "/api/auth/challenges" && request.method === "POST") return createChallenge(request, env);
 
@@ -179,7 +179,7 @@ async function createChallenge(request: Request, env: Env): Promise<Response> {
     expiresAt,
   ).run();
 
-  const link = `${ORIGIN}/auth/verify?challenge=${encodeURIComponent(id)}&token=${encodeURIComponent(token)}`;
+  const link = `${accountOrigin(env)}/auth/verify?challenge=${encodeURIComponent(id)}&token=${encodeURIComponent(token)}`;
   try {
     const { sendMagicLinkEmail } = await import("./magic-email");
     await sendMagicLinkEmail(env.EMAIL, email, link, code);
@@ -273,16 +273,31 @@ async function exchangeChallenge(request: Request, env: Env, id: string): Promis
   }, 200, headers);
 }
 
-export function safeAuthReturnTo(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || /[\\<>\u0000-\u001f\u007f]/.test(value)) return "/account";
+export function safeAuthReturnTo(value: string | null, env?: Pick<Env, "PUBLIC_ORIGIN"> | null): string {
+  if (!value || /[\\<>\u0000-\u001f\u007f]/.test(value)) return "/account";
+  const origin = accountOrigin(env);
   try {
-    const url = new URL(value, ORIGIN);
-    if (url.origin !== ORIGIN) return "/account";
+    const url = value.startsWith("/") && !value.startsWith("//")
+      ? new URL(value, origin)
+      : new URL(value);
+    if (url.origin !== origin) return "/account";
     if (url.pathname === "/acceptance" || url.pathname.startsWith("/acceptance/") || url.pathname.startsWith("/r/") || url.pathname === "/account") {
       return url.pathname + url.search + url.hash;
     }
   } catch { /* Invalid destinations use the account page. */ }
   return "/account";
+}
+
+function configuredPublicOrigin(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+    if (url.username || url.password) return undefined;
+    return url.origin;
+  } catch {
+    return undefined;
+  }
 }
 
 function signInPage(returnTo: string): string {

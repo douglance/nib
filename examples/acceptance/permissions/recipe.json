@@ -32,6 +32,18 @@
       "verification": "Run the permissions smoke with the seeded automation token."
     }
   ],
+  "references": {
+    "pilotEmails": {
+      "owner": { "env": "NIB_ACCEPTANCE_PILOT_PERMISSIONS_OWNER_EMAIL" },
+      "admin": { "env": "NIB_ACCEPTANCE_PILOT_PERMISSIONS_ADMIN_EMAIL" },
+      "reviewer": { "env": "NIB_ACCEPTANCE_PILOT_PERMISSIONS_REVIEWER_EMAIL" },
+      "viewer": { "env": "NIB_ACCEPTANCE_PILOT_PERMISSIONS_VIEWER_EMAIL" }
+    },
+    "previewSecrets": [
+      { "name": "AUTH_RATE_LIMIT_SECRET", "env": "NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET" },
+      { "name": "ACCEPTANCE_SIGNING_JWK", "env": "NIB_ACCEPTANCE_PREVIEW_ACCEPTANCE_SIGNING_JWK" }
+    ]
+  },
   "cloudflare": {
     "wranglerPackage": "apps/web",
     "components": [

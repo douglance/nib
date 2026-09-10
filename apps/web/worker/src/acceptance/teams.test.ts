@@ -52,6 +52,64 @@ afterEach(() => {
 });
 
 describe("acceptance team routes", () => {
+  it("allows pilot bootstrap while hiding and denying projects until listed", async () => {
+    const f = await fixture();
+    f.env.ACCEPTANCE_PILOT_ACCOUNT_IDS = accounts.owner.id;
+    f.env.ACCEPTANCE_PILOT_PROJECT_IDS = "";
+    const teamId = await createTeam(f);
+    const projectId = await createProject(f, teamId);
+    expect((await api(f, accounts.other, "GET", "/teams")).status).toBe(403);
+    expect((await api(f, accounts.owner, "GET", `/projects/${projectId}`)).status).toBe(403);
+    await expect((await api(f, accounts.owner, "GET", `/teams/${teamId}/projects`)).json()).resolves.toEqual({ projects: [] });
+    f.env.ACCEPTANCE_PILOT_PROJECT_IDS = projectId;
+    expect((await api(f, accounts.owner, "GET", `/projects/${projectId}`)).status).toBe(200);
+  });
+
+  it("does not let team-level changes alter projects outside the pilot", async () => {
+    const f = await fixture();
+    const teamId = await createTeam(f);
+    const projectId = await createProject(f, teamId);
+    expect((await api(f, accounts.owner, "PUT", `/teams/${teamId}/members/${accounts.reviewer.id}`, { role: "member" }, "add-member")).status).toBe(200);
+    f.env.ACCEPTANCE_PILOT_ACCOUNT_IDS = accounts.owner.id;
+    f.env.ACCEPTANCE_PILOT_PROJECT_IDS = "";
+    expect((await api(f, accounts.owner, "DELETE", `/teams/${teamId}`, undefined, "archive-team")).status).toBe(403);
+    expect((await api(f, accounts.owner, "DELETE", `/teams/${teamId}/members/${accounts.reviewer.id}`, undefined, "remove-member")).status).toBe(403);
+    expect((await api(f, accounts.owner, "PUT", `/teams/${teamId}/members/${accounts.reviewer.id}`, { role: "admin" }, "promote-member")).status).toBe(403);
+    expect((await getProjectSettings(f.env.DB, projectId))?.enabled).toBe(true);
+    expect(f.sqlite.prepare("SELECT role FROM acceptance_team_members WHERE team_id = ? AND account_id = ?").get(teamId, accounts.reviewer.id)?.role).toBe("member");
+    f.env.ACCEPTANCE_PILOT_PROJECT_IDS = projectId;
+    expect((await api(f, accounts.owner, "DELETE", `/teams/${teamId}`, undefined, "archive-after-enable")).status).toBe(200);
+  });
+
+  it("does not send invitations to accounts outside the pilot, including queued retries", async () => {
+    const f = await fixture();
+    const teamId = await createTeam(f);
+    f.failEmail = true;
+    expect((await api(f, accounts.owner, "POST", `/teams/${teamId}/invitations`, { email: accounts.other.email }, "queued-before-pilot")).status).toBe(201);
+    f.env.ACCEPTANCE_PILOT_ACCOUNT_IDS = `${accounts.owner.id},${accounts.reviewer.id}`;
+    f.env.ACCEPTANCE_PILOT_PROJECT_IDS = "";
+    f.failEmail = false;
+    await sendPendingInvitationEmails(f.env);
+    expect(f.sentEmails).toHaveLength(0);
+    expect((await api(f, accounts.owner, "POST", `/teams/${teamId}/invitations`, { email: accounts.other.email }, "outside-pilot")).status).toBe(403);
+    expect((await api(f, accounts.owner, "POST", `/teams/${teamId}/invitations`, { email: accounts.reviewer.email }, "inside-pilot")).status).toBe(201);
+    expect(f.sentEmails).toHaveLength(1);
+    expect((f.sentEmails[0] as TestEmailMessage).to).toBe(accounts.reviewer.email);
+  });
+
+  it("does not let queued non-pilot invitations starve the pilot delivery batch", async () => {
+    const f = await fixture();
+    const teamId = await createTeam(f);
+    f.failEmail = true;
+    await api(f, accounts.owner, "POST", `/teams/${teamId}/invitations`, { email: accounts.other.email }, "outside-first");
+    await api(f, accounts.owner, "POST", `/teams/${teamId}/invitations`, { email: accounts.reviewer.email }, "inside-second");
+    f.env.ACCEPTANCE_PILOT_ACCOUNT_IDS = `${accounts.owner.id},${accounts.reviewer.id}`;
+    f.env.ACCEPTANCE_PILOT_PROJECT_IDS = "";
+    f.failEmail = false;
+    expect(await sendPendingInvitationEmails(f.env, 1)).toBe(1);
+    expect((f.sentEmails[0] as TestEmailMessage).to).toBe(accounts.reviewer.email);
+  });
+
   it("creates and lists teams with idempotent owner membership", async () => {
     const f = await fixture();
 

@@ -11,6 +11,14 @@ const DEFAULT_COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const DEFAULT_PREVIEW_BASE_URL = "https://preview.nib.test/examples";
 const DEFAULT_REPOSITORY = { id: "nib", owner: "douglance", name: "nib" };
 const EXAMPLE_NAMES = ["onboarding", "business-rules", "permissions"];
+const RUNTIME_TEMPLATE_VALUES = {
+  NIB_ACCEPTANCE_PILOT_ONBOARDING_EMAIL: "pilot-onboarding-runtime@example.com",
+  NIB_ACCEPTANCE_PILOT_BUSINESS_RULES_EMAIL: "pilot-business-rules-runtime@example.com",
+  NIB_ACCEPTANCE_PILOT_PERMISSIONS_OWNER_EMAIL: "pilot-permissions-owner-runtime@example.com",
+  NIB_ACCEPTANCE_PILOT_PERMISSIONS_ADMIN_EMAIL: "pilot-permissions-admin-runtime@example.com",
+  NIB_ACCEPTANCE_PILOT_PERMISSIONS_REVIEWER_EMAIL: "pilot-permissions-reviewer-runtime@example.com",
+  NIB_ACCEPTANCE_PILOT_PERMISSIONS_VIEWER_EMAIL: "pilot-permissions-viewer-runtime@example.com",
+};
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
@@ -65,7 +73,8 @@ async function runOnboarding(ctx) {
   progress("onboarding", "onboarding auth/publish/read");
   const { recipe, mf, runtime, accounts, owner, reviewerA, repository, options } = ctx;
   const appOwner = new PublicWorkerClient(mf, accounts.owner.token, `onboarding-app-${crypto.randomUUID()}`);
-  const fixture = await readJson(path.join(EXAMPLES_ROOT, "onboarding", "review-request.json"));
+  const fixture = await readExampleJson("onboarding", "review-request.json");
+  assert(fixture.email === RUNTIME_TEMPLATE_VALUES.NIB_ACCEPTANCE_PILOT_ONBOARDING_EMAIL, `onboarding fixture email was not materialized: ${fixture.email}`);
   const { teamId, projectId } = await createProjectFixture(ctx, {
     teamName: "Example onboarding team",
     projectName: "Example onboarding project",
@@ -146,6 +155,7 @@ async function runOnboarding(ctx) {
       reviewPageStatus: page.status,
       reviewPageShellRendered: true,
       metrics: metrics.events,
+      deterministicFixtureEmail: fixture.email,
     },
     d1: await d1Summary(mf),
     durableObject: await doStorageSummary(mf, projectId),
@@ -156,7 +166,7 @@ async function runBusinessRules(ctx) {
   progress("business-rules", "billinggenerate");
   const { recipe, mf, runtime, accounts, owner, reviewerA, reviewerB, repository, options } = ctx;
   const appOwner = new PublicWorkerClient(mf, accounts.owner.token, `business-app-${crypto.randomUUID()}`);
-  const usageFixture = await readJson(path.join(EXAMPLES_ROOT, "business-rules", "usage-fixture.json"));
+  const usageFixture = await readExampleJson("business-rules", "usage-fixture.json");
   const { teamId, projectId } = await createProjectFixture(ctx, {
     teamName: "Example business rules team",
     projectName: "Example business rules project",
@@ -449,8 +459,19 @@ async function fetchPage(mf, reviewUrl, token) {
 }
 
 async function readRecipe(name) {
-  const recipe = await readJson(path.join(EXAMPLES_ROOT, name, "recipe.json"));
+  const recipe = await readExampleJson(name, "recipe.json");
   return { ...recipe, name };
+}
+
+async function readExampleJson(name, file) {
+  const sourcePath = path.join(EXAMPLES_ROOT, name, file);
+  let source = await readFile(sourcePath, "utf8");
+  for (const [name, value] of Object.entries(RUNTIME_TEMPLATE_VALUES)) {
+    source = source.split(`__${name}__`).join(value);
+  }
+  const unresolved = source.match(/__NIB_ACCEPTANCE_[A-Z0-9_]+__/g);
+  if (unresolved) throw new Error(`${path.relative(REPO_ROOT, sourcePath)} still contains unresolved runtime placeholders: ${[...new Set(unresolved)].join(", ")}`);
+  return JSON.parse(source);
 }
 
 async function readJson(file) {

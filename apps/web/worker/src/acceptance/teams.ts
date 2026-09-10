@@ -1,5 +1,7 @@
 import { normalizeEmail, type NibAccount } from "../account-auth";
 import type { Env } from "../types";
+import { AcceptanceHttpError, acceptanceErrorResponse } from "./http";
+import { acceptancePilotEnabled, assertPilotAccount, assertPilotProject, isPilotEmailAllowed, isPilotProjectAllowed, pilotIds, type AcceptancePilotEnv } from "./pilot";
 
 const API_PREFIX = "/api/acceptance/v1";
 const DEFAULT_QUORUM = 1;
@@ -141,6 +143,8 @@ export async function handleTeamRoutes(
   const parts = relativePath.split("/").filter(Boolean).map((part) => decodeURIComponent(part));
 
   try {
+    assertPilotAccount(env, account.id);
+    if (parts[0] === "projects" && parts[1]) assertPilotProject(env, parts[1]);
     if (request.method !== "GET" && request.method !== "HEAD") {
       return await withIdempotency(request, env, account.id, async (input, idempotency) =>
         routeMutation(request, env, account, parts, input, idempotency),
@@ -148,6 +152,7 @@ export async function handleTeamRoutes(
     }
     return await routeRead(request, env, account, parts);
   } catch (error) {
+    if (error instanceof AcceptanceHttpError) return acceptanceErrorResponse(error);
     if (error instanceof HttpError) return jsonError(error.code, error.message, error.status);
     console.error("Acceptance team route failed", error);
     return jsonError("internal_error", "Acceptance team request failed.", 500);
@@ -415,7 +420,7 @@ async function routeRead(request: Request, env: Env, account: NibAccount, parts:
   }
   if (parts.length === 3 && parts[0] === "teams" && parts[2] === "projects") {
     await requireTeamMember(env.DB, parts[1]!, account.id);
-    return listTeamProjects(env.DB, parts[1]!, account.id);
+    return listTeamProjects(env.DB, parts[1]!, account.id, env);
   }
   if (parts.length === 2 && parts[0] === "projects") return getProject(env.DB, parts[1]!, account.id);
   if (parts.length === 3 && parts[0] === "projects" && parts[2] === "members") {
@@ -445,6 +450,9 @@ async function routeMutation(
   input: unknown,
   idempotency: IdempotencyContext,
 ): Promise<PlannedMutation> {
+  if (parts[0] === "teams" && parts[1] && parts[2] !== "projects") {
+    await assertPilotTeamProjects(env, parts[1]);
+  }
   if (request.method === "POST" && parts.length === 1 && parts[0] === "teams") {
     return planCreateTeam(env.DB, account, input);
   }
@@ -479,7 +487,7 @@ async function routeMutation(
     return planResendInvitation(env, parts[1]!, parts[3]!, account);
   }
   if (request.method === "POST" && parts.length === 3 && parts[0] === "invitations" && parts[1] && parts[2] === "accept") {
-    return planAcceptInvitation(env.DB, parts[1], account);
+    return planAcceptInvitation(env, parts[1], account);
   }
   if (request.method === "POST" && parts.length === 3 && parts[0] === "teams" && parts[2] === "transfer") {
     await requireTeamOwner(env.DB, parts[1]!, account.id);
@@ -642,6 +650,7 @@ async function planCreateInvitation(env: Env, teamId: string, account: NibAccoun
   const body = objectInput(input);
   const email = normalizeEmail(body.email);
   if (!email) throw new HttpError(400, "invalid_email", "Invitation email is invalid.");
+  if (!(await isPilotEmailAllowed(env, email))) throw new HttpError(403, "pilot_account_required", "Invite an account enabled for the acceptance pilot.");
   const role = inviteRole(body.role ?? "member");
   const now = unixTime();
   const id = crypto.randomUUID();
@@ -734,7 +743,8 @@ async function planResendInvitation(env: Env, teamId: string, invitationId: stri
   ]);
 }
 
-async function planAcceptInvitation(db: D1Database, token: string, account: NibAccount): Promise<PlannedMutation> {
+async function planAcceptInvitation(env: Env, token: string, account: NibAccount): Promise<PlannedMutation> {
+  const db = env.DB;
   const now = unixTime();
   const row = await db.prepare(
     `SELECT i.*
@@ -745,6 +755,7 @@ async function planAcceptInvitation(db: D1Database, token: string, account: NibA
   ).bind(await sha256(token)).first<InvitationRow>();
   if (!row || row.expires_at < now) throw new HttpError(401, "invalid_or_expired_invitation", "Invitation is invalid or expired.");
   if (row.email !== account.email) throw new HttpError(403, "email_mismatch", "Invitation must be accepted by the invited email address.");
+  await assertPilotTeamProjects(env, row.team_id);
   return mutation(200, { accepted: true, teamId: row.team_id, role: row.role }, [
     db.prepare(
       `INSERT INTO acceptance_team_members(team_id, account_id, role, added_by, added_at)
@@ -772,7 +783,7 @@ async function planTransferTeamOwnership(db: D1Database, teamId: string, actorId
   ]);
 }
 
-async function listTeamProjects(db: D1Database, teamId: string, accountId: string): Promise<Response> {
+async function listTeamProjects(db: D1Database, teamId: string, accountId: string, pilot: AcceptancePilotEnv): Promise<Response> {
   const teamRole = await teamRoleFor(db, teamId, accountId);
   const sql = teamRole === "owner" || teamRole === "admin"
     ? `SELECT * FROM acceptance_projects WHERE team_id = ? AND archived_at IS NULL ORDER BY created_at DESC`
@@ -789,6 +800,7 @@ async function listTeamProjects(db: D1Database, teamId: string, accountId: strin
   );
   const projects = [];
   for (const row of rows) {
+    if (!isPilotProjectAllowed(pilot, row.id)) continue;
     projects.push({ ...projectJson(row), access: await getProjectAccess(db, row.id, accountId) });
   }
   return json({ projects });
@@ -1142,14 +1154,25 @@ export async function sendPendingInvitationEmails(env: Env, limit = 20): Promise
            AND i.accepted_at IS NULL
            AND i.revoked_at IS NULL
            AND i.expires_at > ?
+           AND (? = 0 OR EXISTS (
+             SELECT 1 FROM accounts a
+              WHERE lower(a.email) = lower(o.email)
+                AND a.account_id IN (SELECT value FROM json_each(?))
+           ))
          ORDER BY o.created_at
          LIMIT ?
       )
       RETURNING id, email, raw_message`,
-  ).bind(now + INVITATION_EMAIL_LEASE_SECONDS, now, now, limit));
+  ).bind(now + INVITATION_EMAIL_LEASE_SECONDS, now, now, acceptancePilotEnabled(env) ? 1 : 0,
+    JSON.stringify(pilotIds(env.ACCEPTANCE_PILOT_ACCOUNT_IDS)), limit));
   let sent = 0;
   for (const row of rows) {
     try {
+      if (!(await isPilotEmailAllowed(env, row.email))) {
+        await env.DB.prepare("UPDATE acceptance_invitation_email_outbox SET lease_expires_at = NULL, last_error = 'pilot_account_required' WHERE id = ? AND sent_at IS NULL")
+          .bind(row.id).run();
+        continue;
+      }
       await sendInvitationMessage(env, row.email, row.raw_message);
       await env.DB.prepare(
         "UPDATE acceptance_invitation_email_outbox SET sent_at = ?, lease_expires_at = NULL, last_error = NULL WHERE id = ? AND sent_at IS NULL",
@@ -1162,6 +1185,14 @@ export async function sendPendingInvitationEmails(env: Env, limit = 20): Promise
     }
   }
   return sent;
+}
+
+async function assertPilotTeamProjects(env: Env, teamId: string): Promise<void> {
+  if (!acceptancePilotEnabled(env)) return;
+  const projects = await allRows<{ id: string }>(env.DB.prepare(
+    "SELECT id FROM acceptance_projects WHERE team_id = ? AND archived_at IS NULL",
+  ).bind(teamId));
+  for (const project of projects) assertPilotProject(env, project.id);
 }
 
 async function sendInvitationMessage(env: Env, email: string, raw: string): Promise<void> {

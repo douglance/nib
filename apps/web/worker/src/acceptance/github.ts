@@ -1,15 +1,15 @@
 import { SignJWT, createRemoteJWKSet, importPKCS8, jwtVerify } from "jose";
 import type { JWTPayload } from "jose";
-import { AcceptanceError, type AcceptanceManifest } from "./contracts";
+import { AcceptanceError, hashAcceptanceManifest, type AcceptanceManifest } from "./contracts";
 import { hasFreshProviderVerification } from "./provider-verification";
 import {
   type AcceptanceAccount,
   type AcceptanceChangedEvent,
+  type CurrentAcceptanceState,
   type AcceptanceIntegrationEnv,
   type AutomationActor,
   acceptanceEnabled,
   acceptanceCoordinator,
-  fetchCurrentAcceptanceState,
   integerString,
   json,
   jsonError,
@@ -23,6 +23,8 @@ import {
   withAtomicIdempotency,
   ensureProjectAdmin,
 } from "./common";
+import { assertPilotProject, isPilotAccountAllowed, isPilotProjectAllowed } from "./pilot";
+import { getProjectSettings, listEligibleReviewers } from "./teams";
 
 const GITHUB_WEBHOOK_LEASE_TIMEOUT_SECONDS = 300;
 
@@ -44,6 +46,7 @@ interface GitHubCheckHeadRow extends GitHubInstallationConfig {
   config_id: string;
   gate: string;
   head_sha: string;
+  build_commit_sha: string | null;
   latest_sequence: number;
   event_id: string;
   payload_json: string;
@@ -51,11 +54,33 @@ interface GitHubCheckHeadRow extends GitHubInstallationConfig {
   cursor_key: string;
 }
 
+interface GitHubPullResponse {
+  head?: { sha?: string; repo?: { id?: number | string | null } | null };
+  merge_commit_sha?: string | null;
+}
+
+interface GitHubPullProvenance {
+  pullNumber: string;
+  headSha: string;
+  mergeCommitSha: string | null;
+  headRepositoryId: string | null;
+}
+
+interface GitHubCheckTarget {
+  headSha: string;
+  buildCommitSha: string;
+  state: string;
+}
+
 interface GitHubRepositoryResponse {
   id?: number;
   name?: string;
   default_branch?: string;
   owner?: { login?: string };
+}
+
+interface GitHubBranchResponse {
+  commit?: { sha?: string };
 }
 
 interface GitHubInstallationTokenResponse {
@@ -93,8 +118,39 @@ export interface GitHubWorkflowActor extends AutomationActor {
   eventName?: string;
 }
 
-export function assertGithubPublication(actor: AutomationActor | GitHubWorkflowActor | null | undefined, manifest: AcceptanceManifest): void {
-  if (!isGitHubWorkflowActor(actor)) return;
+export async function assertGithubPublication(
+  env: AcceptanceIntegrationEnv,
+  actor: AutomationActor | GitHubWorkflowActor | null | undefined,
+  manifest: AcceptanceManifest,
+): Promise<void> {
+  const pullNumber = assertGithubWorkflowPublication(actor, manifest);
+  if (!pullNumber || !isGitHubWorkflowActor(actor)) return;
+  const provenance = await verifyGitHubPullProvenance(env, actor, manifest, pullNumber);
+  await recordGitHubPullProvenance(env, actor, manifest, provenance);
+  await recordGitHubPullHead(env, actor.repositoryId, provenance.pullNumber, provenance.headSha, manifest.subject);
+}
+
+export async function assertGithubVerification(
+  env: AcceptanceIntegrationEnv,
+  actor: AutomationActor | GitHubWorkflowActor | null | undefined,
+  manifest: AcceptanceManifest,
+): Promise<void> {
+  const pullNumber = assertGithubWorkflowPublication(actor, manifest);
+  if (!pullNumber || !isGitHubWorkflowActor(actor)) return;
+  const stored = await requireStoredGitHubPullProvenance(env, actor, manifest, pullNumber);
+  const current = await verifyGitHubPullProvenance(env, actor, manifest, pullNumber);
+  if (stored.verifiedHeadSha.toLowerCase() !== current.headSha.toLowerCase() ||
+      stored.buildCommitSha.toLowerCase() !== manifest.build.commit.toLowerCase() ||
+      (stored.verifiedMergeCommitSha !== null && current.mergeCommitSha?.toLowerCase() !== stored.verifiedMergeCommitSha.toLowerCase())) {
+    throw githubPublicationError("GitHub pull request provenance is stale. Republish this acceptance review from the current PR workflow.");
+  }
+}
+
+function assertGithubWorkflowPublication(
+  actor: AutomationActor | GitHubWorkflowActor | null | undefined,
+  manifest: AcceptanceManifest,
+): string | null {
+  if (!isGitHubWorkflowActor(actor)) return null;
   const repository = manifest.build.repository;
   if (!repository) throw githubPublicationError("GitHub workflow publications must include manifest.build.repository.");
   if (repository.id !== actor.repositoryId) throw githubPublicationError("GitHub workflow repository id does not match the manifest.");
@@ -108,6 +164,7 @@ export function assertGithubPublication(actor: AutomationActor | GitHubWorkflowA
     const expectedSubject = `github:${actor.repository}:pull/${pullNumber}`;
     if (manifest.subject !== expectedSubject) throw githubPublicationError("GitHub pull request subject does not match the workflow ref.");
   }
+  return pullNumber ?? null;
 }
 
 function githubPublicationError(message: string): AcceptanceError {
@@ -136,6 +193,7 @@ export async function handleGitHubIntegrationRoute(
   if (!match) return null;
   const projectId = decodeURIComponent(match[1] ?? "");
   if (!projectId) return jsonError("not_found", "Project not found.", 404);
+  assertPilotProject(env, projectId);
   if (!acceptanceEnabled(env)) return jsonError("acceptance_disabled", "Acceptance is disabled.", 403);
   if (!(await ensureProjectAdmin(env.DB, projectId, account))) {
     return jsonError("forbidden", "Project admin access is required.", 403);
@@ -257,7 +315,8 @@ export async function publishGitHubChecksForAcceptanceEvent(
   event: AcceptanceChangedEvent,
   env: AcceptanceIntegrationEnv,
 ): Promise<void> {
-  const current = await fetchCurrentAcceptanceState(env, event);
+  if (!isPilotProjectAllowed(env, event.projectId)) return;
+  const current = await fetchCurrentGitHubAcceptanceState(env, event);
   if (!current || current.reviewId !== event.reviewId || current.revision !== event.revision ||
       current.manifestHash !== event.manifestHash) {
     return;
@@ -273,8 +332,10 @@ export async function publishGitHubChecksForAcceptanceEvent(
 
   for (const config of configs.results) {
     if (!gateEnabled(config, event.gate)) continue;
-    if (!(await claimLatestCheckHead(env, config, event))) continue;
-    await createGitHubCheckRun(env, config, event, await githubCheckState(env, event, current.state ?? event.state));
+    const target = await githubCheckTarget(env, config, event, current.state ?? event.state);
+    await invalidateStaleGitHubProvenance(env, event, current, target);
+    if (!(await claimLatestCheckHead(env, config, event, target))) continue;
+    await createGitHubCheckRun(env, config, event, target);
   }
 }
 
@@ -308,20 +369,35 @@ export async function reconcileGitHubAcceptanceChecks(
     const event = parseStoredEvent(row.payload_json);
     if (!event) continue;
     if (!acceptanceEnabled(env)) {
-      await createGitHubCheckRun(env, row, event, "rejected");
+      const target = {
+        headSha: row.head_sha,
+        buildCommitSha: row.build_commit_sha ?? event.manifest.build.commit,
+        state: "rejected",
+      };
+      if (row.last_conclusion !== checkConclusion(target.state)) await createGitHubCheckRun(env, row, event, target);
       continue;
     }
-    const current = await fetchCurrentAcceptanceState(env, event);
+    if (!isPilotProjectAllowed(env, event.projectId)) {
+      const target = {
+        headSha: row.head_sha,
+        buildCommitSha: row.build_commit_sha ?? event.manifest.build.commit,
+        state: "pilot_project_paused",
+      };
+      if (row.last_conclusion !== checkConclusion(target.state)) await createGitHubCheckRun(env, row, event, target);
+      continue;
+    }
+    const current = await fetchCurrentGitHubAcceptanceState(env, event);
     const stillCurrent = current?.reviewId === event.reviewId &&
       current.revision === event.revision &&
       current.manifestHash === event.manifestHash &&
       current.state === "approved";
-    const checkState = stillCurrent
-      ? await githubCheckState(env, event, "approved")
-      : current?.state ?? "invalidated";
-    const desiredConclusion = checkConclusion(checkState) ?? "in_progress";
-    if (!stillCurrent || checkState !== "approved" || row.last_conclusion !== desiredConclusion) {
-      await createGitHubCheckRun(env, row, event, checkState);
+    const target = stillCurrent
+      ? await githubCheckTarget(env, row, event, "approved", row.head_sha)
+      : { headSha: row.head_sha, buildCommitSha: row.build_commit_sha ?? event.manifest.build.commit, state: current?.state ?? "invalidated" };
+    await invalidateStaleGitHubProvenance(env, event, current, target);
+    const desiredConclusion = checkConclusion(target.state) ?? "in_progress";
+    if (!stillCurrent || target.state !== "approved" || row.last_conclusion !== desiredConclusion) {
+      await createGitHubCheckRun(env, row, event, target);
     }
   }
   const last = rows.at(-1);
@@ -356,22 +432,165 @@ async function githubCheckState(
   return "cloudflare_current_version_unverified";
 }
 
+async function fetchCurrentGitHubAcceptanceState(
+  env: AcceptanceIntegrationEnv,
+  event: AcceptanceChangedEvent,
+): Promise<CurrentAcceptanceState | null> {
+  const settings = await getProjectSettings(env.DB, event.projectId);
+  if (!settings?.enabled) {
+    return {
+      id: event.reviewId,
+      reviewId: event.reviewId,
+      revision: event.revision,
+      manifestHash: event.manifestHash,
+      state: "project_disabled",
+      manifest: event.manifest,
+    };
+  }
+
+  const coordinator = acceptanceCoordinator(env, event.projectId);
+  const eligible = (await listEligibleReviewers(env.DB, event.projectId)).filter((accountId) => isPilotAccountAllowed(env, accountId));
+  const current = await coordinator?.getCurrent(event.subject, event.gate, eligible);
+  if (!current) return null;
+  return {
+    id: current.id,
+    reviewId: current.id,
+    revision: current.revision,
+    manifestHash: current.manifestHash,
+    state: current.state,
+    manifest: current.manifest,
+  };
+}
+
+async function githubCheckTarget(
+  env: AcceptanceIntegrationEnv,
+  config: Pick<GitHubInstallationConfig, "installation_id" | "repository_owner" | "repository_name">,
+  event: AcceptanceChangedEvent,
+  state: string,
+  fallbackHeadSha?: string,
+): Promise<GitHubCheckTarget> {
+  const buildCommitSha = event.manifest.build.commit;
+  const pull = githubPullSubject(event);
+  if (!pull) {
+    return {
+      headSha: fallbackHeadSha ?? buildCommitSha,
+      buildCommitSha,
+      state: await githubCheckState(env, event, state),
+    };
+  }
+
+  if (state !== "approved") {
+    const lastHead = await env.DB.prepare(
+      "SELECT head_sha FROM acceptance_github_pull_heads WHERE repository_id = ? AND pull_number = ?",
+    ).bind(pull.repositoryId, pull.pullNumber).first<{ head_sha: string }>();
+    return {
+      headSha: fallbackHeadSha ?? lastHead?.head_sha ?? buildCommitSha,
+      buildCommitSha,
+      state,
+    };
+  }
+
+  const provenance = await env.DB.prepare(
+    `SELECT verified_head_sha, verified_merge_commit_sha, build_commit_sha
+       FROM acceptance_github_pr_provenance
+      WHERE project_id = ?
+        AND subject = ?
+        AND gate = ?
+        AND manifest_hash = ?
+        AND repository_id = ?
+        AND pull_number = ?
+      LIMIT 1`,
+  ).bind(event.projectId, event.subject, event.gate, event.manifestHash, pull.repositoryId, pull.pullNumber)
+    .first<{ verified_head_sha: string; verified_merge_commit_sha: string | null; build_commit_sha: string }>();
+  if (!provenance || provenance.build_commit_sha !== buildCommitSha) {
+    const lastHead = await env.DB.prepare(
+      "SELECT head_sha FROM acceptance_github_pull_heads WHERE repository_id = ? AND pull_number = ?",
+    ).bind(pull.repositoryId, pull.pullNumber).first<{ head_sha: string }>();
+    return {
+      headSha: fallbackHeadSha ?? lastHead?.head_sha ?? buildCommitSha,
+      buildCommitSha,
+      state: "github_provenance_unverified",
+    };
+  }
+  const buildMatchesStoredPull =
+    provenance.build_commit_sha.toLowerCase() === provenance.verified_head_sha.toLowerCase() ||
+    (provenance.verified_merge_commit_sha !== null &&
+      provenance.build_commit_sha.toLowerCase() === provenance.verified_merge_commit_sha.toLowerCase());
+  if (!buildMatchesStoredPull) {
+    return {
+      headSha: fallbackHeadSha ?? provenance.verified_head_sha,
+      buildCommitSha,
+      state: "github_provenance_unverified",
+    };
+  }
+  const recorded = await env.DB.prepare(
+    "SELECT head_sha FROM acceptance_github_pull_heads WHERE repository_id = ? AND pull_number = ?",
+  ).bind(pull.repositoryId, pull.pullNumber).first<{ head_sha: string }>();
+  if (!recorded || recorded.head_sha.toLowerCase() !== provenance.verified_head_sha.toLowerCase()) {
+    return {
+      headSha: fallbackHeadSha ?? recorded?.head_sha ?? provenance.verified_head_sha,
+      buildCommitSha,
+      state: "github_provenance_unverified",
+    };
+  }
+  const live = await readGitHubPullProvenanceForCheck(env, config.installation_id, config.repository_owner, config.repository_name, pull.pullNumber);
+  if (live) await recordGitHubPullHead(env, pull.repositoryId, pull.pullNumber, live.headSha, event.subject);
+  const liveBuildMatches =
+    buildCommitSha.toLowerCase() === live?.headSha.toLowerCase() ||
+    (live?.mergeCommitSha !== null && live?.mergeCommitSha !== undefined &&
+      buildCommitSha.toLowerCase() === live.mergeCommitSha.toLowerCase());
+  if (!live ||
+      !liveBuildMatches ||
+      live.headSha.toLowerCase() !== provenance.verified_head_sha.toLowerCase() ||
+      (live.headRepositoryId !== null && live.headRepositoryId !== pull.repositoryId) ||
+      (provenance.verified_merge_commit_sha !== null && live.mergeCommitSha?.toLowerCase() !== provenance.verified_merge_commit_sha.toLowerCase())) {
+    return {
+      headSha: live?.headSha ?? fallbackHeadSha ?? recorded.head_sha,
+      buildCommitSha,
+      state: "github_provenance_unverified",
+    };
+  }
+  return {
+    headSha: provenance.verified_head_sha,
+    buildCommitSha,
+    state: await githubCheckState(env, event, state),
+  };
+}
+
+async function invalidateStaleGitHubProvenance(
+  env: AcceptanceIntegrationEnv,
+  event: AcceptanceChangedEvent,
+  current: CurrentAcceptanceState | null | undefined,
+  target: GitHubCheckTarget,
+): Promise<void> {
+  if (target.state !== "github_provenance_unverified" || current?.state !== "approved" || current.reviewId !== event.reviewId) return;
+  const coordinator = acceptanceCoordinator(env, event.projectId);
+  await coordinator?.invalidate(
+    event.reviewId,
+    "GitHub pull request provenance is stale.",
+    "github:reconcile",
+    `github:pr-provenance:${event.projectId}:${event.subject}:${event.gate}:${event.reviewId}:${event.manifestHash}`,
+  );
+}
+
 async function claimLatestCheckHead(
   env: AcceptanceIntegrationEnv,
   config: GitHubInstallationConfig,
   event: AcceptanceChangedEvent,
+  target: GitHubCheckTarget,
 ): Promise<boolean> {
   const claimId = crypto.randomUUID();
   await env.DB.prepare(
     `INSERT OR IGNORE INTO acceptance_github_check_heads(
-       config_id, gate, head_sha, latest_sequence, event_id, claim_id, updated_at
-     ) VALUES (?, ?, ?, 0, ?, ?, unixepoch())`,
-  ).bind(config.id, event.gate, event.manifest.build.commit, event.id, claimId).run();
+       config_id, gate, head_sha, latest_sequence, event_id, claim_id, updated_at, build_commit_sha
+     ) VALUES (?, ?, ?, 0, ?, ?, unixepoch(), ?)`,
+  ).bind(config.id, event.gate, target.headSha, event.id, claimId, target.buildCommitSha).run();
   const claimed = await env.DB.prepare(
     `UPDATE acceptance_github_check_heads
         SET latest_sequence = ?,
             event_id = ?,
             claim_id = ?,
+            build_commit_sha = ?,
             updated_at = unixepoch()
       WHERE config_id = ?
         AND gate = ?
@@ -381,9 +600,10 @@ async function claimLatestCheckHead(
     event.sequence,
     event.id,
     claimId,
+    target.buildCommitSha,
     config.id,
     event.gate,
-    event.manifest.build.commit,
+    target.headSha,
     event.sequence,
   ).run();
   return Boolean(claimed.meta.changes);
@@ -393,10 +613,10 @@ async function createGitHubCheckRun(
   env: AcceptanceIntegrationEnv,
   config: Pick<GitHubInstallationConfig, "id" | "installation_id" | "repository_id" | "repository_owner" | "repository_name">,
   event: AcceptanceChangedEvent,
-  state: string,
+  target: GitHubCheckTarget,
 ): Promise<void> {
   const token = await installationToken(config.installation_id, env);
-  const body = checkRunBody(event, state);
+  const body = checkRunBody(event, target);
   const response = await githubFetch(
     env,
     `/repos/${encodeURIComponent(config.repository_owner)}/${encodeURIComponent(config.repository_name)}/check-runs`,
@@ -412,12 +632,14 @@ async function createGitHubCheckRun(
   await env.DB.prepare(
     `INSERT INTO acceptance_github_check_runs(
        id, config_id, event_id, project_id, review_id, gate, repository_id, head_sha, check_run_id,
-       check_url, conclusion, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+       check_url, conclusion, created_at, build_commit_sha
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), ?)
      ON CONFLICT(config_id, event_id) DO UPDATE SET
        check_run_id = excluded.check_run_id,
        check_url = excluded.check_url,
-       conclusion = excluded.conclusion`,
+       conclusion = excluded.conclusion,
+       head_sha = excluded.head_sha,
+       build_commit_sha = excluded.build_commit_sha`,
   ).bind(
     crypto.randomUUID(),
     config.id,
@@ -426,10 +648,11 @@ async function createGitHubCheckRun(
     event.reviewId,
     event.gate,
     repository?.id ?? config.repository_id,
-    event.manifest.build.commit,
+    target.headSha,
     result.id ? String(result.id) : null,
     result.html_url ?? null,
     body.conclusion ?? body.status,
+    target.buildCommitSha,
   ).run();
 }
 
@@ -442,7 +665,7 @@ async function githubReconcilePage(
   return env.DB.prepare(
     `SELECT gi.id, gi.project_id, gi.installation_id, gi.repository_id, gi.repository_owner, gi.repository_name,
             gi.allowed_workflows_json, gi.gates_json, gi.enabled, gi.created_at, gi.updated_at,
-            h.config_id, h.gate, h.head_sha, h.latest_sequence, h.event_id, e.payload_json,
+            h.config_id, h.gate, h.head_sha, h.build_commit_sha, h.latest_sequence, h.event_id, e.payload_json,
             cr.conclusion AS last_conclusion,
             (h.config_id || ':' || h.gate || ':' || h.head_sha) AS cursor_key
        FROM acceptance_github_check_heads h
@@ -507,6 +730,7 @@ async function upsertGitHubInstallation(
 
   const verified = await verifyInstallationRepository({ installationId, repositoryId, owner, name }, env);
   const proof = await verifyGitHubOwnershipProof(ownershipOidcToken, {
+    installationId,
     repositoryId,
     owner: verified.owner,
     name: verified.name,
@@ -622,6 +846,7 @@ async function exchangeGitHubWorkflowToken(request: Request, env: AcceptanceInte
   ).bind(repositoryId, requestedProjectId, requestedProjectId).all<GitHubInstallationConfig>();
   const config = rows.results.find((row) => workflowAllowed(row, workflowRef, jobWorkflowRef));
   if (!config) return jsonError("workflow_not_linked", "GitHub workflow is not linked to the requested project.", 403);
+  assertPilotProject(env, config.project_id);
 
   if (requestedMode !== "publish" && requestedMode !== "verify") {
     return jsonError("invalid_workflow_token_mode", "GitHub workflow token mode must be publish or verify.", 400);
@@ -744,18 +969,8 @@ async function consumeGitHubEvent(
   if (!repoId || !owner || !name || !number || !sha) return;
 
   const subject = `github:${owner}/${name}:pull/${number}`;
-  const previous = await env.DB.prepare(
-    "SELECT head_sha FROM acceptance_github_pull_heads WHERE repository_id = ? AND pull_number = ?",
-  ).bind(repoId, number).first<{ head_sha: string }>();
-  await env.DB.prepare(
-    `INSERT INTO acceptance_github_pull_heads(repository_id, pull_number, head_sha, subject, updated_at)
-     VALUES (?, ?, ?, ?, unixepoch())
-     ON CONFLICT(repository_id, pull_number) DO UPDATE SET
-       head_sha = excluded.head_sha,
-       subject = excluded.subject,
-       updated_at = unixepoch()`,
-  ).bind(repoId, number, sha, subject).run();
-  await invalidatePullRequestCurrentReviews(env, repoId, subject, sha, previous?.head_sha !== sha);
+  await recordGitHubPullHead(env, repoId, number, sha, subject);
+  await invalidatePullRequestCurrentReviews(env, repoId, subject, sha);
 }
 
 async function consumeGitHubInstallationEvent(payload: Record<string, unknown>, env: AcceptanceIntegrationEnv): Promise<void> {
@@ -830,12 +1045,167 @@ function repositoryIdsFromWebhookArray(value: unknown): string[] {
   return ids;
 }
 
+async function verifyGitHubPullProvenance(
+  env: AcceptanceIntegrationEnv,
+  actor: GitHubWorkflowActor,
+  manifest: AcceptanceManifest,
+  pullNumber: string,
+): Promise<GitHubPullProvenance> {
+  const config = await env.DB.prepare(
+    `SELECT *
+       FROM acceptance_github_installations
+      WHERE project_id = ?
+        AND repository_id = ?
+        AND enabled = 1
+      LIMIT 1`,
+  ).bind(manifest.projectId, actor.repositoryId).first<GitHubInstallationConfig>();
+  if (!config || !workflowAllowed(config, actor.workflowRef, actor.jobWorkflowRef ?? null)) {
+    throw githubPublicationError("GitHub workflow is no longer linked to this project.");
+  }
+
+  const pull = await readGitHubPullProvenance(env, config.installation_id, actor.repositoryOwner, actor.repositoryName, pullNumber);
+  if (!pull) throw githubPublicationError("GitHub pull request provenance could not be verified.");
+  if (pull.headRepositoryId !== null && pull.headRepositoryId !== actor.repositoryId) {
+    throw githubPublicationError("GitHub pull request must come from the linked repository.");
+  }
+
+  const refKind = actor.ref.match(/^refs\/pull\/\d+\/(head|merge)$/)?.[1];
+  const expectedBuildCommit = refKind === "merge" ? pull.mergeCommitSha : refKind === "head" ? pull.headSha : null;
+  if (!expectedBuildCommit || expectedBuildCommit.toLowerCase() !== manifest.build.commit.toLowerCase()) {
+    throw githubPublicationError("GitHub pull request current commit does not match the manifest build commit.");
+  }
+  return pull;
+}
+
+async function readGitHubPullProvenance(
+  env: AcceptanceIntegrationEnv,
+  installationId: string,
+  repositoryOwner: string,
+  repositoryName: string,
+  pullNumber: string,
+): Promise<GitHubPullProvenance | null> {
+  const token = await installationToken(installationId, env);
+  const response = await githubFetch(
+    env,
+    `/repos/${encodeURIComponent(repositoryOwner)}/${encodeURIComponent(repositoryName)}/pulls/${encodeURIComponent(pullNumber)}`,
+    { method: "GET", token },
+  );
+  if (!response.ok) return null;
+  const pull: GitHubPullResponse = await response.json<GitHubPullResponse>().catch(() => ({}));
+  const headSha = stringValue(pull.head?.sha);
+  if (!headSha) return null;
+  const mergeCommitSha = stringValue(pull.merge_commit_sha);
+  const headRepositoryId = integerString(pull.head?.repo?.id) ?? null;
+  return { pullNumber, headSha, mergeCommitSha, headRepositoryId };
+}
+
+async function readGitHubPullProvenanceForCheck(
+  env: AcceptanceIntegrationEnv,
+  installationId: string,
+  repositoryOwner: string,
+  repositoryName: string,
+  pullNumber: string,
+): Promise<GitHubPullProvenance | null> {
+  try {
+    return await readGitHubPullProvenance(env, installationId, repositoryOwner, repositoryName, pullNumber);
+  } catch {
+    return null;
+  }
+}
+
+async function recordGitHubPullHead(
+  env: AcceptanceIntegrationEnv,
+  repositoryId: string,
+  pullNumber: string,
+  headSha: string,
+  subject: string,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO acceptance_github_pull_heads(repository_id, pull_number, head_sha, subject, updated_at)
+     VALUES (?, ?, ?, ?, unixepoch())
+     ON CONFLICT(repository_id, pull_number) DO UPDATE SET
+       head_sha = excluded.head_sha,
+       subject = excluded.subject,
+       updated_at = unixepoch()`,
+  ).bind(repositoryId, pullNumber, headSha, subject).run();
+}
+
+async function recordGitHubPullProvenance(
+  env: AcceptanceIntegrationEnv,
+  actor: GitHubWorkflowActor,
+  manifest: AcceptanceManifest,
+  provenance: GitHubPullProvenance,
+): Promise<void> {
+  await env.DB.prepare(
+    `INSERT INTO acceptance_github_pr_provenance(
+       project_id, subject, gate, manifest_hash, repository_id, pull_number, build_commit_sha,
+       verified_head_sha, verified_merge_commit_sha, workflow_ref, job_workflow_ref, actor_id, verified_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch())
+     ON CONFLICT(project_id, subject, gate, manifest_hash) DO UPDATE SET
+       repository_id = excluded.repository_id,
+       pull_number = excluded.pull_number,
+       build_commit_sha = excluded.build_commit_sha,
+       verified_head_sha = excluded.verified_head_sha,
+       verified_merge_commit_sha = excluded.verified_merge_commit_sha,
+       workflow_ref = excluded.workflow_ref,
+       job_workflow_ref = excluded.job_workflow_ref,
+       actor_id = excluded.actor_id,
+       verified_at = unixepoch()`,
+  ).bind(
+    manifest.projectId,
+    manifest.subject,
+    manifest.gate,
+    await hashAcceptanceManifest(manifest),
+    actor.repositoryId,
+    provenance.pullNumber,
+    manifest.build.commit,
+    provenance.headSha,
+    provenance.mergeCommitSha,
+    actor.workflowRef,
+    actor.jobWorkflowRef ?? null,
+    actor.id,
+  ).run();
+}
+
+async function requireStoredGitHubPullProvenance(
+  env: AcceptanceIntegrationEnv,
+  actor: GitHubWorkflowActor,
+  manifest: AcceptanceManifest,
+  pullNumber: string,
+): Promise<{ buildCommitSha: string; verifiedHeadSha: string; verifiedMergeCommitSha: string | null }> {
+  const stored = await env.DB.prepare(
+    `SELECT build_commit_sha, verified_head_sha, verified_merge_commit_sha
+       FROM acceptance_github_pr_provenance
+      WHERE project_id = ?
+        AND subject = ?
+        AND gate = ?
+        AND manifest_hash = ?
+        AND repository_id = ?
+        AND pull_number = ?
+      LIMIT 1`,
+  ).bind(
+    manifest.projectId,
+    manifest.subject,
+    manifest.gate,
+    await hashAcceptanceManifest(manifest),
+    actor.repositoryId,
+    pullNumber,
+  ).first<{ build_commit_sha: string; verified_head_sha: string; verified_merge_commit_sha: string | null }>();
+  if (!stored) {
+    throw githubPublicationError("GitHub pull request provenance is missing. Republish this acceptance review from the current PR workflow.");
+  }
+  return {
+    buildCommitSha: stored.build_commit_sha,
+    verifiedHeadSha: stored.verified_head_sha,
+    verifiedMergeCommitSha: stored.verified_merge_commit_sha,
+  };
+}
+
 async function invalidatePullRequestCurrentReviews(
   env: AcceptanceIntegrationEnv,
   repositoryId: string,
   subject: string,
   incomingSha: string,
-  headChanged: boolean,
 ): Promise<void> {
   const configs = await env.DB.prepare(
     "SELECT project_id, gates_json FROM acceptance_github_installations WHERE repository_id = ? AND enabled = 1",
@@ -846,11 +1216,23 @@ async function invalidatePullRequestCurrentReviews(
       const coordinator = acceptanceCoordinator(env, config.project_id);
       const current = await coordinator?.getCurrent(subject, gate);
       if (!current || current.state === "superseded" || current.state === "invalidated") continue;
-      const currentCommit = current.manifest?.build.commit;
-      if (currentCommit ? currentCommit === incomingSha : !headChanged) continue;
+      const manifestHash = current.manifestHash;
+      const verified = manifestHash ? await env.DB.prepare(
+        `SELECT verified_head_sha
+           FROM acceptance_github_pr_provenance
+          WHERE project_id = ?
+            AND subject = ?
+            AND gate = ?
+            AND manifest_hash = ?
+            AND repository_id = ?
+            AND pull_number = ?
+          LIMIT 1`,
+      ).bind(config.project_id, subject, gate, manifestHash, repositoryId, numberForSubject(subject))
+        .first<{ verified_head_sha: string }>() : null;
+      if (verified?.verified_head_sha === incomingSha) continue;
       await coordinator?.invalidate(
         current.id,
-        "GitHub pull request head changed.",
+        verified ? "GitHub pull request head changed." : "GitHub pull request provenance is missing.",
         "github:webhook",
         `github:pr-head:${repositoryId}:${numberForSubject(subject)}:${gate}:${current.id}`,
       );
@@ -879,7 +1261,7 @@ async function verifyInstallationRepository(
 
 async function verifyGitHubOwnershipProof(
   token: string,
-  expected: { repositoryId: string; owner: string; name: string; defaultBranch: string; allowedWorkflows: string[] },
+  expected: { installationId: string; repositoryId: string; owner: string; name: string; defaultBranch: string; allowedWorkflows: string[] },
   env: AcceptanceIntegrationEnv,
 ): Promise<{ workflowRef: string } | Response> {
   let claims: GitHubOidcClaims;
@@ -912,19 +1294,78 @@ async function verifyGitHubOwnershipProof(
   if (!workflowRefAllowedForDefaultBranch(workflowRef, expected.owner, expected.name, expected.defaultBranch)) {
     return jsonError("github_ownership_proof_wrong_workflow", "GitHub ownership proof workflow must be from the target repository default branch.", 403);
   }
-  if (!expected.allowedWorkflows.every((allowed) => workflowRefAllowedForDefaultBranch(allowed, expected.owner, expected.name, expected.defaultBranch))) {
-    return jsonError("workflow_scope_invalid", "Allowed GitHub workflows must be from the target repository default branch.", 403);
+  const installationTokenValue = await installationToken(expected.installationId, env);
+  const defaultBranchHead = await readDefaultBranchHead(env, installationTokenValue, expected.owner, expected.name, expected.defaultBranch);
+  if (!defaultBranchHead || defaultBranchHead.toLowerCase() !== sha.toLowerCase()) {
+    return jsonError("github_ownership_proof_stale", "GitHub ownership proof must run at the current default branch head.", 403);
   }
-  if (!expected.allowedWorkflows.includes(workflowRef)) {
+  for (const allowed of expected.allowedWorkflows) {
+    if (!allowedWorkflowRefValidForRepository(allowed, expected.owner, expected.name, expected.defaultBranch)) {
+      return jsonError("workflow_scope_invalid", "Allowed GitHub workflows must be from the target repository default branch or an exact same-repository workflow commit.", 403);
+    }
+  }
+  if (!expected.allowedWorkflows.some((allowed) => workflowRefMatches(allowed, workflowRef))) {
     return jsonError("github_ownership_proof_unlinked_workflow", "Allowed workflows must include the GitHub workflow that produced the ownership proof.", 403);
   }
   return { workflowRef };
 }
 
 function workflowRefAllowedForDefaultBranch(workflowRef: string, owner: string, name: string, defaultBranch: string): boolean {
-  const normalized = workflowRef.toLowerCase();
-  const prefix = `${owner}/${name}/.github/workflows/`.toLowerCase();
-  return normalized.startsWith(prefix) && workflowRef.endsWith(`@refs/heads/${defaultBranch}`);
+  const parsed = parseWorkflowRef(workflowRef);
+  return !!parsed &&
+    parsed.owner.toLowerCase() === owner.toLowerCase() &&
+    parsed.name.toLowerCase() === name.toLowerCase() &&
+    parsed.path.toLowerCase().startsWith(".github/workflows/") &&
+    parsed.ref === `refs/heads/${defaultBranch}`;
+}
+
+function allowedWorkflowRefValidForRepository(
+  workflowRef: string,
+  owner: string,
+  name: string,
+  defaultBranch: string,
+): boolean {
+  const parsed = parseWorkflowRef(workflowRef);
+  if (!parsed ||
+      parsed.owner.toLowerCase() !== owner.toLowerCase() ||
+      parsed.name.toLowerCase() !== name.toLowerCase() ||
+      !parsed.path.toLowerCase().startsWith(".github/workflows/")) {
+    return false;
+  }
+  return parsed.ref === `refs/heads/${defaultBranch}` || /^[0-9a-f]{40}$/i.test(parsed.ref);
+}
+
+async function readDefaultBranchHead(
+  env: AcceptanceIntegrationEnv,
+  token: string,
+  owner: string,
+  name: string,
+  defaultBranch: string,
+): Promise<string | null> {
+  const branch = await githubFetch(
+    env,
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/branches/${encodeURIComponent(defaultBranch)}`,
+    { method: "GET", token },
+  );
+  if (!branch.ok) return null;
+  const body = await branch.json<GitHubBranchResponse>().catch((): GitHubBranchResponse => ({}));
+  return stringValue(body.commit?.sha);
+}
+
+function workflowRefMatches(allowed: string, actual: string): boolean {
+  const allowedParsed = parseWorkflowRef(allowed);
+  const actualParsed = parseWorkflowRef(actual);
+  if (!allowedParsed || !actualParsed) return false;
+  return allowedParsed.owner.toLowerCase() === actualParsed.owner.toLowerCase() &&
+    allowedParsed.name.toLowerCase() === actualParsed.name.toLowerCase() &&
+    allowedParsed.path.toLowerCase() === actualParsed.path.toLowerCase() &&
+    allowedParsed.ref.toLowerCase() === actualParsed.ref.toLowerCase();
+}
+
+function parseWorkflowRef(workflowRef: string): { owner: string; name: string; path: string; ref: string } | null {
+  const match = workflowRef.match(/^([^/]+)\/([^/]+)\/(.+)@(.+)$/);
+  if (!match) return null;
+  return { owner: match[1]!, name: match[2]!, path: match[3]!, ref: match[4]! };
 }
 
 async function installationToken(installationId: string, env: AcceptanceIntegrationEnv): Promise<string> {
@@ -983,17 +1424,20 @@ export async function verifyGitHubOidcToken(token: string, env: AcceptanceIntegr
   return payload as GitHubOidcClaims;
 }
 
-function checkRunBody(event: AcceptanceChangedEvent, state: string): Record<string, unknown> {
+function checkRunBody(event: AcceptanceChangedEvent, target: GitHubCheckTarget): Record<string, unknown> {
+  const state = target.state;
   const completed = state !== "pending";
   const conclusion = checkConclusion(state);
   const summary = state === "approved"
     ? `Acceptance gate ${event.gate} is approved for revision ${event.revision}.`
     : state === "cloudflare_current_version_unverified"
       ? `Acceptance gate ${event.gate} needs a fresh Cloudflare version verification for revision ${event.revision}.`
+      : state === "github_provenance_unverified"
+        ? `Acceptance gate ${event.gate} needs republication from the current GitHub pull request workflow.`
       : `Acceptance gate ${event.gate} is ${state} for revision ${event.revision}.`;
   return {
     name: `${CHECK_NAME_PREFIX} / ${event.gate}`,
-    head_sha: event.manifest.build.commit,
+    head_sha: target.headSha,
     status: completed ? "completed" : "in_progress",
     conclusion,
     details_url: `${eventOrigin(event)}/acceptance/projects/${encodeURIComponent(event.projectId)}/reviews/${encodeURIComponent(event.reviewId)}`,
@@ -1001,9 +1445,9 @@ function checkRunBody(event: AcceptanceChangedEvent, state: string): Record<stri
     output: {
       title: event.manifest.title,
       summary,
-      text: state === "cloudflare_current_version_unverified"
-        ? `Manifest hash: ${event.manifestHash}\nReason: cloudflare_current_version_unverified`
-        : `Manifest hash: ${event.manifestHash}`,
+      text: state === "cloudflare_current_version_unverified" || state === "github_provenance_unverified"
+        ? `Manifest hash: ${event.manifestHash}\nBuild commit: ${target.buildCommitSha}\nReason: ${state}`
+        : `Manifest hash: ${event.manifestHash}\nBuild commit: ${target.buildCommitSha}`,
     },
   };
 }
@@ -1011,7 +1455,7 @@ function checkRunBody(event: AcceptanceChangedEvent, state: string): Record<stri
 function checkConclusion(state: string): string | undefined {
   if (state === "pending") return undefined;
   if (state === "approved") return "success";
-  if (state === "revision_requested" || state === "cloudflare_current_version_unverified") return "action_required";
+  if (state === "revision_requested" || state === "cloudflare_current_version_unverified" || state === "github_provenance_unverified") return "action_required";
   return "failure";
 }
 
@@ -1030,7 +1474,17 @@ function gateEnabled(config: GitHubInstallationConfig, gate: string): boolean {
 
 function workflowAllowed(config: Pick<GitHubInstallationConfig, "allowed_workflows_json">, workflowRef: string, jobWorkflowRef: string | null): boolean {
   const allowed = parseJsonArray(config.allowed_workflows_json);
-  return allowed.includes(workflowRef) || Boolean(jobWorkflowRef && allowed.includes(jobWorkflowRef));
+  return allowed.some((allowedRef) => workflowRefMatches(allowedRef, workflowRef) ||
+    Boolean(jobWorkflowRef && workflowRefMatches(allowedRef, jobWorkflowRef)));
+}
+
+function githubPullSubject(event: AcceptanceChangedEvent): { repositoryId: string; pullNumber: string } | null {
+  const repository = event.manifest.build.repository;
+  if (!repository) return null;
+  const expectedPrefix = `github:${repository.owner}/${repository.name}:pull/`.toLowerCase();
+  if (!event.subject.toLowerCase().startsWith(expectedPrefix)) return null;
+  const pullNumber = integerString(event.subject.slice(expectedPrefix.length));
+  return pullNumber ? { repositoryId: repository.id, pullNumber } : null;
 }
 
 function installationResponse(row: Partial<GitHubInstallationConfig> | Record<string, unknown> | null): Record<string, unknown> {

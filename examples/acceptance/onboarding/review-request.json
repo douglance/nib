@@ -1,6 +1,6 @@
 {
   "accountId": "acct_acceptance_onboarding",
-  "email": "pilot-onboarding@example.invalid",
+  "email": "__NIB_ACCEPTANCE_PILOT_ONBOARDING_EMAIL__",
   "requestId": "req_acceptance_onboarding",
   "title": "Onboarding setup proof",
   "state": "pending"

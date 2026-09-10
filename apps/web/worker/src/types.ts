@@ -42,6 +42,8 @@ export interface Env {
   ACCEPTANCE: DurableObjectNamespace<AcceptanceCoordinator>;
   ACCEPTANCE_EVENTS: Queue<AcceptanceEvent>;
   ACCEPTANCE_ENABLED?: string;
+  ACCEPTANCE_PILOT_ACCOUNT_IDS?: string;
+  ACCEPTANCE_PILOT_PROJECT_IDS?: string;
   ACCEPTANCE_SIGNING_JWK?: string;
   ACCEPTANCE_SIGNING_KEY_ID?: string;
   ACCEPTANCE_VERIFICATION_JWKS?: string;

@@ -2,10 +2,10 @@
 -- Sessions and automation credentials are created by the example runner, not shared in source.
 insert into accounts (account_id, email, created_at, updated_at)
 values
-  ('acct_acceptance_owner', 'acceptance-owner@example.invalid', unixepoch(), unixepoch()),
-  ('acct_acceptance_admin', 'acceptance-admin@example.invalid', unixepoch(), unixepoch()),
-  ('acct_acceptance_reviewer', 'acceptance-reviewer@example.invalid', unixepoch(), unixepoch()),
-  ('acct_acceptance_viewer', 'acceptance-viewer@example.invalid', unixepoch(), unixepoch())
+  ('acct_acceptance_owner', '__NIB_ACCEPTANCE_PILOT_PERMISSIONS_OWNER_EMAIL__', unixepoch(), unixepoch()),
+  ('acct_acceptance_admin', '__NIB_ACCEPTANCE_PILOT_PERMISSIONS_ADMIN_EMAIL__', unixepoch(), unixepoch()),
+  ('acct_acceptance_reviewer', '__NIB_ACCEPTANCE_PILOT_PERMISSIONS_REVIEWER_EMAIL__', unixepoch(), unixepoch()),
+  ('acct_acceptance_viewer', '__NIB_ACCEPTANCE_PILOT_PERMISSIONS_VIEWER_EMAIL__', unixepoch(), unixepoch())
 on conflict(account_id) do nothing;
 
 insert into acceptance_teams (id, name, created_by, created_at, updated_at)

@@ -27,6 +27,15 @@
       "verification": "Attach browser evidence captured from the preview URL."
     }
   ],
+  "references": {
+    "pilotEmails": {
+      "onboarding": { "env": "NIB_ACCEPTANCE_PILOT_ONBOARDING_EMAIL" }
+    },
+    "previewSecrets": [
+      { "name": "AUTH_RATE_LIMIT_SECRET", "env": "NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET" },
+      { "name": "ACCEPTANCE_SIGNING_JWK", "env": "NIB_ACCEPTANCE_PREVIEW_ACCEPTANCE_SIGNING_JWK" }
+    ]
+  },
   "cloudflare": {
     "wranglerPackage": "apps/web",
     "components": [
@@ -47,6 +56,12 @@
         "config": "apps/web/wrangler.jsonc",
         "cwd": "apps/web",
         "seed": {
+          "d1": [
+            {
+              "binding": "DB",
+              "file": "examples/acceptance/onboarding/seed.sql"
+            }
+          ],
           "r2": [
             {
               "binding": "ARTIFACTS",

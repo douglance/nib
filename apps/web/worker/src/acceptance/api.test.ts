@@ -11,7 +11,7 @@ vi.mock("./teams", () => ({
   listEligibleReviewers: mocks.eligible, authenticateAutomation: mocks.automation,
   handleTeamRoutes: mocks.teams,
 }));
-vi.mock("./integrations", () => ({ handleIntegrationRoutes: mocks.integrations, authenticateGithubWorkflow: async () => null, assertGithubPublication: () => {}, refreshGitHubChecksForReview: async () => {} }));
+vi.mock("./integrations", () => ({ handleIntegrationRoutes: mocks.integrations, authenticateGithubWorkflow: async () => null, assertGithubPublication: async () => {}, assertGithubVerification: async () => {}, refreshGitHubChecksForReview: async () => {} }));
 vi.mock("./receipts", () => ({ acceptanceJwksResponse: mocks.jwks }));
 vi.mock("./pages", () => ({ acceptancePage: () => new Response("page") }));
 vi.mock("./metrics", () => ({ recordAcceptanceMetric: async () => ({ inserted: true }), readProjectMetrics: async () => ({}) }));
@@ -67,6 +67,51 @@ beforeEach(() => {
 });
 
 describe("acceptance API authorization", () => {
+  const pilot = { ...env, ACCEPTANCE_PILOT_ACCOUNT_IDS: "alice", ACCEPTANCE_PILOT_PROJECT_IDS: projectId };
+
+  it("denies unlisted accounts before team or integration handlers run", async () => {
+    mocks.verifiedAccount.mockResolvedValue({ id: "bob", email: "bob@example.com" });
+    for (const path of ["/acceptance", "/api/acceptance/v1/teams", `${new URL(base).pathname}/integrations/github`]) {
+      expect((await handleAcceptanceRequest(new Request(`https://nib.test${path}`), pilot))?.status).toBe(403);
+    }
+    expect(mocks.integrations).not.toHaveBeenCalled();
+    expect(mocks.teams).not.toHaveBeenCalled();
+  });
+
+  it("requires both pilot lists and denies unlisted projects before integrations", async () => {
+    for (const config of [{ ...pilot, ACCEPTANCE_PILOT_PROJECT_IDS: "" }, { ...env, ACCEPTANCE_PILOT_ACCOUNT_IDS: "alice" }]) {
+      expect((await handleAcceptanceRequest(request(`/reviews/${reviewId}`), config))?.status).toBe(403);
+      expect((await handleAcceptanceRequest(request("/integrations/github"), config))?.status).toBe(403);
+    }
+    expect(coordinator.getReview).not.toHaveBeenCalled();
+    expect(mocks.integrations).not.toHaveBeenCalled();
+  });
+
+  it("does not expose public review or evidence links during the pilot", async () => {
+    mocks.verifiedAccount.mockResolvedValue(null);
+    mocks.settings.mockResolvedValue({ id: projectId, publicRead: true, enabled: true });
+    expect((await handleAcceptanceRequest(request(`/reviews/${reviewId}`), pilot))?.status).toBe(401);
+    expect((await handleAcceptanceRequest(request("/evidence/example"), pilot))?.status).toBe(401);
+    expect((await handleAcceptanceRequest(new Request(`https://nib.test/acceptance/projects/${projectId}/reviews/${reviewId}`), pilot))?.status).toBe(302);
+    expect(coordinator.getReview).not.toHaveBeenCalled();
+  });
+
+  it("retains RBAC and filters vote eligibility to pilot accounts", async () => {
+    expect((await handleAcceptanceRequest(request(`/reviews/${reviewId}/decisions`, { decision: "approve", criteriaIds: ["c1"] }), pilot))?.status).toBe(200);
+    expect(coordinator.decide).toHaveBeenCalledWith(reviewId, expect.anything(), { actorId: "alice", eligibleReviewers: ["alice"] }, "test-operation");
+    mocks.access.mockResolvedValue({ ...access, permissions: { ...access.permissions, review: false } });
+    expect((await handleAcceptanceRequest(request(`/reviews/${reviewId}/decisions`, { decision: "approve", criteriaIds: ["c1"] }), pilot))?.status).toBe(403);
+  });
+
+  it("allows scoped automation only inside listed projects", async () => {
+    mocks.verifiedAccount.mockResolvedValue(null);
+    mocks.automation.mockResolvedValue({ id: "bot", projectId, scopes: ["read"] });
+    const req = request(`/reviews/${reviewId}`);
+    req.headers.set("authorization", "Bearer project-token");
+    expect((await handleAcceptanceRequest(req, pilot))?.status).toBe(200);
+    expect((await handleAcceptanceRequest(req, { ...pilot, ACCEPTANCE_PILOT_PROJECT_IDS: "other" }))?.status).toBe(403);
+  });
+
   it("does not allow caller headers to impersonate a project reviewer", async () => {
     mocks.verifiedAccount.mockResolvedValue(null);
     const req = request(`/reviews/${reviewId}/decisions`, { decision: "approve", criteriaIds: ["c1"] });

@@ -7,6 +7,8 @@ export interface AcceptanceIntegrationEnv {
   DB: D1Database;
   PUBLIC_ORIGIN: string;
   ACCEPTANCE_ENABLED?: string;
+  ACCEPTANCE_PILOT_ACCOUNT_IDS?: string;
+  ACCEPTANCE_PILOT_PROJECT_IDS?: string;
   ACCEPTANCE?: DurableObjectNamespace<AcceptanceCoordinator>;
   GITHUB_APP_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;

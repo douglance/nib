@@ -1,6 +1,6 @@
 # Acceptance Operations
 
-Acceptance v1 is fail-closed. Keep `ACCEPTANCE_ENABLED` set to `"false"` until the production Worker has its secrets, migrations, Queue, Durable Object, email, GitHub App, and review notification path configured and verified.
+Acceptance v1 is fail-closed. Keep `ACCEPTANCE_ENABLED` set to `"false"` until the production Worker has its secrets, migrations, Queue, Durable Object, email, and GitHub App configured. Verify the live flow under the pilot allowlists before opening wider access.
 
 ## Runtime configuration
 
@@ -9,6 +9,8 @@ Acceptance v1 is fail-closed. Keep `ACCEPTANCE_ENABLED` set to `"false"` until t
 | Binding or variable | Purpose |
 | --- | --- |
 | `ACCEPTANCE_ENABLED` | Global feature flag. The checked-in default is `"false"`. The public API requires `"true"` before any acceptance gate can pass. |
+| `ACCEPTANCE_PILOT_ACCOUNT_IDS` | Optional comma-separated account IDs permitted to use acceptance during a restricted pilot. Setting either pilot variable activates both restrictions. |
+| `ACCEPTANCE_PILOT_PROJECT_IDS` | Optional comma-separated project IDs permitted during the pilot. An empty or missing list denies that category of access while pilot mode is active. |
 | `ACCEPTANCE` | Durable Object namespace for one `AcceptanceCoordinator` per project. |
 | `ACCEPTANCE_EVENTS` | Queue for `acceptance.changed` events. |
 | `ARTIFACTS` | R2 bucket for acceptance evidence bytes. |
@@ -44,10 +46,27 @@ The acceptance migrations currently present in this checkout are:
 | `0017_acceptance_delivery_and_evidence.sql` | Evidence storage metadata, upload idempotency, and notification delivery leases. |
 | `0018_acceptance_usage.sql` | Acceptance usage events for review publication, page views, preview opens, and decisions. |
 | `0019_acceptance_provider_verifications.sql` | Short-lived provider verification attestations keyed by project, automation actor, idempotency key, review, manifest hash, commit, and expiry. |
+| `0020_acceptance_github_pr_provenance.sql` | Separates the deployed build commit from the GitHub-verified PR head and records that provenance for publication and checks. |
 
 The Durable Object migration tag is `v4-acceptance`, which adds `AcceptanceCoordinator`. The Queue binding uses `nib-acceptance-events` with `nib-acceptance-events-dlq`.
 
-Enable acceptance only after the runtime can:
+### Restricted pilot
+
+Register the GitHub App with the [local manifest helper](../integrations/github-app/README.md), install it on the selected repository, and configure its three Worker secrets before starting the trial. Keep credential values out of logs, manifests, and workflow artifacts.
+
+For the initial internal trial:
+
+1. Set `ACCEPTANCE_PILOT_ACCOUNT_IDS` to the individual account ID and `ACCEPTANCE_PILOT_PROJECT_IDS` to an empty string, then set `ACCEPTANCE_ENABLED` to `"true"`.
+2. Sign in normally and create the pilot team and project. The new project ID is returned by creation, but project access remains denied until it is listed.
+3. Add that project ID to `ACCEPTANCE_PILOT_PROJECT_IDS`, link the trusted GitHub workflows, and run the live checks below. Use quorum one for a one-person internal trial.
+
+Pilot configuration does not grant team or project permissions. It also closes public review/evidence links, restricts automation to listed projects, filters reviewer eligibility and notifications to listed accounts, and prevents team-level changes from altering unlisted projects. Invitations require an existing listed account. Queued invitations and webhooks outside the pilot do not consume the pilot delivery batch.
+
+Signed GitHub lifecycle webhooks remain active while acceptance or pilot access is paused. Reconciliation changes existing checks to failure for paused projects. The public receipt-key endpoint remains available for offline verification.
+
+To add another pilot, provision its account and project access before the observed trial and record those grants separately from any help given during the trial. Removing both pilot variables restores ordinary acceptance access when the global flag is true; leaving either variable present with empty lists keeps the pilot closed. To pause all acceptance, set `ACCEPTANCE_ENABLED` to `"false"` and retain the database and signing keys.
+
+Before opening wider access, prove the pilot runtime can:
 
 1. Return `200` from `/health` and a JWKS from `/.well-known/acceptance-jwks.json`.
 2. Create a team, project, and scoped credential through `/api/acceptance/v1`.

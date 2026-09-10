@@ -31,8 +31,12 @@ Required environment:
 - `CLOUDFLARE_ACCOUNT_ID`
 - `CLOUDFLARE_API_TOKEN`
 - `NIB_ACCEPTANCE_TOKEN` for publishing, verifying, or invalidating an acceptance review
+- `NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET`
+- `NIB_ACCEPTANCE_PREVIEW_ACCEPTANCE_SIGNING_JWK`
+- `NIB_ACCEPTANCE_PREVIEW_TRIAL_NETWORK_SECRET` for `business-rules`
+- `NIB_ACCEPTANCE_PREVIEW_STRIPE_SECRET_KEY` for `business-rules`
 
-Recipe fields are under `examples/acceptance/*/recipe.json`. Use `examples/acceptance/prepare.mjs` as described in [Acceptance examples](acceptance-examples.md) to set the receiving project, repository identity, commit, and revision before planning or deploying. Component `vars` may explicitly override non-secret configuration. The adapter preserves the configured `ENVIRONMENT`, so production-only business rules still run against the isolated resources.
+Recipe fields are under `examples/acceptance/*/recipe.json`. Use `examples/acceptance/prepare.mjs` as described in [Acceptance examples](acceptance-examples.md) to set the receiving project, repository identity, commit, revision, pilot emails, and prepared fixture files before planning or deploying. Component `vars` may explicitly override non-secret configuration. Component `secrets` name preview-only environment variables; secret values are read only during live deployment and are not written to the plan, manifest, state, or journal. The adapter rejects secret refs that do not start with `NIB_ACCEPTANCE_PREVIEW_`. The adapter preserves the configured `ENVIRONMENT`, so production-only business rules still run against the isolated resources.
 
 ## Dry-Run Inspect
 
@@ -63,18 +67,20 @@ node integrations/cloudflare/bin/nib-cloudflare-preview.mjs deploy \
 For stateful Workers, the adapter:
 
 1. Rewrites Worker names to `*-acc-*`.
-2. Removes production routes, custom domains, cron triggers, and email bindings.
+2. Removes production routes, custom domains, and cron triggers.
 3. Rewrites D1, R2, queue, and service-binding targets to preview names.
-4. Enables `workers_dev` only for the primary preview Worker and forces `preview_urls = false`; service-binding dependencies stay private and do not receive public version preview URLs.
-5. Points `PUBLIC_ORIGIN` and `NIB_ACCEPTANCE_ORIGIN` for every generated component at the primary public preview origin.
-6. Creates isolated resources, writes generated Wrangler config with the created D1 database IDs, applies D1 migrations from the source `migrations_dir`, then applies seed fixtures through the same generated config.
-7. Deploys service-binding dependencies before callers using generated per-revision Worker names.
-8. Reads the active deployed version ID for each component from the Cloudflare deployments API.
-9. Verifies the active deployed version ID for every component and verifies the primary Worker preview URL.
-10. Writes the acceptance manifest with component version IDs, configuration digests, asset digests, and the preview URL.
-11. Writes `state.json` with the owned preview Workers, isolated resources, R2 fixture object keys, and journal path.
+4. Keeps email bindings only when the prepared recipe supplies explicit `allowed_destination_addresses` for the pilot recipients; otherwise email bindings are omitted.
+5. Enables `workers_dev` only for the primary preview Worker and forces `preview_urls = false`; service-binding dependencies stay private and do not receive public version preview URLs.
+6. Points `PUBLIC_ORIGIN` and `NIB_ACCEPTANCE_ORIGIN` for every generated component at the primary public preview origin.
+7. Creates isolated resources, writes generated Wrangler config with the created D1 database IDs, applies D1 migrations from the source `migrations_dir`, then applies prepared seed fixtures through the same generated config.
+8. For components with `secrets`, performs an uncaptured bootstrap deploy, writes each preview secret with `wrangler secret put`, and then performs the final deploy.
+9. Deploys service-binding dependencies before callers using generated per-revision Worker names.
+10. Reads the active deployed version ID for each component from the Cloudflare deployments API after the final deploy.
+11. Verifies the active deployed version ID for every component and verifies the primary Worker preview URL.
+12. Writes the acceptance manifest with component version IDs, configuration digests, asset digests, and the preview URL.
+13. Writes `state.json` with the owned preview Workers, isolated resources, R2 fixture object keys, and journal path.
 
-If a planned Cloudflare Worker or resource name already exists and is not already recorded in the same plan journal, deployment stops before creation. Use a new commit/revision or teardown the prior stack. If a run fails after creating resources, migrations, or seeds, retry the same recipe/revision/state directory; the journal skips completed operations and resumes the exact plan. D1 migration and seed steps require the recorded created database ID, so a journal entry without D1 ownership proof is not enough to mutate schema or data.
+If a planned Cloudflare Worker or resource name already exists and is not already recorded in the same plan journal, deployment stops before creation. Use a new commit/revision or teardown the prior stack. If a run fails after creating resources, migrations, seeds, bootstrap, or secret writes, retry the same recipe/revision/state directory; the journal skips completed operations and resumes the exact plan. D1 migration and seed steps require the recorded created database ID, so a journal entry without D1 ownership proof is not enough to mutate schema or data. Live deploy rejects seed files that still contain `.invalid` addresses or unresolved `__NIB_ACCEPTANCE_*__` placeholders.
 
 ## Publish And Verify
 
@@ -139,7 +145,7 @@ Teardown deletes preview Workers first, deletes only R2 fixture objects recorded
 
 ## Pilot Recipes
 
-- `examples/acceptance/onboarding/recipe.json` deploys the authenticated public Worker and private dependencies with an R2 review-request fixture.
+- `examples/acceptance/onboarding/recipe.json` deploys the authenticated public Worker and private dependencies with a seeded pilot account and R2 review-request fixture.
 - `examples/acceptance/business-rules/recipe.json` deploys `nib`, `nib-site`, and `nib-global` with D1/R2 fixtures for trial and metering behavior.
 - `examples/acceptance/permissions/recipe.json` deploys the public Worker stack with seeded acceptance team, project, role fixtures; create scoped credentials through the API.
 

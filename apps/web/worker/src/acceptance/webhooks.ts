@@ -14,6 +14,7 @@ import {
   stringValue,
   withAtomicIdempotency,
 } from "./common";
+import { acceptancePilotEnabled, isPilotAccountAllowed, isPilotProjectAllowed, pilotIds } from "./pilot";
 
 interface WebhookEndpointRow {
   id: string;
@@ -53,6 +54,7 @@ export async function handleCustomerWebhookRoutes(
   const deliveryId = match[3] ? decodeURIComponent(match[3]) : null;
   if (!projectId) return jsonError("not_found", "Project not found.", 404);
   if (!acceptanceEnabled(env)) return jsonError("acceptance_disabled", "Acceptance is disabled.", 403);
+  if (!isPilotProjectAllowed(env, projectId) || (account && !isPilotAccountAllowed(env, account.id))) return jsonError("pilot_required", "This project or account is not enabled for the acceptance pilot.", 403);
   if (!(await ensureProjectAdmin(env.DB, projectId, account))) {
     return jsonError("forbidden", "Project admin access is required.", 403);
   }
@@ -69,6 +71,7 @@ export async function enqueueCustomerWebhooksForAcceptanceEvent(
   event: AcceptanceChangedEvent,
   env: AcceptanceIntegrationEnv,
 ): Promise<void> {
+  if (!isPilotProjectAllowed(env, event.projectId)) return;
   const endpoints = await env.DB.prepare(
     `SELECT *
        FROM acceptance_webhook_endpoints
@@ -93,19 +96,22 @@ export async function deliverQueuedCustomerWebhooks(
           WHERE d.project_id = ?
             AND d.state IN ('queued', 'retry')
             AND d.next_attempt_at <= unixepoch()
+            AND (? = 0 OR d.project_id IN (SELECT value FROM json_each(?)))
           ORDER BY d.project_id, d.project_sequence
           LIMIT ?`,
-      ).bind(projectId, limit)
+      ).bind(projectId, acceptancePilotEnabled(env) ? 1 : 0, JSON.stringify(pilotIds(env.ACCEPTANCE_PILOT_PROJECT_IDS)), limit)
     : env.DB.prepare(
         `SELECT d.*
            FROM acceptance_webhook_deliveries d
           WHERE d.state IN ('queued', 'retry')
             AND d.next_attempt_at <= unixepoch()
+            AND (? = 0 OR d.project_id IN (SELECT value FROM json_each(?)))
           ORDER BY d.project_id, d.project_sequence
           LIMIT ?`,
-      ).bind(limit);
+      ).bind(acceptancePilotEnabled(env) ? 1 : 0, JSON.stringify(pilotIds(env.ACCEPTANCE_PILOT_PROJECT_IDS)), limit);
   const deliveries = await query.all<WebhookDeliveryRow>();
   for (const delivery of deliveries.results) {
+    if (!isPilotProjectAllowed(env, delivery.project_id)) continue;
     await deliverWebhookDelivery(delivery, env);
   }
 }

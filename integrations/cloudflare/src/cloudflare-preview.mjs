@@ -104,6 +104,9 @@ export async function deployCloudflarePreview(recipe, options = {}) {
     throw new Error("Live Cloudflare preview deployment requires allowLive: true");
   }
   assertNoMissingAssets(plan);
+  await assertHostedSeedFilesPrepared(plan);
+  const env = options.env ?? process.env;
+  assertPreviewSecretsAvailable(plan, env);
   const api = options.api ?? new LiveCloudflareApi({
     accountId: process.env[plan.accountIdEnv],
     apiToken: process.env[plan.apiTokenEnv],
@@ -118,7 +121,7 @@ export async function deployCloudflarePreview(recipe, options = {}) {
   refreshComponentDigests(plan);
   const materialized = await materializePlan(plan);
   await applyDataOperations(api, plan, journal, createdResources);
-  const deployedComponents = await applyWorkerOperations(api, plan, journal);
+  const deployedComponents = await applyWorkerOperations(api, plan, journal, env);
   const manifest = finalizeAcceptanceManifest(recipe, plan, deployedComponents);
   const localState = buildLocalState(plan, manifest, deployedComponents, createdResources, journal, materialized);
   const verification = await verifyCloudflareManifest(api, manifest, localState);
@@ -447,6 +450,17 @@ export class FakeCloudflareApi {
     return { type, name, seed };
   }
 
+  async bootstrapWorker(component) {
+    this.calls.push(["bootstrapWorker", component.name]);
+    this.workers.add(component.name);
+    return { name: component.name };
+  }
+
+  async setSecret(workerName, secretName) {
+    this.calls.push(["setSecret", workerName, secretName]);
+    return { workerName, secretName };
+  }
+
   async deployWorker(component) {
     this.calls.push(["deployWorker", component.name]);
     const versionId = `${component.name}-${sha256Hex(component.configSha256).slice(0, 12)}`;
@@ -575,6 +589,34 @@ export class LiveCloudflareApi {
     throw new Error(`Unsupported resource type: ${type}`);
   }
 
+  async bootstrapWorker(component) {
+    await this.runner.run([
+      "deploy",
+      "--config",
+      component.generatedConfigPath,
+      "--name",
+      component.name,
+      "--tag",
+      `${component.versionTag}-bootstrap`,
+      "--message",
+      `${component.message} bootstrap`,
+    ]);
+    return { name: component.name };
+  }
+
+  async setSecret(workerName, secretName, value, component) {
+    await this.runner.run([
+      "secret",
+      "put",
+      secretName,
+      "--config",
+      component.generatedConfigPath,
+      "--name",
+      workerName,
+    ], { input: value });
+    return { workerName, secretName };
+  }
+
   async deployWorker(component) {
     await this.runner.run([
       "deploy",
@@ -657,11 +699,12 @@ export class WranglerRunner {
     this.packageRoot = packageRoot;
   }
 
-  async run(args) {
+  async run(args, options = {}) {
     const result = spawnSync("npx", ["wrangler", ...args], {
       cwd: this.packageRoot,
       encoding: "utf8",
       env: process.env,
+      input: options.input,
     });
     const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
     if (result.status !== 0) {
@@ -694,6 +737,8 @@ async function loadComponents(recipe, root, stackSlug) {
       configPath,
       cwd,
       seed: normalizeSeed(root, component.seed),
+      secrets: normalizeSecrets(component.secrets, `cloudflare.components[${index}].secrets`),
+      email: normalizeEmailBinding(component.email, `cloudflare.components[${index}].email`),
       primary: component.primary === true || (index === 0 && components.every((entry) => entry.primary !== true)),
       isolated: component.preview === "isolated-stack" || hasStatefulBindings(config),
       previewName: component.previewName ?? buildName(baseName, stackSlug),
@@ -754,6 +799,42 @@ function normalizeSeed(root, seed) {
   };
 }
 
+function normalizeSecrets(secrets, field) {
+  if (secrets === undefined) return [];
+  if (!Array.isArray(secrets)) throw new Error(`${field} must be an array`);
+  return secrets.map((secret, index) => {
+    const name = requireString(secret.name, `${field}[${index}].name`);
+    const env = requireString(secret.env, `${field}[${index}].env`);
+    if (!/^[A-Z][A-Z0-9_]{0,127}$/.test(name)) throw new Error(`${field}[${index}].name is invalid`);
+    if (!/^NIB_ACCEPTANCE_PREVIEW_[A-Z0-9_]+$/.test(env)) {
+      throw new Error(`${field}[${index}].env must start with NIB_ACCEPTANCE_PREVIEW_`);
+    }
+    return { name, env };
+  });
+}
+
+function normalizeEmailBinding(email, field) {
+  if (email === undefined) return { allowedDestinationAddresses: [] };
+  const allowedDestinationAddresses = email.allowedDestinationAddresses ?? email.allowed_destination_addresses ?? [];
+  if (!Array.isArray(allowedDestinationAddresses)) {
+    throw new Error(`${field}.allowedDestinationAddresses must be an array`);
+  }
+  return {
+    allowedDestinationAddresses: allowedDestinationAddresses.map((address, index) =>
+      normalizeEmailAddress(address, `${field}.allowedDestinationAddresses[${index}]`)
+    ),
+  };
+}
+
+function normalizeEmailAddress(value, field) {
+  if (typeof value !== "string") throw new Error(`${field} must be a string`);
+  const email = value.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.endsWith(".invalid")) {
+    throw new Error(`${field} must be a deliverable pilot email address`);
+  }
+  return email;
+}
+
 function planComponent(component, componentByBaseName, stackSlug, stateDir, primaryPreviewName) {
   const generatedConfigPath = path.join(stateDir, "configs", `${component.previewName}.wrangler.jsonc`);
   const generatedConfig = rewriteConfig(component, componentByBaseName, stackSlug, primaryPreviewName, path.dirname(generatedConfigPath));
@@ -762,6 +843,19 @@ function planComponent(component, componentByBaseName, stackSlug, stateDir, prim
   const versionTag = `acceptance-${stackSlug}`;
   const previewAlias = `accept-${stackSlug}`;
   const message = `Nib acceptance preview ${stackSlug}`;
+  const secretOperations = component.secrets.length === 0 ? [] : [
+    {
+      action: "bootstrap-worker",
+      component: component.previewName,
+      idempotencyKey: `${stackSlug}:worker-bootstrap:${component.previewName}`,
+    },
+    {
+      action: "secret",
+      component: component.previewName,
+      secrets: component.secrets,
+      idempotencyKey: `${stackSlug}:worker-secrets:${component.previewName}:${sha256Hex(stableJson(component.secrets))}`,
+    },
+  ];
   return {
     baseName: component.baseName,
     name: component.previewName,
@@ -778,8 +872,10 @@ function planComponent(component, componentByBaseName, stackSlug, stateDir, prim
     versionTag,
     previewAlias,
     message,
+    secrets: component.secrets,
     resourceOperations,
     operations: [
+      ...secretOperations,
       {
         action: "wrangler deploy",
         component: component.previewName,
@@ -818,6 +914,16 @@ function rewriteConfig(component, componentByBaseName, stackSlug, primaryPreview
     NIB_ACCEPTANCE_ORIGIN: publicOrigin,
     ACCEPTANCE_PREVIEW_STACK: stackSlug,
   };
+  if (Array.isArray(component.baseConfig.send_email) && component.email.allowedDestinationAddresses.length > 0) {
+    config.send_email = component.baseConfig.send_email.map((binding) => {
+      const rewritten = {
+        ...binding,
+        allowed_destination_addresses: component.email.allowedDestinationAddresses,
+      };
+      delete rewritten.destination_address;
+      return rewritten;
+    });
+  }
 
   if (Array.isArray(config.d1_databases)) {
     config.d1_databases = config.d1_databases.map((database) => {
@@ -1050,6 +1156,29 @@ async function applyDataOperations(api, plan, journal, createdResources) {
   }
 }
 
+async function assertHostedSeedFilesPrepared(plan) {
+  const unresolved = [];
+  for (const operation of plan.operations.filter((entry) => entry.action === "seed")) {
+    const source = await readFile(operation.file, "utf8");
+    if (source.includes(".invalid") || source.includes("__NIB_ACCEPTANCE_")) {
+      unresolved.push(operation.file);
+    }
+  }
+  if (unresolved.length > 0) {
+    throw new Error(`Prepare hosted pilot seed files before live deploy: ${unresolved.join(", ")}`);
+  }
+}
+
+function assertPreviewSecretsAvailable(plan, env) {
+  for (const component of plan.components) {
+    for (const operation of component.operations.filter((entry) => entry.action === "secret")) {
+      for (const secret of operation.secrets) {
+        previewSecretValue(component, secret, env);
+      }
+    }
+  }
+}
+
 async function loadJournal(plan) {
   await mkdir(plan.stateDir, { recursive: true });
   const journalPath = path.join(plan.stateDir, "journal.json");
@@ -1139,9 +1268,36 @@ async function applyActualPreviewOrigins(api, plan) {
   refreshComponentDigests(plan);
 }
 
-async function applyWorkerOperations(api, plan, journal) {
+async function applyWorkerOperations(api, plan, journal, env) {
   const deployed = [];
   for (const component of orderedComponentsForDeploy(plan.components)) {
+    const secretOperation = component.operations.find((operation) => operation.action === "secret");
+    if (secretOperation && !hasJournalEntry(journal, "deploy-worker", component.name)) {
+      const bootstrapKey = `${component.stackSlug}:worker-bootstrap:${component.name}`;
+      if (!hasJournalEntry(journal, bootstrapKey, component.name)) {
+        await api.bootstrapWorker(component);
+        await appendJournalEntry(plan, journal, {
+          key: bootstrapKey,
+          target: component.name,
+          action: "bootstrap-worker",
+          type: "worker",
+          result: { component: component.name },
+        });
+      }
+      if (!hasJournalEntry(journal, secretOperation.idempotencyKey, component.name)) {
+        await applyPreviewSecrets(api, component, secretOperation, env);
+        await appendJournalEntry(plan, journal, {
+          key: secretOperation.idempotencyKey,
+          target: component.name,
+          action: "secret",
+          type: "worker",
+          result: {
+            component: component.name,
+            secrets: secretOperation.secrets.map((secret) => ({ name: secret.name, env: secret.env })),
+          },
+        });
+      }
+    }
     const prior = findJournalEntry(journal, "deploy-worker", component.name);
     if (prior?.result) {
       deployed.push(prior.result);
@@ -1169,6 +1325,27 @@ async function applyWorkerOperations(api, plan, journal) {
     deployed.push(result);
   }
   return deployed;
+}
+
+async function applyPreviewSecrets(api, component, operation, env) {
+  for (const secret of operation.secrets) {
+    const value = previewSecretValue(component, secret, env);
+    await api.setSecret(component.name, secret.name, value, component);
+  }
+}
+
+function previewSecretValue(component, secret, env) {
+  if (!secret.env.startsWith("NIB_ACCEPTANCE_PREVIEW_")) {
+    throw new Error(`${component.name} secret ${secret.name} must come from a NIB_ACCEPTANCE_PREVIEW_* environment variable`);
+  }
+  const value = env[secret.env];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${secret.env} is required for ${component.name} preview secret ${secret.name}`);
+  }
+  if (secret.name === "STRIPE_SECRET_KEY" && !value.startsWith("sk_test_")) {
+    throw new Error(`${secret.env} for ${component.name} must be a Stripe test-mode secret key`);
+  }
+  return value;
 }
 
 function deploymentMatchesMessage(deployment, message) {

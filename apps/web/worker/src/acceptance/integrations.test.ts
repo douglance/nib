@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { exportJWK, exportPKCS8, generateKeyPair, SignJWT } from "jose";
 import { hmacSha256Hex, sha256Hex } from "./common";
-import { parseAcceptanceError } from "./contracts";
+import { hashAcceptanceManifest, parseAcceptanceError } from "./contracts";
 import { validateGitHubWorkflowClaims } from "./github";
 import type { AcceptanceChangedEvent, AcceptanceIntegrationEnv } from "./integrations";
-import { assertGithubPublication, authenticateGithubWorkflow, deliverAcceptanceEvent, handleIntegrationRoutes, reconcileGitHubAcceptanceChecks, refreshGitHubChecksForReview } from "./integrations";
+import { assertGithubPublication, assertGithubVerification, authenticateGithubWorkflow, deliverAcceptanceEvent, handleIntegrationRoutes, reconcileGitHubAcceptanceChecks, refreshGitHubChecksForReview } from "./integrations";
 import { createAcceptanceTeamTestFixture, type AcceptanceTeamTestFixture } from "./team-test-db";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
@@ -133,7 +133,7 @@ describe("acceptance integrations", () => {
       .toBe("def456");
   });
 
-  it("invalidates a current PR review when its manifest commit differs from the incoming GitHub head", async () => {
+  it("invalidates a current PR review when GitHub provenance is missing", async () => {
     const f = await sqliteFixture();
     installGitHubRepository(f);
     f.sqlite.prepare(
@@ -147,6 +147,83 @@ describe("acceptance integrations", () => {
 
     const response = await handleIntegrationRoutes(githubWebhookRequest("delivery-invalidate", payload, signature), {
       ...f.env,
+      GITHUB_WEBHOOK_SECRET: "secret",
+      ACCEPTANCE: currentReviewCoordinator(current, invalidate),
+    }, null);
+
+    expect(response?.status).toBe(200);
+    expect(invalidate).toHaveBeenCalledWith(
+      current.reviewId,
+      "GitHub pull request provenance is missing.",
+      "github:webhook",
+      `github:pr-head:123:12:acceptance:${current.reviewId}`,
+    );
+  });
+
+  it("keeps a current PR review when the incoming GitHub head matches verified provenance", async () => {
+    const f = await sqliteFixture();
+    installGitHubRepository(f);
+    const current = approvedEvent();
+    current.gate = "acceptance";
+    current.manifest.gate = "acceptance";
+    current.manifest.build.commit = "b".repeat(40);
+    await insertGitHubPullProvenance(f, current, { headSha: "a".repeat(40) });
+    const invalidate = vi.fn(async () => undefined);
+    const payload = pullRequestPayload("a".repeat(40));
+    const signature = `sha256=${await hmacSha256Hex("secret", payload)}`;
+
+    const response = await handleIntegrationRoutes(githubWebhookRequest("delivery-verified-head", payload, signature), {
+      ...f.env,
+      GITHUB_WEBHOOK_SECRET: "secret",
+      ACCEPTANCE: currentReviewCoordinator(current, invalidate),
+    }, null);
+
+    expect(response?.status).toBe(200);
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("invalidates a current PR review when the incoming GitHub head differs from verified provenance", async () => {
+    const f = await sqliteFixture();
+    installGitHubRepository(f);
+    const current = approvedEvent();
+    current.gate = "acceptance";
+    current.manifest.gate = "acceptance";
+    current.manifest.build.commit = "b".repeat(40);
+    await insertGitHubPullProvenance(f, current, { headSha: "a".repeat(40) });
+    const invalidate = vi.fn(async () => undefined);
+    const payload = pullRequestPayload("c".repeat(40));
+    const signature = `sha256=${await hmacSha256Hex("secret", payload)}`;
+
+    const response = await handleIntegrationRoutes(githubWebhookRequest("delivery-stale-head", payload, signature), {
+      ...f.env,
+      GITHUB_WEBHOOK_SECRET: "secret",
+      ACCEPTANCE: currentReviewCoordinator(current, invalidate),
+    }, null);
+
+    expect(response?.status).toBe(200);
+    expect(invalidate).toHaveBeenCalledWith(
+      current.reviewId,
+      "GitHub pull request head changed.",
+      "github:webhook",
+      `github:pr-head:123:12:acceptance:${current.reviewId}`,
+    );
+  });
+
+  it("continues signed PR invalidation for projects outside the pilot allowlist", async () => {
+    const f = await sqliteFixture();
+    installGitHubRepository(f);
+    const current = approvedEvent();
+    current.gate = "acceptance";
+    current.manifest.gate = "acceptance";
+    current.manifest.build.commit = "b".repeat(40);
+    await insertGitHubPullProvenance(f, current, { headSha: "a".repeat(40) });
+    const invalidate = vi.fn(async () => undefined);
+    const payload = pullRequestPayload("c".repeat(40));
+    const signature = `sha256=${await hmacSha256Hex("secret", payload)}`;
+
+    const response = await handleIntegrationRoutes(githubWebhookRequest("delivery-unlisted-pilot-head", payload, signature), {
+      ...f.env,
+      ACCEPTANCE_PILOT_PROJECT_IDS: "other-project",
       GITHUB_WEBHOOK_SECRET: "secret",
       ACCEPTANCE: currentReviewCoordinator(current, invalidate),
     }, null);
@@ -515,6 +592,7 @@ describe("acceptance integrations", () => {
       if (url.hostname === "token.actions.githubusercontent.com") return Response.json(proof.jwks);
       if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
       if (url.pathname === "/repositories/123") return Response.json({ id: 123, name: "example", default_branch: "main", owner: { login: "nib" } });
+      if (url.pathname === "/repos/nib/example/branches/main") return Response.json({ commit: { sha: "a".repeat(40) } });
       return new Response(null, { status: 404 });
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -531,6 +609,57 @@ describe("acceptance integrations", () => {
     const stored = f.sqlite.prepare("SELECT allowed_workflows_json FROM acceptance_github_installations").get() as { allowed_workflows_json: string };
     expect(JSON.parse(stored.allowed_workflows_json)).toEqual(["nib/example/.github/workflows/acceptance.yml@refs/heads/main"]);
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("token.actions.githubusercontent.com"))).toBe(true);
+  });
+
+  it("links pinned reusable GitHub workflow refs and exchanges only through job_workflow_ref", async () => {
+    const f = await sqliteFixture();
+    const pinnedReusable = `nib/example/.github/workflows/reusable.yml@${"c".repeat(40)}`;
+    const proofWorkflow = "nib/example/.github/workflows/link.yml@refs/heads/main";
+    const proof = await githubOidcFixture({ eventName: "workflow_dispatch", ref: "refs/heads/main", workflowRef: proofWorkflow });
+    const caller = await githubOidcFixture({
+      eventName: "pull_request",
+      workflowRef: "nib/example/.github/workflows/caller.yml@refs/heads/main",
+      jobWorkflowRef: pinnedReusable,
+    });
+    const appPrivateKey = await gitHubAppPrivateKey();
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === "token.actions.githubusercontent.com") return Response.json(proof.jwks);
+      if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
+      if (url.pathname === "/repositories/123") return Response.json({ id: 123, name: "example", default_branch: "main", owner: { login: "nib" } });
+      if (url.pathname === "/repos/nib/example/branches/main") return Response.json({ commit: { sha: "a".repeat(40) } });
+      return new Response(null, { status: 404 });
+    }));
+
+    const linked = await handleIntegrationRoutes(githubLinkRequest({
+      ownershipOidcToken: proof.token,
+      allowedWorkflows: [proofWorkflow, pinnedReusable],
+    }), {
+      ...f.env,
+      GITHUB_APP_ID: "12345",
+      GITHUB_APP_PRIVATE_KEY: appPrivateKey,
+    }, { ...owner, sessionId: "session", sessionName: "owner", platform: "web" });
+    expect(linked?.status).toBe(200);
+
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input));
+      if (url.hostname === "token.actions.githubusercontent.com") return Response.json(caller.jwks);
+      return new Response(null, { status: 204 });
+    }));
+    const exchanged = await handleIntegrationRoutes(new Request("https://nib.test/api/acceptance/v1/github/token", {
+      method: "POST",
+      headers: { "content-type": "application/json", "idempotency-key": "oidc-pinned-reusable" },
+      body: JSON.stringify({ oidcToken: caller.token, projectId, mode: "publish" }),
+    }), f.env, null);
+
+    expect(exchanged?.status).toBe(200);
+    await expect(exchanged?.json()).resolves.toMatchObject({
+      scopes: ["publish"],
+      provenance: {
+        workflowRef: "nib/example/.github/workflows/caller.yml@refs/heads/main",
+        jobWorkflowRef: pinnedReusable,
+      },
+    });
   });
 
   it("rejects GitHub installation linking without ownership proof before config mutation", async () => {
@@ -744,6 +873,225 @@ describe("acceptance integrations", () => {
     await expect(response?.json()).resolves.toMatchObject({ error: { code: "idempotency_key_required" } });
   });
 
+  it("verifies current GitHub PR merge provenance and publishes checks against the PR head", async () => {
+    const f = await sqliteFixture();
+    const { privateKey } = await generateKeyPair("RS256", { extractable: true });
+    installGitHubRepository(f);
+    const event = approvedEvent();
+    event.gate = "acceptance";
+    event.manifest.gate = "acceptance";
+    event.manifest.build.commit = "b".repeat(40);
+    event.manifestHash = await hashAcceptanceManifest(event.manifest);
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
+      if (url.pathname === "/repos/nib/example/pulls/12") return Response.json({ head: { sha: "a".repeat(40) }, merge_commit_sha: "b".repeat(40) });
+      if (url.pathname === "/repos/nib/example/check-runs" && init?.method === "POST") return Response.json({ id: 1, html_url: "https://github.test/check/1" });
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const env = {
+      ...f.env,
+      GITHUB_APP_ID: "12345",
+      GITHUB_APP_PRIVATE_KEY: await exportPKCS8(privateKey),
+      GITHUB_API_URL: "https://github.test",
+      ACCEPTANCE: currentReviewCoordinator(event),
+    };
+
+    await assertGithubPublication(env, {
+      provider: "github",
+      id: "github:123:nib/example/.github/workflows/acceptance.yml@refs/heads/main",
+      projectId,
+      scopes: ["publish"],
+      repositoryId: "123",
+      repository: "nib/example",
+      repositoryOwner: "nib",
+      repositoryName: "example",
+      workflowRef: "nib/example/.github/workflows/acceptance.yml@refs/heads/main",
+      sha: "b".repeat(40),
+      ref: "refs/pull/12/merge",
+    }, event.manifest);
+    await deliverAcceptanceEvent(event, env);
+
+    expect(f.sqlite.prepare("SELECT build_commit_sha, verified_head_sha FROM acceptance_github_pr_provenance WHERE manifest_hash = ?")
+      .get(event.manifestHash)).toMatchObject({ build_commit_sha: "b".repeat(40), verified_head_sha: "a".repeat(40) });
+    expect(f.sqlite.prepare("SELECT head_sha, build_commit_sha FROM acceptance_github_check_heads WHERE event_id = ?")
+      .get(event.id)).toMatchObject({ head_sha: "a".repeat(40), build_commit_sha: "b".repeat(40) });
+    const checkBody = JSON.parse(String(fetchMock.mock.calls.find((call) => String(call[0]) === "https://github.test/repos/nib/example/check-runs")?.[1]?.body));
+    expect(checkBody).toMatchObject({ head_sha: "a".repeat(40) });
+  });
+
+  it("requires existing GitHub PR provenance during verification without backfilling old reviews", async () => {
+    const f = await sqliteFixture();
+    installGitHubRepository(f);
+    const event = approvedEvent();
+    event.gate = "acceptance";
+    event.manifest.gate = "acceptance";
+    event.manifest.build.commit = "b".repeat(40);
+    event.manifestHash = await hashAcceptanceManifest(event.manifest);
+
+    await expect(assertGithubVerification(f.env, {
+      provider: "github",
+      id: "github:123:nib/example/.github/workflows/acceptance.yml@refs/heads/main",
+      projectId,
+      scopes: ["verify"],
+      repositoryId: "123",
+      repository: "nib/example",
+      repositoryOwner: "nib",
+      repositoryName: "example",
+      workflowRef: "nib/example/.github/workflows/acceptance.yml@refs/heads/main",
+      sha: "b".repeat(40),
+      ref: "refs/pull/12/merge",
+    }, event.manifest)).rejects.toThrow("provenance is missing");
+    expect(f.sqlite.prepare("SELECT COUNT(*) AS count FROM acceptance_github_pr_provenance").get()).toMatchObject({ count: 0 });
+  });
+
+  it("rejects GitHub verification when stored PR provenance no longer matches the current PR head", async () => {
+    const f = await sqliteFixture();
+    const { privateKey } = await generateKeyPair("RS256", { extractable: true });
+    installGitHubRepository(f);
+    const event = approvedEvent();
+    event.gate = "acceptance";
+    event.manifest.gate = "acceptance";
+    event.manifest.build.commit = "b".repeat(40);
+    event.manifestHash = await hashAcceptanceManifest(event.manifest);
+    await insertGitHubPullProvenance(f, event, { headSha: "a".repeat(40) });
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
+      if (url.pathname === "/repos/nib/example/pulls/12") return Response.json({ head: { sha: "c".repeat(40) }, merge_commit_sha: "b".repeat(40) });
+      return new Response(null, { status: 404 });
+    }));
+
+    await expect(assertGithubVerification({
+      ...f.env,
+      GITHUB_APP_ID: "12345",
+      GITHUB_APP_PRIVATE_KEY: await exportPKCS8(privateKey),
+      GITHUB_API_URL: "https://github.test",
+    }, {
+      provider: "github",
+      id: "github:123:nib/example/.github/workflows/acceptance.yml@refs/heads/main",
+      projectId,
+      scopes: ["verify"],
+      repositoryId: "123",
+      repository: "nib/example",
+      repositoryOwner: "nib",
+      repositoryName: "example",
+      workflowRef: "nib/example/.github/workflows/acceptance.yml@refs/heads/main",
+      sha: "b".repeat(40),
+      ref: "refs/pull/12/merge",
+    }, event.manifest)).rejects.toThrow("provenance is stale");
+  });
+
+  it("publishes action-required GitHub checks and invalidates approval when live PR head is stale", async () => {
+    const f = await sqliteFixture();
+    const { privateKey } = await generateKeyPair("RS256", { extractable: true });
+    installGitHubRepository(f);
+    const event = approvedEvent();
+    event.gate = "acceptance";
+    event.manifest.gate = "acceptance";
+    event.manifest.build.commit = "b".repeat(40);
+    event.manifestHash = await hashAcceptanceManifest(event.manifest);
+    await insertGitHubPullProvenance(f, event, { headSha: "a".repeat(40), mergeCommitSha: "b".repeat(40) });
+    const invalidate = vi.fn(async () => undefined);
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
+      if (url.pathname === "/repos/nib/example/pulls/12") return Response.json({ head: { sha: "c".repeat(40), repo: { id: 123 } }, merge_commit_sha: "b".repeat(40) });
+      if (url.pathname === "/repos/nib/example/check-runs" && init?.method === "POST") return Response.json({ id: 1, html_url: "https://github.test/check/1" });
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await deliverAcceptanceEvent(event, {
+      ...f.env,
+      GITHUB_APP_ID: "12345",
+      GITHUB_APP_PRIVATE_KEY: await exportPKCS8(privateKey),
+      GITHUB_API_URL: "https://github.test",
+      ACCEPTANCE: currentReviewCoordinator(event, invalidate),
+    });
+
+    expect(invalidate).toHaveBeenCalledWith(
+      event.reviewId,
+      "GitHub pull request provenance is stale.",
+      "github:reconcile",
+      `github:pr-provenance:${event.projectId}:${event.subject}:${event.gate}:${event.reviewId}:${event.manifestHash}`,
+    );
+    expect(f.sqlite.prepare("SELECT head_sha FROM acceptance_github_pull_heads WHERE repository_id = ? AND pull_number = ?")
+      .get("123", "12")).toMatchObject({ head_sha: "c".repeat(40) });
+    expect(f.sqlite.prepare("SELECT conclusion, head_sha, build_commit_sha FROM acceptance_github_check_runs WHERE config_id = ? AND event_id = ?")
+      .get("github-installation", event.id)).toMatchObject({ conclusion: "action_required", head_sha: "c".repeat(40), build_commit_sha: "b".repeat(40) });
+    const checkBody = JSON.parse(String(fetchMock.mock.calls.find((call) => String(call[0]) === "https://github.test/repos/nib/example/check-runs")?.[1]?.body));
+    expect(checkBody).toMatchObject({ conclusion: "action_required", head_sha: "c".repeat(40) });
+    expect(checkBody.output.text).toContain("github_provenance_unverified");
+  });
+
+  it("reconciles stale GitHub PR provenance to action-required and invalidates the approved review", async () => {
+    const f = await sqliteFixture();
+    const { privateKey } = await generateKeyPair("RS256", { extractable: true });
+    installGitHubRepository(f);
+    const event = approvedEvent();
+    event.gate = "acceptance";
+    event.manifest.gate = "acceptance";
+    event.manifest.build.commit = "b".repeat(40);
+    event.manifestHash = await hashAcceptanceManifest(event.manifest);
+    await insertGitHubPullProvenance(f, event, { headSha: "a".repeat(40), mergeCommitSha: "b".repeat(40) });
+    f.sqlite.prepare(
+      `INSERT INTO acceptance_integration_events(
+         id, project_id, review_id, subject, gate, revision, sequence, state, manifest_hash, payload_json, occurred_at, received_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    ).run(
+      event.id,
+      event.projectId,
+      event.reviewId,
+      event.subject,
+      event.gate,
+      event.revision,
+      event.sequence,
+      event.state,
+      event.manifestHash,
+      JSON.stringify(event),
+      event.occurredAt,
+    );
+    f.sqlite.prepare(
+      `INSERT INTO acceptance_github_check_heads(config_id, gate, head_sha, latest_sequence, event_id, claim_id, updated_at, build_commit_sha)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+    ).run("github-installation", event.gate, "a".repeat(40), event.sequence, event.id, "claim-1", event.manifest.build.commit);
+    f.sqlite.prepare(
+      `INSERT INTO acceptance_github_check_runs(
+         id, config_id, event_id, project_id, review_id, gate, repository_id, head_sha, check_run_id, check_url, conclusion, created_at, build_commit_sha
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    ).run("check-run-row", "github-installation", event.id, projectId, event.reviewId, event.gate, "123", "a".repeat(40), "check-1", "https://github.test/check/1", "success", event.manifest.build.commit);
+    const invalidate = vi.fn(async () => undefined);
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
+      if (url.pathname === "/repos/nib/example/pulls/12") return Response.json({ head: { sha: "c".repeat(40), repo: { id: 123 } }, merge_commit_sha: "b".repeat(40) });
+      if (url.pathname === "/repos/nib/example/check-runs" && init?.method === "POST") return Response.json({ id: 2, html_url: "https://github.test/check/2" });
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await reconcileGitHubAcceptanceChecks({
+      ...f.env,
+      GITHUB_APP_ID: "12345",
+      GITHUB_APP_PRIVATE_KEY: await exportPKCS8(privateKey),
+      GITHUB_API_URL: "https://github.test",
+      ACCEPTANCE: currentReviewCoordinator(event, invalidate),
+    }, 10);
+
+    expect(invalidate).toHaveBeenCalledWith(
+      event.reviewId,
+      "GitHub pull request provenance is stale.",
+      "github:reconcile",
+      `github:pr-provenance:${event.projectId}:${event.subject}:${event.gate}:${event.reviewId}:${event.manifestHash}`,
+    );
+    expect(f.sqlite.prepare("SELECT conclusion, check_run_id, head_sha, build_commit_sha FROM acceptance_github_check_runs WHERE config_id = ? AND event_id = ?")
+      .get("github-installation", event.id)).toMatchObject({ conclusion: "action_required", check_run_id: "2", head_sha: "c".repeat(40), build_commit_sha: "b".repeat(40) });
+    const checkBody = JSON.parse(String(fetchMock.mock.calls.find((call) => String(call[0]) === "https://github.test/repos/nib/example/check-runs")?.[1]?.body));
+    expect(checkBody).toMatchObject({ conclusion: "action_required", head_sha: "c".repeat(40) });
+  });
+
   it("publishes and reconciles non-success GitHub checks when an approved project is disabled", async () => {
     const f = await sqliteFixture();
     const { privateKey } = await generateKeyPair("RS256", { extractable: true });
@@ -754,6 +1102,7 @@ describe("acceptance integrations", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
+      if (url.pathname === "/repos/nib/example/pulls/12") return Response.json({ head: { sha: "d".repeat(40), repo: { id: 123 } }, merge_commit_sha: event.manifest.build.commit });
       if (url.pathname === "/repos/nib/example/check-runs" && init?.method === "POST") {
         checkId += 1;
         return Response.json({ id: checkId, html_url: `https://github.test/check/${checkId}` });
@@ -781,15 +1130,72 @@ describe("acceptance integrations", () => {
     expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).toMatchObject({ conclusion: "failure" });
   });
 
+  it("reconciles an existing success to failure when the project leaves the pilot allowlist", async () => {
+    const f = await sqliteFixture();
+    const { privateKey } = await generateKeyPair("RS256", { extractable: true });
+    installGitHubRepository(f);
+    const event = approvedEvent();
+    f.sqlite.prepare(
+      `INSERT INTO acceptance_integration_events(
+         id, project_id, review_id, subject, gate, revision, sequence, state, manifest_hash, payload_json, occurred_at, received_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    ).run(
+      event.id,
+      event.projectId,
+      event.reviewId,
+      event.subject,
+      event.gate,
+      event.revision,
+      event.sequence,
+      event.state,
+      event.manifestHash,
+      JSON.stringify(event),
+      event.occurredAt,
+    );
+    f.sqlite.prepare(
+      `INSERT INTO acceptance_github_check_heads(config_id, gate, head_sha, latest_sequence, event_id, claim_id, updated_at, build_commit_sha)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+    ).run("github-installation", event.gate, event.manifest.build.commit, event.sequence, event.id, "claim-1", event.manifest.build.commit);
+    f.sqlite.prepare(
+      `INSERT INTO acceptance_github_check_runs(
+         id, config_id, event_id, project_id, review_id, gate, repository_id, head_sha, check_run_id, check_url, conclusion, created_at, build_commit_sha
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    ).run("check-run-row", "github-installation", event.id, projectId, event.reviewId, event.gate, "123", event.manifest.build.commit, "check-1", "https://github.test/check/1", "success", event.manifest.build.commit);
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
+      if (url.pathname === "/repos/nib/example/pulls/12") return Response.json({ head: { sha: "d".repeat(40), repo: { id: 123 } }, merge_commit_sha: event.manifest.build.commit });
+      if (url.pathname === "/repos/nib/example/check-runs" && init?.method === "POST") return Response.json({ id: 2, html_url: "https://github.test/check/2" });
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await reconcileGitHubAcceptanceChecks({
+      ...f.env,
+      ACCEPTANCE_PILOT_PROJECT_IDS: "other-project",
+      GITHUB_APP_ID: "12345",
+      GITHUB_APP_PRIVATE_KEY: await exportPKCS8(privateKey),
+      GITHUB_API_URL: "https://github.test",
+      ACCEPTANCE: currentReviewCoordinator(event),
+    }, 10);
+
+    expect(f.sqlite.prepare("SELECT conclusion, check_run_id FROM acceptance_github_check_runs WHERE config_id = ? AND event_id = ?")
+      .get("github-installation", event.id)).toMatchObject({ conclusion: "failure", check_run_id: "2" });
+    expect(JSON.parse(String(fetchMock.mock.calls.find((call) => String(call[0]) === "https://github.test/repos/nib/example/check-runs")?.[1]?.body)))
+      .toMatchObject({ conclusion: "failure" });
+  });
+
   it("refreshes GitHub checks for one review through missing, fresh, and expired Cloudflare verification", async () => {
     const f = await sqliteFixture();
     const { privateKey } = await generateKeyPair("RS256", { extractable: true });
     installGitHubRepository(f);
     const event = approvedEvent({ provider: "cloudflare" });
+    await insertGitHubPullProvenance(f, event, { headSha: "d".repeat(40) });
     let checkId = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
+      if (url.pathname === "/repos/nib/example/pulls/12") return Response.json({ head: { sha: "d".repeat(40), repo: { id: 123 } }, merge_commit_sha: event.manifest.build.commit });
       if (url.pathname === "/repos/nib/example/check-runs" && init?.method === "POST") {
         checkId += 1;
         return Response.json({ id: checkId, html_url: `https://github.test/check/${checkId}` });
@@ -808,6 +1214,8 @@ describe("acceptance integrations", () => {
     await deliverAcceptanceEvent(event, env);
     expect(f.sqlite.prepare("SELECT conclusion FROM acceptance_github_check_runs WHERE config_id = ? AND event_id = ?")
       .get("github-installation", event.id)?.conclusion).toBe("action_required");
+    expect(JSON.parse(String(fetchMock.mock.calls.find((call) => String(call[0]) === "https://github.test/repos/nib/example/check-runs")?.[1]?.body)))
+      .toMatchObject({ head_sha: "d".repeat(40) });
 
     f.sqlite.prepare(
       `INSERT INTO acceptance_provider_verifications(project_id, review_id, actor_id, idempotency_key, manifest_hash, commit_sha, verified_at, expires_at)
@@ -829,6 +1237,7 @@ describe("acceptance integrations", () => {
     const { privateKey } = await generateKeyPair("RS256", { extractable: true });
     installGitHubRepository(f);
     const event = approvedEvent({ provider: "cloudflare" });
+    await insertGitHubPullProvenance(f, event, { headSha: "d".repeat(40) });
     f.sqlite.prepare(
       `INSERT INTO acceptance_integration_events(
          id, project_id, review_id, subject, gate, revision, sequence, state, manifest_hash, payload_json, occurred_at, received_at
@@ -847,14 +1256,14 @@ describe("acceptance integrations", () => {
       event.occurredAt,
     );
     f.sqlite.prepare(
-      `INSERT INTO acceptance_github_check_heads(config_id, gate, head_sha, latest_sequence, event_id, claim_id, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1)`,
-    ).run("github-installation", event.gate, event.manifest.build.commit, event.sequence, event.id, "claim-1");
+      `INSERT INTO acceptance_github_check_heads(config_id, gate, head_sha, latest_sequence, event_id, claim_id, updated_at, build_commit_sha)
+       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+    ).run("github-installation", event.gate, "d".repeat(40), event.sequence, event.id, "claim-1", event.manifest.build.commit);
     f.sqlite.prepare(
       `INSERT INTO acceptance_github_check_runs(
-         id, config_id, event_id, project_id, review_id, gate, repository_id, head_sha, check_run_id, check_url, conclusion, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-    ).run("check-run-row", "github-installation", event.id, projectId, event.reviewId, event.gate, "123", event.manifest.build.commit, "check-1", "https://github.test/check/1", "action_required");
+         id, config_id, event_id, project_id, review_id, gate, repository_id, head_sha, check_run_id, check_url, conclusion, created_at, build_commit_sha
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    ).run("check-run-row", "github-installation", event.id, projectId, event.reviewId, event.gate, "123", "d".repeat(40), "check-1", "https://github.test/check/1", "action_required", event.manifest.build.commit);
     f.sqlite.prepare(
       `INSERT INTO acceptance_provider_verifications(project_id, review_id, actor_id, idempotency_key, manifest_hash, commit_sha, verified_at, expires_at)
        VALUES (?, ?, ?, ?, ?, ?, unixepoch(), unixepoch() + 60)`,
@@ -862,6 +1271,7 @@ describe("acceptance integrations", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
+      if (url.pathname === "/repos/nib/example/pulls/12") return Response.json({ head: { sha: "d".repeat(40), repo: { id: 123 } }, merge_commit_sha: event.manifest.build.commit });
       if (url.pathname === "/repos/nib/example/check-runs" && init?.method === "POST") return Response.json({ id: 2, html_url: "https://github.test/check/2" });
       return new Response(null, { status: 404 });
     });
@@ -878,13 +1288,14 @@ describe("acceptance integrations", () => {
     const checkPosts = fetchMock.mock.calls.filter((call) => String(call[0]) === "https://github.test/repos/nib/example/check-runs");
     expect(checkPosts).toHaveLength(1);
     expect(JSON.parse(String(checkPosts[0]?.[1]?.body))).toMatchObject({ conclusion: "success" });
+    expect(JSON.parse(String(checkPosts[0]?.[1]?.body))).toMatchObject({ head_sha: "d".repeat(40) });
     expect(f.sqlite.prepare("SELECT conclusion, check_run_id FROM acceptance_github_check_runs WHERE config_id = ? AND event_id = ?")
       .get("github-installation", event.id)).toMatchObject({ conclusion: "success", check_run_id: "2" });
   });
 
-  it("throws a typed 403 when GitHub workflow provenance mismatches the manifest", () => {
+  it("throws a typed 403 when GitHub workflow provenance mismatches the manifest", async () => {
     try {
-      assertGithubPublication({
+      await assertGithubPublication({ DB: new FakeD1() as unknown as D1Database, PUBLIC_ORIGIN: "https://nib.test" }, {
         provider: "github",
         id: "github:123:workflow",
         projectId,
@@ -999,7 +1410,7 @@ async function sqliteFixture(): Promise<{
 }> {
   const fixture = await createAcceptanceTeamTestFixture({
     accounts: [owner],
-    migrations: ["0016_acceptance_integrations.sql", "0019_acceptance_provider_verifications.sql"],
+    migrations: ["0016_acceptance_integrations.sql", "0019_acceptance_provider_verifications.sql", "0020_acceptance_github_pr_provenance.sql"],
   });
   sqliteFixtures.push(fixture);
   fixture.sqlite.prepare("INSERT INTO acceptance_teams(id, name, created_by, created_at, updated_at) VALUES (?, ?, ?, 1, 1)")
@@ -1032,6 +1443,7 @@ async function githubOidcFixture(overrides: {
   repositoryId?: string;
   repository?: string;
   workflowRef?: string;
+  jobWorkflowRef?: string;
   sha?: string;
   ref?: string;
   eventName?: string;
@@ -1044,6 +1456,7 @@ async function githubOidcFixture(overrides: {
     repository_id: overrides.repositoryId ?? "123",
     repository: overrides.repository ?? "nib/example",
     workflow_ref: overrides.workflowRef ?? "nib/example/.github/workflows/acceptance.yml@refs/heads/main",
+    ...(overrides.jobWorkflowRef ? { job_workflow_ref: overrides.jobWorkflowRef } : {}),
     sha: overrides.sha ?? "a".repeat(40),
     ref: overrides.ref ?? "refs/heads/main",
     actor: "octocat",
@@ -1063,13 +1476,13 @@ async function gitHubAppPrivateKey(): Promise<string> {
   return exportPKCS8(privateKey);
 }
 
-function githubLinkRequest(input: { ownershipOidcToken?: string }): Request {
+function githubLinkRequest(input: { ownershipOidcToken?: string; allowedWorkflows?: string[] }): Request {
   const body: Record<string, unknown> = {
     installationId: "456",
     repositoryId: "123",
     owner: "nib",
     name: "example",
-    allowedWorkflows: ["nib/example/.github/workflows/acceptance.yml@refs/heads/main"],
+    allowedWorkflows: input.allowedWorkflows ?? ["nib/example/.github/workflows/acceptance.yml@refs/heads/main"],
     gates: ["acceptance"],
   };
   if (input.ownershipOidcToken !== undefined) body.ownershipOidcToken = input.ownershipOidcToken;
@@ -1086,6 +1499,7 @@ function githubLinkFetch(jwks: { keys: unknown[] }): typeof fetch {
     if (url.hostname === "token.actions.githubusercontent.com") return Response.json(jwks);
     if (url.pathname === "/app/installations/456/access_tokens") return Response.json({ token: "installation-token", expires_at: "2026-09-09T04:00:00Z" });
     if (url.pathname === "/repositories/123") return Response.json({ id: 123, name: "example", default_branch: "main", owner: { login: "nib" } });
+    if (url.pathname === "/repos/nib/example/branches/main") return Response.json({ commit: { sha: "a".repeat(40) } });
     return new Response(null, { status: 404 });
   });
 }
@@ -1097,10 +1511,12 @@ function installGitHubRepository(f: { sqlite: AcceptanceTeamTestFixture["sqlite"
   owner?: string;
   name?: string;
   workflowRef?: string;
+  allowedWorkflows?: string[];
 } = {}): void {
   const repositoryOwner = options.owner ?? "nib";
   const repositoryName = options.name ?? "example";
   const workflowRef = options.workflowRef ?? `${repositoryOwner}/${repositoryName}/.github/workflows/acceptance.yml@refs/heads/main`;
+  const allowedWorkflows = options.allowedWorkflows ?? [workflowRef];
   f.sqlite.prepare(
     `INSERT INTO acceptance_github_installations(
        id, project_id, installation_id, repository_id, repository_owner, repository_name,
@@ -1113,7 +1529,7 @@ function installGitHubRepository(f: { sqlite: AcceptanceTeamTestFixture["sqlite"
     options.repositoryId ?? "123",
     repositoryOwner,
     repositoryName,
-    JSON.stringify([workflowRef]),
+    JSON.stringify(allowedWorkflows),
     owner.id,
   );
 }
@@ -1126,6 +1542,7 @@ async function insertGitHubWorkflowToken(f: { sqlite: AcceptanceTeamTestFixture[
   repositoryId?: string;
   repository?: string;
   workflowRef?: string;
+  jobWorkflowRef?: string | null;
   sha?: string;
   ref?: string;
   eventName?: string;
@@ -1136,7 +1553,7 @@ async function insertGitHubWorkflowToken(f: { sqlite: AcceptanceTeamTestFixture[
     `INSERT INTO acceptance_github_workflow_tokens(
        token_hash, actor_id, project_id, scopes_json, repository_id, repository, workflow_ref,
        job_workflow_ref, sha, ref, event_name, github_actor, expires_at, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, unixepoch() + 600, unixepoch())`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch() + 600, unixepoch())`,
   ).run(
     await sha256Hex(options.token),
     options.actorId ?? `github:${options.repositoryId ?? "123"}:${workflowRef}`,
@@ -1145,11 +1562,43 @@ async function insertGitHubWorkflowToken(f: { sqlite: AcceptanceTeamTestFixture[
     options.repositoryId ?? "123",
     repository,
     workflowRef,
+    options.jobWorkflowRef ?? null,
     options.sha ?? "a".repeat(40),
     options.ref ?? "refs/heads/main",
     options.eventName ?? "push",
     "octocat",
   );
+}
+
+async function insertGitHubPullProvenance(
+  f: { sqlite: AcceptanceTeamTestFixture["sqlite"] },
+  event: AcceptanceChangedEvent,
+  options: { headSha: string; mergeCommitSha?: string | null },
+): Promise<void> {
+  const repository = event.manifest.build.repository!;
+  f.sqlite.prepare(
+    `INSERT INTO acceptance_github_pr_provenance(
+       project_id, subject, gate, manifest_hash, repository_id, pull_number, build_commit_sha,
+       verified_head_sha, verified_merge_commit_sha, workflow_ref, job_workflow_ref, actor_id, verified_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 1)`,
+  ).run(
+    event.projectId,
+    event.subject,
+    event.gate,
+    event.manifestHash,
+    repository.id,
+    "12",
+    event.manifest.build.commit,
+    options.headSha,
+    options.mergeCommitSha ?? event.manifest.build.commit,
+    "nib/example/.github/workflows/acceptance.yml@refs/heads/main",
+    "github:123:nib/example/.github/workflows/acceptance.yml@refs/heads/main",
+  );
+  f.sqlite.prepare(
+    `INSERT INTO acceptance_github_pull_heads(repository_id, pull_number, head_sha, subject, updated_at)
+     VALUES (?, ?, ?, ?, 1)
+     ON CONFLICT(repository_id, pull_number) DO UPDATE SET head_sha = excluded.head_sha, subject = excluded.subject, updated_at = excluded.updated_at`,
+  ).run(repository.id, "12", options.headSha, event.subject);
 }
 
 class FakeD1 {

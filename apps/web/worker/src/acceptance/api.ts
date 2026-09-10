@@ -6,13 +6,14 @@ import {
   authenticateAutomation, getProjectAccess, getProjectSettings,
   handleTeamRoutes, listEligibleReviewers,
 } from "./teams";
-import { assertGithubPublication, authenticateGithubWorkflow, handleIntegrationRoutes, refreshGitHubChecksForReview } from "./integrations";
+import { assertGithubPublication, assertGithubVerification, authenticateGithubWorkflow, handleIntegrationRoutes, refreshGitHubChecksForReview } from "./integrations";
 import { acceptanceJwksResponse } from "./receipts";
 import { acceptancePage } from "./pages";
 import { evidenceResponse, uploadEvidence, validateStoredEvidence } from "./evidence";
 import { readProjectMetrics, recordAcceptanceMetric } from "./metrics";
 import { hasFreshProviderVerification, recordProviderVerification } from "./provider-verification";
 import { AcceptanceHttpError, acceptanceErrorResponse, acceptanceJson, assertSameOrigin, jsonBody, mutationKey } from "./http";
+import { acceptancePilotEnabled, assertPilotAccount, assertPilotProject, isPilotAccountAllowed } from "./pilot";
 
 const PREFIX = "/api/acceptance/v1";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -42,6 +43,9 @@ export async function handleAcceptanceRequest(request: Request, env: AcceptanceA
       return acceptanceJson({ satisfied: false, error: { code: "acceptance_disabled", message: "Acceptance is disabled. This gate cannot pass." } }, 503);
     }
     const account = await verifiedAccount(request, env) ?? null;
+    if (account) assertPilotAccount(env, account.id);
+    const requestedProject = url.pathname.match(/\/(?:api\/acceptance\/v1|acceptance)\/projects\/([^/]+)/)?.[1];
+    if (requestedProject) assertPilotProject(env, decodeURIComponent(requestedProject));
     if (page) return await handlePage(request, env, account);
     const mutating = !["GET", "HEAD", "OPTIONS"].includes(request.method);
     if (mutating) assertSameOrigin(request);
@@ -73,7 +77,7 @@ export async function handleAcceptanceRequest(request: Request, env: AcceptanceA
     const access = account ? await getProjectAccess(env.DB, projectId, account.id) : null;
     const settings = await getProjectSettings(env.DB, projectId);
     if (!settings) throw new AcceptanceHttpError(404, "project_not_found", "Project not found.");
-    const publicRead = !access && !automation && settings.publicRead && request.method === "GET" &&
+    const publicRead = !acceptancePilotEnabled(env) && !access && !automation && settings.publicRead && request.method === "GET" &&
       ((section === "reviews" && parts.length === 4) || (section === "evidence" && parts.length === 4));
     if (!account && !automation && !publicRead) throw new AcceptanceHttpError(401, "sign_in_required", "Sign in to access this review.");
     if (account && !access && !publicRead) throw new AcceptanceHttpError(403, "project_forbidden", "You do not have access to this project.");
@@ -104,7 +108,7 @@ export async function handleAcceptanceRequest(request: Request, env: AcceptanceA
       }
       throw new AcceptanceHttpError(405, "method_not_allowed", "Use POST to upload evidence or GET to read it.");
     }
-    const eligible = publicRead ? undefined : await listEligibleReviewers(env.DB, projectId);
+    const eligible = publicRead ? undefined : (await listEligibleReviewers(env.DB, projectId)).filter(id => isPilotAccountAllowed(env, id));
     if (section === "current" && request.method === "GET" && parts.length === 3) {
       requirePermission(canRead || canVerify);
       const subject = url.searchParams.get("subject");
@@ -128,7 +132,7 @@ export async function handleAcceptanceRequest(request: Request, env: AcceptanceA
         const body = await jsonBody(request);
         const manifest = validateAcceptanceManifest(body.manifest);
         if (manifest.projectId !== projectId) throw new AcceptanceHttpError(400, "project_mismatch", "The packet must identify this project.");
-        if (automation) assertGithubPublication(automation, manifest);
+        if (automation) await assertGithubPublication(env, automation, manifest);
         await validateStoredEvidence(manifest, env, projectId);
         const result = await coordinator.publish(manifest, {
           actorId, eligibleReviewers: eligible!,
@@ -174,7 +178,7 @@ export async function handleAcceptanceRequest(request: Request, env: AcceptanceA
       if (!result.satisfied) return acceptanceJson(result);
       const review = await coordinator.getReview(reviewId, eligible);
       if (!review) throw new AcceptanceHttpError(404, "review_not_found", "Review not found.");
-      if (automation) assertGithubPublication(automation, review.manifest);
+      if (automation) await assertGithubVerification(env, automation, review.manifest);
       if (body.deploymentVerification !== undefined) {
         await recordProviderVerification(env.DB, review, automation, body.deploymentVerification, key);
         await refreshGitHubChecksForReview(env, projectId, reviewId);
@@ -228,7 +232,7 @@ async function handlePage(request: Request, env: AcceptanceApiEnv, account: NibA
   const url = new URL(request.url);
   const match = url.pathname.match(/^\/acceptance\/projects\/([a-f0-9-]+)\/reviews\/([a-f0-9-]+)$/i);
   if (!account) {
-    if (match && UUID.test(match[1]!) && UUID.test(match[2]!)) {
+    if (!acceptancePilotEnabled(env) && match && UUID.test(match[1]!) && UUID.test(match[2]!)) {
       const settings = await getProjectSettings(env.DB, match[1]!);
       if (settings?.enabled && settings.publicRead) return acceptancePage(request) ?? new Response("Not found", { status: 404 });
     }

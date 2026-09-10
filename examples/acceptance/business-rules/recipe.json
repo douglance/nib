@@ -27,6 +27,22 @@
       "verification": "Attach queue assertion output from the isolated preview stack."
     }
   ],
+  "references": {
+    "pilotEmails": {
+      "businessRules": { "env": "NIB_ACCEPTANCE_PILOT_BUSINESS_RULES_EMAIL" }
+    },
+    "previewVars": [
+      { "name": "DEFAULT_PRICE_ID", "env": "NIB_ACCEPTANCE_PREVIEW_DEFAULT_PRICE_ID" },
+      { "name": "HIGH_PRICE_ID", "env": "NIB_ACCEPTANCE_PREVIEW_HIGH_PRICE_ID" },
+      { "name": "USAGE_PRICE_ID", "env": "NIB_ACCEPTANCE_PREVIEW_USAGE_PRICE_ID" }
+    ],
+    "previewSecrets": [
+      { "name": "AUTH_RATE_LIMIT_SECRET", "env": "NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET" },
+      { "name": "TRIAL_NETWORK_SECRET", "env": "NIB_ACCEPTANCE_PREVIEW_TRIAL_NETWORK_SECRET" },
+      { "name": "STRIPE_SECRET_KEY", "env": "NIB_ACCEPTANCE_PREVIEW_STRIPE_SECRET_KEY" },
+      { "name": "ACCEPTANCE_SIGNING_JWK", "env": "NIB_ACCEPTANCE_PREVIEW_ACCEPTANCE_SIGNING_JWK" }
+    ]
+  },
   "cloudflare": {
     "wranglerPackage": "apps/web",
     "components": [
