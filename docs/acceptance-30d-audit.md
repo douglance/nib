@@ -22,7 +22,7 @@ Do not mark this audit complete until each requirement below has live evidence.
 
 ## Evidence boundary
 
-Source and local validation support implementation readiness; the [staged deployment record](acceptance-deployment-20260909.md) adds production Worker versions, migrations, Queues, keys, and live smoke checks. The validation record is [Acceptance v1 validation](acceptance-validation.md), including local Worker tests, GitHub Action tests, Cloudflare adapter tests, Rust checks, and browser flow evidence. That evidence does not prove GitHub App registration, hosted example publication, real email or APNs delivery, or independent pilot success.
+Source and local validation support implementation readiness; the [September 9 deployment record](acceptance-deployment-20260909.md) and [September 10 pilot safeguards deployment](acceptance-deployment-20260910.md) add production Worker versions, migrations, Queues, keys, and live smoke checks. The validation record is [Acceptance v1 validation](acceptance-validation.md), including local Worker tests, GitHub Action tests, Cloudflare adapter tests, Rust checks, and browser flow evidence. That evidence does not prove GitHub App registration, hosted example publication, real email or APNs delivery, or independent pilot success.
 
 The checked-in `apps/web/wrangler.jsonc` keeps `ACCEPTANCE_ENABLED = "false"`. A disabled global flag means production acceptance gates fail closed until the live rollout steps in [Acceptance Operations](acceptance-operations.md) are completed and verified.
 
@@ -52,6 +52,7 @@ Use this protocol to prove the requirement that new users can review without hel
 ## Open blockers
 
 - GitHub and Cloudflare access now work through apoc profile `lv`; both Nib workspace paths are mapped.
-- GitHub App registration remains incomplete; apoc has no connected browser bridge for that registration flow.
+- GitHub App registration remains incomplete. A tested loopback manifest helper is ready; native browser accessibility became unavailable before registration completed.
+- Pilot owner authentication did not complete before the email challenge expired. The Mac build reached code signing, then failed with unavailable keychain interaction. CI preview secrets and Stripe test prices still require configuration.
 - Hosted previews, actual notification delivery, GitHub checks/webhook consumption, and the unaided-team pilot still need live evidence.
-- Implementation is recorded in `11a1d59`, with repository revocation in `6761d2b`, preview migration and privacy fixes in `2426c52`, and launch documentation in `78fbb31`. Commit `4507426` is pushed and staged in production; see the deployment record for exact versions and the disabled feature flag.
+- Public Worker source `dae0026` is pushed and deployed with acceptance disabled. It adds restricted pilot access, PR provenance and live-head enforcement, preview secret bootstrap, and the registration helper. The review Worker retains source `4507426`; see the deployment records for exact versions.

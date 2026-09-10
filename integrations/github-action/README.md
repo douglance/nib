@@ -80,6 +80,8 @@ Run `mode: publish` from an allowed linked workflow. The Action exchanges GitHub
 
 For manifests with `build.provider: "cloudflare"`, publish mode also verifies the live Cloudflare Worker version and preview URL against the local Cloudflare state file before it publishes. Provide `cloudflare-state-path` and either Cloudflare inputs or the matching environment variables:
 
+Publish idempotency includes the canonical manifest hash, so same-run matrices may publish multiple manifests to the same project without colliding.
+
 ```yaml
 - uses: ./integrations/github-action
   id: acceptance-publish
@@ -97,6 +99,8 @@ For manifests with `build.provider: "cloudflare"`, publish mode also verifies th
 
 Run `mode: verify` after reviewers approve the current review. Verify mode checks that `manifest-path` hashes to `manifest-hash` and that `manifest.build.commit` matches `commit` or `GITHUB_SHA`. It then calls `/api/acceptance/v1/projects/:projectId/reviews/:reviewId/verify` and fails the workflow unless the response is satisfied and includes a receipt.
 
+By default, verify mode checks once and fails immediately when the review is still pending. Set `wait-timeout-seconds` to a positive integer to wait only while the API response state is `pending`; the Action polls every 15 seconds until approval, timeout, a terminal non-approved state, or a request error. Each poll refreshes GitHub OIDC, exchanges a new short-lived workflow token, and uses idempotency keyed by the OIDC token hash. For Cloudflare manifests, every poll probes the live Worker version and preview URL before calling `/verify`, so the final approved verification carries a fresh provider attestation.
+
 ```yaml
 - uses: actions/checkout@v4
 - uses: ./integrations/github-action
@@ -108,6 +112,7 @@ Run `mode: verify` after reviewers approve the current review. Verify mode check
     manifest-hash: ${{ needs.publish.outputs.manifest-hash }}
     manifest-path: .nib/acceptance/manifest.json
     commit: ${{ github.sha }}
+    wait-timeout-seconds: 1800
 ```
 
 For Cloudflare manifests, verify mode runs the same live provider check before the acceptance API call and sends `deploymentVerification` with `manifestHash`, `commit`, and `verifiedAt`. The server accepts that provider attestation only from project automation with `verify` scope and only while it is fresh.
@@ -145,6 +150,7 @@ For Cloudflare manifests, verify mode runs the same live provider check before t
 | `review-id` | `verify` | Yes | None | Review ID to verify. |
 | `manifest-hash` | `verify` | Yes | None | Expected canonical SHA-256 of `manifest-path`. |
 | `commit` | `verify` | No | `GITHUB_SHA` | Expected commit SHA. |
+| `wait-timeout-seconds` | `verify` | No | `0` | Seconds to wait while the review remains pending. |
 | `cloudflare-state-path` | Cloudflare `publish`, Cloudflare `verify` | Yes for Cloudflare manifests | None | Path to the Cloudflare preview state JSON. |
 | `cloudflare-account-id` | Cloudflare `publish`, Cloudflare `verify` | No | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID for live provider checks. |
 | `cloudflare-api-token` | Cloudflare `publish`, Cloudflare `verify` | No | `CLOUDFLARE_API_TOKEN` | Cloudflare API token for live provider checks. |
@@ -168,4 +174,4 @@ The Action fails before contacting the acceptance API when required inputs are m
 
 Cloudflare publish and verify fail before acceptance publication or verification when the Cloudflare state file is missing, the state digest does not match its contents, the manifest hash differs from the state file, the live Worker version differs from the manifest, or the live preview URL differs from the manifest.
 
-Verify mode fails the workflow when the acceptance API returns `satisfied: false`, when the API reports a mismatched manifest hash, or when a satisfied response omits a receipt.
+Verify mode fails the workflow when the acceptance API returns `satisfied: false` outside the bounded pending wait, when pending lasts longer than `wait-timeout-seconds`, when the API reports a mismatched manifest hash, or when a satisfied response omits a receipt.

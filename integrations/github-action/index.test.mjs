@@ -104,7 +104,7 @@ test("publish uses GitHub action input env names, verifies Cloudflare state, and
   assert.equal(JSON.parse(exchange.init.body).projectId, projectId);
   const publish = calls.find((call) => call.url === `https://nib.test/api/acceptance/v1/projects/${projectId}/reviews`);
   assert.equal(publish.init.headers.authorization, "Bearer workflow-token");
-  assert.match(publish.init.headers["idempotency-key"], /^run-1:1:publish:/);
+  assert.ok(publish.init.headers["idempotency-key"].endsWith(`:manifest:${hash}`));
   assert.deepEqual(JSON.parse(publish.init.body).manifest, manifest);
   const outputs = parseOutputs(await readFile(outputPath, "utf8"));
   assert.equal(outputs.receipt, "header.payload.signature");
@@ -139,6 +139,299 @@ test("verify requires the manifest, posts the expected hash, and fails a false a
 
   const verify = calls.find((call) => call.url.endsWith("/reviews/review-1/verify"));
   assert.deepEqual(JSON.parse(verify.init.body), { manifestHash: hash, commit: manifest.build.commit });
+});
+
+test("verify keeps pending reviews immediate by default", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nib-action-"));
+  const manifest = externalManifest();
+  const manifestPath = path.join(root, "manifest.json");
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const hash = manifestSha256(manifest);
+  const calls = [];
+  const sleeps = [];
+
+  await assert.rejects(
+    run({
+      env: actionEnv({
+        "INPUT_MODE": "verify",
+        "INPUT_PROJECT-ID": projectId,
+        "INPUT_API-ORIGIN": "https://nib.test",
+        "INPUT_REVIEW-ID": "review-1",
+        "INPUT_MANIFEST-HASH": hash,
+        "INPUT_MANIFEST-PATH": manifestPath,
+        "GITHUB_SHA": manifest.build.commit,
+      }),
+      fetch: fetchRecorder(calls, {
+        verify: { reviewId: "review-1", manifestHash: hash, state: "pending", satisfied: false, reason: "pending", receipt: null },
+      }),
+      sleep: async (ms) => sleeps.push(ms),
+    }),
+    /pending/,
+  );
+
+  assert.equal(calls.filter((call) => call.url.endsWith("/reviews/review-1/verify")).length, 1);
+  assert.deepEqual(sleeps, []);
+});
+
+test("verify waits only while pending and bounds polls with monotonic time", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nib-action-"));
+  const manifest = externalManifest();
+  const manifestPath = path.join(root, "manifest.json");
+  const outputPath = path.join(root, "output.txt");
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const hash = manifestSha256(manifest);
+  const calls = [];
+  const sleeps = [];
+  let now = 0;
+
+  await run({
+    env: actionEnv({
+      "INPUT_MODE": "verify",
+      "INPUT_PROJECT-ID": projectId,
+      "INPUT_API-ORIGIN": "https://nib.test",
+      "INPUT_REVIEW-ID": "review-1",
+      "INPUT_MANIFEST-HASH": hash,
+      "INPUT_MANIFEST-PATH": manifestPath,
+      "INPUT_WAIT-TIMEOUT-SECONDS": "30",
+      "GITHUB_SHA": manifest.build.commit,
+      "GITHUB_OUTPUT": outputPath,
+    }),
+    fetch: fetchRecorder(calls, {
+      verify: [
+        { reviewId: "review-1", manifestHash: hash, state: "pending", satisfied: false, reason: "pending", receipt: null },
+        { reviewId: "review-1", manifestHash: hash, state: "approved", satisfied: true, receipt: "header.payload.signature" },
+      ],
+    }),
+    now: () => now,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+  });
+
+  assert.deepEqual(sleeps, [15_000]);
+  assert.equal(calls.filter((call) => call.url.endsWith("/reviews/review-1/verify")).length, 2);
+  assert.ok(calls.filter((call) => call.url.endsWith("/reviews/review-1/verify")).every((call) => call.init.signal));
+  const outputs = parseOutputs(await readFile(outputPath, "utf8"));
+  assert.equal(outputs.state, "approved");
+  assert.equal(outputs.satisfied, "true");
+});
+
+test("verify positive wait uses the default native timeout signal without fractional RangeError", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nib-action-"));
+  const manifest = externalManifest();
+  const manifestPath = path.join(root, "manifest.json");
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const hash = manifestSha256(manifest);
+  const calls = [];
+
+  await run({
+    env: actionEnv({
+      "INPUT_MODE": "verify",
+      "INPUT_PROJECT-ID": projectId,
+      "INPUT_API-ORIGIN": "https://nib.test",
+      "INPUT_REVIEW-ID": "review-1",
+      "INPUT_MANIFEST-HASH": hash,
+      "INPUT_MANIFEST-PATH": manifestPath,
+      "INPUT_WAIT-TIMEOUT-SECONDS": "1",
+      "GITHUB_SHA": manifest.build.commit,
+    }),
+    fetch: fetchRecorder(calls, {
+      verify: { reviewId: "review-1", manifestHash: hash, state: "approved", satisfied: true, receipt: "header.payload.signature" },
+    }),
+  });
+
+  assert.ok(calls.find((call) => call.url.endsWith("/reviews/review-1/verify")).init.signal);
+});
+
+test("verify rejects wait timeouts that cannot be represented safely in milliseconds", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nib-action-"));
+  const manifest = externalManifest();
+  const manifestPath = path.join(root, "manifest.json");
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const hash = manifestSha256(manifest);
+
+  await assert.rejects(
+    run({
+      env: actionEnv({
+        "INPUT_MODE": "verify",
+        "INPUT_PROJECT-ID": projectId,
+        "INPUT_API-ORIGIN": "https://nib.test",
+        "INPUT_REVIEW-ID": "review-1",
+        "INPUT_MANIFEST-HASH": hash,
+        "INPUT_MANIFEST-PATH": manifestPath,
+        "INPUT_WAIT-TIMEOUT-SECONDS": `${Number.MAX_SAFE_INTEGER}`,
+        "GITHUB_SHA": manifest.build.commit,
+      }),
+      fetch: fetchRecorder([], {
+        verify: { reviewId: "review-1", manifestHash: hash, state: "approved", satisfied: true, receipt: "header.payload.signature" },
+      }),
+    }),
+    /non-negative safe integer/,
+  );
+});
+
+test("verify times out pending reviews without another request past the monotonic deadline", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nib-action-"));
+  const manifest = externalManifest();
+  const manifestPath = path.join(root, "manifest.json");
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const hash = manifestSha256(manifest);
+  const calls = [];
+  const sleeps = [];
+  let now = 0;
+
+  await assert.rejects(
+    run({
+      env: actionEnv({
+        "INPUT_MODE": "verify",
+        "INPUT_PROJECT-ID": projectId,
+        "INPUT_API-ORIGIN": "https://nib.test",
+        "INPUT_REVIEW-ID": "review-1",
+        "INPUT_MANIFEST-HASH": hash,
+        "INPUT_MANIFEST-PATH": manifestPath,
+        "INPUT_WAIT-TIMEOUT-SECONDS": "16",
+        "GITHUB_SHA": manifest.build.commit,
+      }),
+      fetch: fetchRecorder(calls, {
+        verify: [
+          { reviewId: "review-1", manifestHash: hash, state: "pending", satisfied: false, reason: "pending", receipt: null },
+          { reviewId: "review-1", manifestHash: hash, state: "pending", satisfied: false, reason: "pending", receipt: null },
+          { reviewId: "review-1", manifestHash: hash, state: "approved", satisfied: true, receipt: "header.payload.signature" },
+        ],
+      }),
+      now: () => now,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        now += ms;
+      },
+    }),
+    /still pending after 16 seconds/,
+  );
+
+  assert.deepEqual(sleeps, [15_000, 1_000]);
+  assert.equal(calls.filter((call) => call.url.endsWith("/reviews/review-1/verify")).length, 2);
+});
+
+test("verify refreshes OIDC during waits and changes workflow token idempotency keys", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nib-action-"));
+  const manifest = externalManifest();
+  const manifestPath = path.join(root, "manifest.json");
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const hash = manifestSha256(manifest);
+  const calls = [];
+  let now = 0;
+
+  await run({
+    env: actionEnv({
+      "INPUT_MODE": "verify",
+      "INPUT_PROJECT-ID": projectId,
+      "INPUT_API-ORIGIN": "https://nib.test",
+      "INPUT_REVIEW-ID": "review-1",
+      "INPUT_MANIFEST-HASH": hash,
+      "INPUT_MANIFEST-PATH": manifestPath,
+      "INPUT_WAIT-TIMEOUT-SECONDS": "30",
+      "GITHUB_SHA": manifest.build.commit,
+    }),
+    fetch: fetchRecorder(calls, {
+      oidc: ["oidc-token-1", "oidc-token-2"],
+      token: ["workflow-token-1", "workflow-token-2"],
+      verify: [
+        { reviewId: "review-1", manifestHash: hash, state: "pending", satisfied: false, reason: "pending", receipt: null },
+        { reviewId: "review-1", manifestHash: hash, state: "approved", satisfied: true, receipt: "header.payload.signature" },
+      ],
+    }),
+    now: () => now,
+    sleep: async (ms) => { now += ms; },
+  });
+
+  const exchanges = calls.filter((call) => call.url.endsWith("/api/acceptance/v1/github/token"));
+  assert.equal(exchanges.length, 2);
+  assert.notEqual(exchanges[0].init.headers["idempotency-key"], exchanges[1].init.headers["idempotency-key"]);
+  assert.deepEqual(exchanges.map((call) => JSON.parse(call.init.body).oidcToken), ["oidc-token-1", "oidc-token-2"]);
+  assert.deepEqual(
+    calls.filter((call) => call.url.endsWith("/reviews/review-1/verify")).map((call) => call.init.headers.authorization),
+    ["Bearer workflow-token-1", "Bearer workflow-token-2"],
+  );
+});
+
+test("verify refreshes Cloudflare attestation on the final approved poll", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nib-action-"));
+  const manifest = cloudflareManifest();
+  const state = cloudflareState(manifest);
+  const manifestPath = path.join(root, "manifest.json");
+  const statePath = path.join(root, "state.json");
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  await writeFile(statePath, JSON.stringify(state));
+  const hash = manifestSha256(manifest);
+  const calls = [];
+  let now = 0;
+  let providerChecks = 0;
+
+  await run({
+    env: actionEnv({
+      "INPUT_MODE": "verify",
+      "INPUT_PROJECT-ID": projectId,
+      "INPUT_API-ORIGIN": "https://nib.test",
+      "INPUT_REVIEW-ID": "review-1",
+      "INPUT_MANIFEST-HASH": hash,
+      "INPUT_MANIFEST-PATH": manifestPath,
+      "INPUT_CLOUDFLARE-STATE-PATH": statePath,
+      "INPUT_WAIT-TIMEOUT-SECONDS": "30",
+      "GITHUB_SHA": manifest.build.commit,
+    }),
+    fetch: fetchRecorder(calls, {
+      verify: [
+        { reviewId: "review-1", manifestHash: hash, state: "pending", satisfied: false, reason: "pending", receipt: null },
+        { reviewId: "review-1", manifestHash: hash, state: "approved", satisfied: true, receipt: "header.payload.signature" },
+      ],
+    }),
+    cloudflareApi: {
+      async getLatestDeployment() {
+        providerChecks += 1;
+        return { versions: [{ version_id: manifest.build.deployment.components[0].versionId, percentage: 100 }] };
+      },
+      async getWorkerVersion() { return { id: manifest.build.deployment.components[0].versionId }; },
+      async getWorkerPreviewUrl() { return manifest.build.previewUrl; },
+    },
+    now: () => now,
+    sleep: async (ms) => { now += ms; },
+  });
+
+  assert.equal(providerChecks, 2);
+  assert.ok(JSON.parse(calls.filter((call) => call.url.endsWith("/reviews/review-1/verify")).at(-1).init.body).deploymentVerification);
+});
+
+test("verify console fallback redacts a satisfied receipt", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "nib-action-"));
+  const manifest = externalManifest();
+  const manifestPath = path.join(root, "manifest.json");
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  const hash = manifestSha256(manifest);
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (line) => logs.push(line);
+  try {
+    await run({
+      env: actionEnv({
+        "INPUT_MODE": "verify",
+        "INPUT_PROJECT-ID": projectId,
+        "INPUT_API-ORIGIN": "https://nib.test",
+        "INPUT_REVIEW-ID": "review-1",
+        "INPUT_MANIFEST-HASH": hash,
+        "INPUT_MANIFEST-PATH": manifestPath,
+        "GITHUB_SHA": manifest.build.commit,
+      }),
+      fetch: fetchRecorder([], {
+        verify: { reviewId: "review-1", manifestHash: hash, state: "approved", satisfied: true, receipt: "header.payload.signature" },
+      }),
+    });
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(logs.includes("receipt=header.payload.signature"), false);
+  assert.ok(logs.includes("receipt=[redacted]"));
 });
 
 test("verify cannot pass a satisfied acceptance response when Cloudflare verification fails", async () => {
@@ -247,17 +540,20 @@ function actionEnv(extra = {}) {
 }
 
 function fetchRecorder(calls, responses) {
+  const oidc = Array.isArray(responses.oidc) ? [...responses.oidc] : null;
+  const token = Array.isArray(responses.token) ? [...responses.token] : null;
+  const verify = Array.isArray(responses.verify) ? [...responses.verify] : null;
   return async (input, init = {}) => {
     const url = String(input);
     calls.push({ url, init });
     if (url.startsWith("https://actions.example/id-token")) {
       assert.equal(new URL(url).searchParams.get("audience"), "nib.acceptance/v1");
       assert.equal(init.headers.authorization, "Bearer request-token");
-      return jsonResponse({ value: "oidc-token" });
+      return jsonResponse({ value: oidc?.shift() ?? "oidc-token" });
     }
-    if (url.endsWith("/api/acceptance/v1/github/token")) return jsonResponse({ access_token: "workflow-token" });
+    if (url.endsWith("/api/acceptance/v1/github/token")) return jsonResponse({ access_token: token?.shift() ?? "workflow-token" });
     if (url.endsWith("/integrations/github")) return jsonResponse(responses.link);
-    if (url.endsWith("/verify")) return jsonResponse(responses.verify);
+    if (url.endsWith("/verify")) return jsonResponse(verify?.shift() ?? responses.verify);
     return jsonResponse(responses.publish);
   };
 }

@@ -2,6 +2,28 @@
 
 Implementation validation for `feat/acceptance-v1`, September 9, 2026. The implementation is isolated in the `nib-acceptance-v1` worktree; the original `nib` checkout remains on `merge/visualize`.
 
+## September 10 pilot update
+
+Pilot safeguards and preview bootstrap changes are committed in `dae0026`. Current focused evidence supplements the broader September 9 results below.
+
+| Area | Result | Durable execution |
+| --- | --- | --- |
+| Web Worker suite | 32 files, 238 tests passed | `01a08924-892f-7c10-8e9a-4e3f76cd9933` |
+| Web TypeScript | Passed | `01a08924-89b5-70d1-9670-1af52988ce1b` |
+| Independent pilot security review | No unresolved findings in the disabled-deployment scope; 84 focused tests passed | `01a08925-dd64-7d00-87da-3b5d9ed0f8ae` |
+| Modified preview integrations and examples | 43 tests passed | `01a08927-4832-7f31-89c7-51aab94667ab` |
+| Preview secret preflight, preparation, and three local application flows | Passed | `01a08924-6c77-7dd1-9cc0-0dc55d269d80` |
+| GitHub Action bounded wait | 15 tests passed | `01a08938-3f05-7be3-9344-95a39564cc8d` |
+| Final Action, App registration, Cloudflare, preparation, and seed regression suite | 54 tests passed | `01a0893a-b0c0-7641-8f90-7b2f1e5cf6e2` |
+| Prebuilt artifact contract | All three synthetic plans passed | `01a08941-8554-7013-af53-7ed67b3c8ac8` |
+| Actual Worker bundle handoff | Built all three components; all nine generated example/component configs passed Wrangler dry run, with site WebAssembly preserved | `01a08942-b6e7-79d0-9df5-803a765bb1d3` |
+| Local Wrangler migrations | All 20 applied | `01a08927-1264-7de0-b03c-b41fd11e05a0` |
+| Signed Mac build | Reached signing; failed with `errSecInternalComponent` and unavailable keychain interaction | `01a0890a-d340-7ab1-81cc-a1af3d7a6ba5` |
+
+The pilot checks cover account/project restrictions, team mutations that would affect projects outside the allowlist, filtering queued deliveries before the batch limit, live PR-head verification, fork rejection, and separate PR-head/build-commit provenance. Preview tests cover secret validation before resource creation and pilot email/SQL escaping. The Action wait refreshes OIDC and Cloudflare verification on each poll. These checks do not establish a live GitHub workflow run or a hosted human review.
+
+The pilot workflow templates also passed an independent review of same-repository PR restrictions, trusted source pins, OIDC commit binding, and secret isolation. Local bundle validation uses the actual emitted entries (`shim.js` for the site and `index.js` for the other Workers), checks migration directories, and runs Wrangler with `no_bundle` against generated preview configs. It creates no Cloudflare resources.
+
 ## Executable evidence
 
 | Area | Result | Durable execution |
@@ -56,6 +78,6 @@ The acceptance Worker and adapter checks are included in `.github/workflows/ci.y
 
 ## Deployment boundary
 
-The [staged production deployment](acceptance-deployment-20260909.md) succeeded through apoc's `lv` profile after correcting workspace profile selection. The public and review Workers run source commit `4507426`; production migrations, Queues, and receipt keys are installed. Live health, JWKS, authentication boundaries, and disabled-gate behavior passed. Existing APNs secret bindings were retained.
+The [September 9 staged deployment](acceptance-deployment-20260909.md) succeeded through apoc's `lv` profile after correcting workspace profile selection. The [September 10 pilot safeguards deployment](acceptance-deployment-20260910.md) updated the public Worker to source `dae0026` and applied migration `0020`; the review Worker retains source `4507426`. Production Queues and receipt keys are installed. Live health, JWKS, and disabled-gate behavior passed. Existing secret bindings were retained.
 
 `ACCEPTANCE_ENABLED` remains `false`. The launch still requires GitHub App configuration, real isolated previews and notification delivery, and the multi-account pilot described in [Acceptance Operations](acceptance-operations.md). The [day-30 audit](acceptance-30d-audit.md) keeps three hosted examples and an unaided new-team review unverified.

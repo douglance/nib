@@ -41,6 +41,9 @@ inputs:
   commit:
     description: Expected commit SHA for verify mode.
     required: false
+  wait-timeout-seconds:
+    description: Seconds verify mode may wait for a pending review before failing. Defaults to 0 for immediate verification.
+    required: false
   cloudflare-state-path:
     description: Path to the Cloudflare preview state JSON for Cloudflare provider manifests.
     required: false

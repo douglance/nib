@@ -15,7 +15,7 @@ The App does not request repository-content write access, organization administr
 1. Deploy the configured webhook receiver with acceptance still disabled. Confirm the production hostname and replace the URLs in `manifest.json` if hosting elsewhere.
 2. Register the App in the intended GitHub account using this configuration. The local helper below serves a review page, adds a one-time loopback `redirect_url`, sends an unguessable `state`, and exchanges GitHub's temporary `code` after GitHub redirects back. Alternatively, enter the same fields in GitHub's App settings form.
 3. Store the generated App ID, private key, and webhook secret as `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, and `GITHUB_WEBHOOK_SECRET` on the public Worker. Keep credential values out of repository files and terminal output.
-4. Complete the [deployment preflight](../../docs/acceptance-operations.md), enable acceptance, and create the pilot team and project. Install the App on the selected pilot repository. Run the [Action's link mode](../github-action/README.md) from its default branch to establish the Nib project association.
+4. Complete the [deployment preflight and restricted pilot setup](../../docs/acceptance-operations.md), enable acceptance under the pilot allowlists, and create the pilot team and project. Install the App on the selected pilot repository. Run the [Action's link mode](../github-action/README.md) from its default branch to establish the Nib project association.
 5. Verify a real webhook delivery, pending check, accepted check, and a later revision that blocks reuse. Record the App slug, installation ID, repository ID, deployed revision, and evidence in the day-30 audit before treating registration as shipped.
 
 GitHub documents the [manifest registration handshake](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest) and the [check-run permission requirements](https://docs.github.com/en/rest/checks/runs). A registration configuration alone does not complete that handshake.
@@ -46,3 +46,7 @@ apoc execution start node \
 The helper binds only to loopback hosts and prints the assigned local review URL and callback URL after it binds, for example `http://127.0.0.1:<port>/` and `http://127.0.0.1:<port>/callback`. Open the review URL, inspect the concrete manifest, and submit the form only when ready to create the App in GitHub. The form posts to `https://github.com/settings/apps/new` with the checked-in manifest plus the loopback `redirect_url`.
 
 After GitHub redirects back, the helper validates `state`, exchanges the temporary `code` with GitHub's manifest conversion endpoint, and writes only the App ID, webhook secret, and PEM to a private `0600` JSON file under `integrations/github-app/.tmp/`. The browser response and terminal completion output contain only the App ID, App URL, and credential file path.
+
+### Pilot workflows
+
+The [Nib pilot workflow templates](workflows/README.md) provide default-branch linking and a pinned reusable workflow for the three Nib examples. They separate PR builds from preview credentials and wait for human approval before verifying each gate. These are templates to configure and install; their presence does not establish an executed GitHub workflow.

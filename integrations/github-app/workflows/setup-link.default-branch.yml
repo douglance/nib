@@ -1,0 +1,44 @@
+name: Link Nib acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  link:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out application source
+        uses: actions/checkout@v4
+
+      - name: Check out reviewed Nib Action source
+        uses: actions/checkout@v4
+        with:
+          repository: douglance/nib
+          ref: ${{ vars.NIB_ACCEPTANCE_ACTION_SHA }}
+          path: .nib/nib
+          persist-credentials: false
+
+      - name: Link repository
+        uses: ./.nib/nib/integrations/github-action
+        with:
+          mode: link
+          api-origin: ${{ vars.NIB_API_ORIGIN || 'https://nibtool.com' }}
+          project-id: ${{ vars.NIB_PROJECT_ID }}
+          setup-token: ${{ secrets.NIB_ACCEPTANCE_SETUP_TOKEN }}
+          installation-id: ${{ vars.NIB_GITHUB_INSTALLATION_ID }}
+          repository-id: ${{ github.repository_id }}
+          repository: ${{ github.repository }}
+          allowed-workflows: |
+            ${{ github.workflow_ref }}
+            owner/application-repository/.github/workflows/nib-acceptance-pilot.reusable.yml@0123456789abcdef0123456789abcdef01234567
+          gates: |
+            pilot-onboarding
+            pilot-business-rules
+            pilot-permissions

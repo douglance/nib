@@ -1,0 +1,15 @@
+name: Nib acceptance pilot
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  acceptance:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: owner/application-repository/.github/workflows/nib-acceptance-pilot.reusable.yml@0123456789abcdef0123456789abcdef01234567

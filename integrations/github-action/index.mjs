@@ -7,14 +7,16 @@ import { LiveCloudflareApi, verifyCloudflareManifest } from "../cloudflare/src/c
 export async function run(options = {}) {
   const env = options.env ?? process.env;
   const fetchImpl = options.fetch ?? fetch;
+  const now = options.now ?? (() => performance.now());
+  const sleep = options.sleep ?? sleepMs;
+  const timeoutSignal = options.timeoutSignal ?? requestTimeoutSignal;
   const getInput = (name, required = false) => input(env, name, required);
   const mode = getInput("mode", true);
   const projectId = getInput("project-id", true);
   const apiOrigin = getInput("api-origin") || "https://nibtool.com";
 
-  const oidcToken = await githubOidcToken(env, fetchImpl, "nib.acceptance/v1");
-
   if (mode === "link") {
+    const oidcToken = await githubOidcToken(env, fetchImpl, "nib.acceptance/v1");
     const setupToken = getInput("setup-token", true);
     const installationId = getInput("installation-id", true);
     const repositoryId = getInput("repository-id") || env.GITHUB_REPOSITORY_ID;
@@ -32,28 +34,32 @@ export async function run(options = {}) {
       allowedWorkflows,
       gates,
       ownershipOidcToken: oidcToken,
-    }, setupToken, undefined, "PUT");
+    }, setupToken, oidcIdempotencySuffix(oidcToken), "PUT");
     writeOutput(env, "repository-id", response.installation?.repository?.id || repositoryId);
     writeOutput(env, "repository", `${response.installation?.repository?.owner || owner}/${response.installation?.repository?.name || name}`);
     writeOutput(env, "state", response.installation?.enabled === false ? "disabled" : "linked");
     return;
   }
 
-  const exchanged = await postJson(env, fetchImpl, mode, `${apiOrigin}/api/acceptance/v1/github/token`, {
-    oidcToken,
-    projectId,
-    mode,
-  });
-  const accessToken = requiredString(exchanged.access_token, "OIDC exchange did not return access_token.");
+  const exchangeWorkflowToken = async (requestSignal) => {
+    const freshOidcToken = await githubOidcToken(env, fetchImpl, "nib.acceptance/v1", requestSignal);
+    const exchanged = await postJson(env, fetchImpl, mode, `${apiOrigin}/api/acceptance/v1/github/token`, {
+      oidcToken: freshOidcToken,
+      projectId,
+      mode,
+    }, undefined, oidcIdempotencySuffix(freshOidcToken), undefined, requestSignal);
+    return requiredString(exchanged.access_token, "OIDC exchange did not return access_token.");
+  };
 
   if (mode === "publish") {
+    const accessToken = await exchangeWorkflowToken();
     const manifestPath = getInput("manifest-path", true);
     const manifest = await readJson(manifestPath);
     const expectedManifestHash = manifestSha256(manifest);
     await verifyCloudflareManifestIfRequired(env, fetchImpl, getInput, manifest, options.cloudflareApi);
     const response = await postJson(env, fetchImpl, mode, `${apiOrigin}/api/acceptance/v1/projects/${encodeURIComponent(projectId)}/reviews`, {
       manifest,
-    }, accessToken);
+    }, accessToken, `manifest:${expectedManifestHash}`);
     if (response.manifestHash !== expectedManifestHash) {
       throw new Error("Published manifest hash did not match the local manifest.");
     }
@@ -76,30 +82,46 @@ export async function run(options = {}) {
     if (manifest?.build?.commit !== commit) {
       throw new Error("Expected commit does not match manifest build commit.");
     }
-    const deploymentVerification = await verifyCloudflareManifestIfRequired(env, fetchImpl, getInput, manifest, options.cloudflareApi);
-    const response = await postJson(
-      env,
-      fetchImpl,
-      mode,
-      `${apiOrigin}/api/acceptance/v1/projects/${encodeURIComponent(projectId)}/reviews/${encodeURIComponent(reviewId)}/verify`,
-      { manifestHash, commit, ...(deploymentVerification ? { deploymentVerification } : {}) },
-      accessToken,
-      deploymentVerification?.verifiedAt,
-    );
-    if (response.manifestHash && response.manifestHash !== manifestHash) {
-      throw new Error("Verify response manifest hash did not match the expected manifest-hash.");
-    }
-    if (response.satisfied && typeof response.receipt !== "string") {
-      throw new Error("Satisfied acceptance verification did not include a receipt.");
-    }
-    writeOutput(env, "review-id", response.reviewId || reviewId);
-    writeOutput(env, "review-url", `${apiOrigin}/acceptance/projects/${projectId}/reviews/${response.reviewId || reviewId}`);
-    writeOutput(env, "manifest-hash", response.manifestHash || manifestHash);
-    writeOutput(env, "state", response.state);
-    writeOutput(env, "satisfied", response.satisfied ? "true" : "false");
-    writeOutput(env, "receipt", receiptOutput(response.receipt));
-    if (!response.satisfied) {
-      throw new Error(response.reason || `Acceptance gate is ${response.state || "not satisfied"}.`);
+    const waitTimeoutMs = waitTimeoutSeconds(getInput("wait-timeout-seconds")) * 1000;
+    const waitDeadline = waitTimeoutMs > 0 ? now() + waitTimeoutMs : null;
+    let lastResponse = null;
+    for (;;) {
+      const remainingMs = waitDeadline === null ? null : waitDeadline - now();
+      if (remainingMs !== null && remainingMs <= 0 && lastResponse?.state === "pending") {
+        writeVerifyOutputs(env, apiOrigin, projectId, reviewId, manifestHash, lastResponse);
+        throw new Error(`Acceptance gate is still pending after ${waitTimeoutMs / 1000} seconds.`);
+      }
+      const requestSignal = remainingMs === null ? undefined : timeoutSignal(Math.max(1, remainingMs));
+      const accessToken = await exchangeWorkflowToken(requestSignal);
+      const deploymentVerification = await verifyCloudflareManifestIfRequired(env, fetchImpl, getInput, manifest, options.cloudflareApi, requestSignal);
+      const response = await postJson(
+        env,
+        fetchImpl,
+        mode,
+        `${apiOrigin}/api/acceptance/v1/projects/${encodeURIComponent(projectId)}/reviews/${encodeURIComponent(reviewId)}/verify`,
+        { manifestHash, commit, ...(deploymentVerification ? { deploymentVerification } : {}) },
+        accessToken,
+        deploymentVerification?.verifiedAt,
+        undefined,
+        requestSignal,
+      );
+      lastResponse = response;
+      if (response.manifestHash && response.manifestHash !== manifestHash) {
+        throw new Error("Verify response manifest hash did not match the expected manifest-hash.");
+      }
+      if (response.satisfied && typeof response.receipt !== "string") {
+        throw new Error("Satisfied acceptance verification did not include a receipt.");
+      }
+      if (response.satisfied || response.state !== "pending" || waitDeadline === null) {
+        writeVerifyOutputs(env, apiOrigin, projectId, reviewId, manifestHash, response);
+        if (!response.satisfied) {
+          throw new Error(response.reason || `Acceptance gate is ${response.state || "not satisfied"}.`);
+        }
+        return;
+      }
+      const sleepForMs = Math.min(15_000, Math.max(0, waitDeadline - now()));
+      if (sleepForMs <= 0) continue;
+      await sleep(sleepForMs);
     }
   } else {
     throw new Error("mode must be link, publish, or verify.");
@@ -110,7 +132,7 @@ async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
-async function githubOidcToken(env, fetchImpl, audience) {
+async function githubOidcToken(env, fetchImpl, audience, signal) {
   const requestUrl = env.ACTIONS_ID_TOKEN_REQUEST_URL;
   const requestToken = env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
   if (!requestUrl || !requestToken) {
@@ -120,13 +142,14 @@ async function githubOidcToken(env, fetchImpl, audience) {
   url.searchParams.set("audience", audience);
   const response = await fetchImpl(url, {
     headers: { authorization: `Bearer ${requestToken}` },
+    signal,
   });
   if (!response.ok) throw new Error(`GitHub OIDC request failed (${response.status}).`);
   const body = await response.json();
   return requiredString(body.value, "GitHub OIDC response did not include value.");
 }
 
-async function postJson(env, fetchImpl, mode, url, body, token, idempotencySuffix, method = "POST") {
+async function postJson(env, fetchImpl, mode, url, body, token, idempotencySuffix, method = "POST", signal) {
   const headers = {
     accept: "application/json",
     "content-type": "application/json",
@@ -139,6 +162,7 @@ async function postJson(env, fetchImpl, mode, url, body, token, idempotencySuffi
     method,
     headers,
     body: JSON.stringify(body),
+    signal,
   });
   const text = await response.text();
   const json = text ? JSON.parse(text) : {};
@@ -147,6 +171,15 @@ async function postJson(env, fetchImpl, mode, url, body, token, idempotencySuffi
     throw new Error(message);
   }
   return json;
+}
+
+function writeVerifyOutputs(env, apiOrigin, projectId, reviewId, manifestHash, response) {
+  writeOutput(env, "review-id", response.reviewId || reviewId);
+  writeOutput(env, "review-url", `${apiOrigin}/acceptance/projects/${projectId}/reviews/${response.reviewId || reviewId}`);
+  writeOutput(env, "manifest-hash", response.manifestHash || manifestHash);
+  writeOutput(env, "state", response.state);
+  writeOutput(env, "satisfied", response.satisfied ? "true" : "false");
+  writeOutput(env, "receipt", receiptOutput(response.receipt));
 }
 
 function input(env, name, required = false) {
@@ -159,7 +192,7 @@ function writeOutput(env, name, value) {
   const output = env.GITHUB_OUTPUT;
   const normalized = value === undefined || value === null ? "" : String(value);
   if (!output) {
-    console.log(`${name}=${normalized}`);
+    console.log(`${name}=${name === "receipt" && normalized ? "[redacted]" : normalized}`);
     return;
   }
   appendFileSync(output, `${name}<<nib\n${normalized}\nnib\n`);
@@ -181,14 +214,15 @@ function listInput(value) {
   return items.length ? Array.from(new Set(items)) : null;
 }
 
-async function verifyCloudflareManifestIfRequired(env, fetchImpl, getInput, manifest, injectedApi) {
+async function verifyCloudflareManifestIfRequired(env, fetchImpl, getInput, manifest, injectedApi, signal) {
   if (manifest?.build?.provider !== "cloudflare") return null;
   const statePath = getInput("cloudflare-state-path", true);
   const state = await readJson(statePath);
+  const providerFetch = signal ? fetchWithSignal(fetchImpl, signal) : fetchImpl;
   const api = injectedApi ?? new LiveCloudflareApi({
     accountId: getInput("cloudflare-account-id") || env.CLOUDFLARE_ACCOUNT_ID,
     apiToken: getInput("cloudflare-api-token") || env.CLOUDFLARE_API_TOKEN,
-    fetchImpl,
+    fetchImpl: providerFetch,
   });
   const verification = await verifyCloudflareManifest(api, manifest, state);
   if (!verification.satisfied) {
@@ -205,6 +239,47 @@ function receiptOutput(receipt) {
   if (receipt === undefined || receipt === null) return "";
   if (typeof receipt !== "string") throw new Error("Acceptance receipt must be a compact JWS string.");
   return receipt;
+}
+
+function oidcIdempotencySuffix(oidcToken) {
+  return `oidc:${createHash("sha256").update(oidcToken).digest("hex").slice(0, 16)}`;
+}
+
+function waitTimeoutSeconds(value) {
+  if (!value) return 0;
+  if (!/^\d+$/.test(value)) throw new Error("Input wait-timeout-seconds must be a non-negative integer.");
+  const seconds = Number(value);
+  if (!Number.isSafeInteger(seconds) || seconds > Math.floor(Number.MAX_SAFE_INTEGER / 1000)) {
+    throw new Error("Input wait-timeout-seconds must be a non-negative safe integer.");
+  }
+  return seconds;
+}
+
+function requestTimeoutSignal(ms) {
+  const timeoutMs = Math.ceil(ms);
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
+    throw new Error("Request timeout must be a positive safe integer.");
+  }
+  if (typeof globalThis.AbortSignal?.timeout === "function") return globalThis.AbortSignal.timeout(timeoutMs);
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs).unref?.();
+  return controller.signal;
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function fetchWithSignal(fetchImpl, signal) {
+  return (input, init = {}) => fetchImpl(input, { ...init, signal: combineSignals(signal, init.signal) });
+}
+
+function combineSignals(primary, secondary) {
+  if (!secondary) return primary;
+  if (typeof globalThis.AbortSignal?.any === "function") return globalThis.AbortSignal.any([primary, secondary]);
+  if (primary.aborted) return primary;
+  if (secondary.aborted) return secondary;
+  return primary;
 }
 
 export function manifestSha256(manifest) {

@@ -86,6 +86,8 @@ https://nibtool.com/api/acceptance/v1/github/webhook
 
 Link from the repository's default branch with the Action's `link` mode, as described in [GitHub Action setup](../integrations/github-action/README.md). A project administrator must also provide a signed GitHub ownership proof; knowing an installation ID is insufficient to authorize a link.
 
+For the three internal Nib examples, configure the [pilot workflow templates](../integrations/github-app/workflows/README.md). They build the PR merge commit without preview secrets and deploy its prebuilt artifacts through an allowlisted, pinned reusable workflow. The protected environment supplies the reviewed Action revision and pilot configuration.
+
 The equivalent authenticated API request is:
 
 ```sh

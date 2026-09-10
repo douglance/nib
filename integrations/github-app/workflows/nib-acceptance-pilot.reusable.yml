@@ -1,0 +1,214 @@
+name: Nib acceptance pilot reusable
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  build-artifacts:
+    name: Build prebuilt artifacts
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out PR merge source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            apps/web/package-lock.json
+            apps/cloudflare/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install worker-build
+        run: cargo install worker-build --locked
+
+      - name: Install untrusted build dependencies without secrets
+        run: |
+          npm ci --prefix apps/web
+          npm ci --prefix apps/cloudflare
+
+      - name: Build site and Worker bundles without secrets
+        run: |
+          set -euo pipefail
+          artifact="$GITHUB_WORKSPACE/.nib/pilot"
+          mkdir -p "$artifact/prebuilt/nib-site" "$artifact/prebuilt/nib-global" "$artifact/prebuilt/nib" "$artifact/assets"
+          npm run site:build --prefix apps/web
+          npm run site:worker:build --prefix apps/web
+          (cd apps/web && ./node_modules/.bin/wrangler deploy --config site/wrangler.jsonc --dry-run --outdir "$artifact/prebuilt/nib-site")
+          (cd apps/cloudflare && ./node_modules/.bin/wrangler deploy --config wrangler.jsonc --dry-run --outdir "$artifact/prebuilt/nib-global")
+          (cd apps/web && ./node_modules/.bin/wrangler deploy --config wrangler.jsonc --dry-run --outdir "$artifact/prebuilt/nib")
+          cp -R apps/web/site/dist/assets "$artifact/assets/site-assets"
+          test -f "$artifact/prebuilt/nib-site/shim.js"
+          test -f "$artifact/prebuilt/nib-global/index.js"
+          test -f "$artifact/prebuilt/nib/index.js"
+          find "$artifact/prebuilt/nib-site" -type f -name '*.wasm' -print -quit | grep .
+          find "$artifact/assets/site-assets" -type f -print -quit | grep .
+          cd "$artifact"
+          find prebuilt assets -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+
+      - name: Upload prebuilt pilot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nib-pilot-prebuilt
+          path: |
+            .nib/pilot/prebuilt
+            .nib/pilot/assets
+            .nib/pilot/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy-review:
+    name: Deploy and verify ${{ matrix.example }}
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    needs: build-artifacts
+    environment: acceptance-pilot
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [onboarding, business-rules, permissions]
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out reviewed Nib adapter and Action
+        uses: actions/checkout@v4
+        with:
+          repository: douglance/nib
+          ref: ${{ vars.NIB_ACCEPTANCE_ACTION_SHA }}
+          path: .nib/nib
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            .nib/nib/apps/web/package-lock.json
+            .nib/nib/apps/cloudflare/package-lock.json
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install trusted adapter dependencies
+        run: |
+          cargo install worker-build --locked
+          npm ci --prefix .nib/nib/apps/web
+          npm ci --prefix .nib/nib/apps/cloudflare
+
+      - name: Download prebuilt pilot artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: nib-pilot-prebuilt
+          path: .nib/pilot
+
+      - name: Verify prebuilt artifact
+        run: |
+          cd .nib/pilot
+          sha256sum -c SHA256SUMS
+
+      - name: Prepare trusted hosted recipe
+        env:
+          NIB_ACCEPTANCE_PROJECT_ID: ${{ vars.NIB_PROJECT_ID }}
+          NIB_ACCEPTANCE_COMMIT: ${{ github.sha }}
+          NIB_ACCEPTANCE_REPOSITORY_ID: ${{ github.repository_id }}
+          NIB_ACCEPTANCE_REPOSITORY: ${{ github.repository }}
+          NIB_ACCEPTANCE_SUBJECT: github:${{ github.repository }}:pull/${{ github.event.pull_request.number }}
+          NIB_ACCEPTANCE_REVISION: ${{ github.run_id }}-${{ matrix.example }}
+          NIB_ACCEPTANCE_PILOT_ONBOARDING_EMAIL: ${{ vars.NIB_ACCEPTANCE_PILOT_ONBOARDING_EMAIL }}
+          NIB_ACCEPTANCE_PILOT_BUSINESS_RULES_EMAIL: ${{ vars.NIB_ACCEPTANCE_PILOT_BUSINESS_RULES_EMAIL }}
+          NIB_ACCEPTANCE_PILOT_PERMISSIONS_OWNER_EMAIL: ${{ vars.NIB_ACCEPTANCE_PILOT_PERMISSIONS_OWNER_EMAIL }}
+          NIB_ACCEPTANCE_PILOT_PERMISSIONS_ADMIN_EMAIL: ${{ vars.NIB_ACCEPTANCE_PILOT_PERMISSIONS_ADMIN_EMAIL }}
+          NIB_ACCEPTANCE_PILOT_PERMISSIONS_REVIEWER_EMAIL: ${{ vars.NIB_ACCEPTANCE_PILOT_PERMISSIONS_REVIEWER_EMAIL }}
+          NIB_ACCEPTANCE_PILOT_PERMISSIONS_VIEWER_EMAIL: ${{ vars.NIB_ACCEPTANCE_PILOT_PERMISSIONS_VIEWER_EMAIL }}
+          NIB_ACCEPTANCE_PREVIEW_DEFAULT_PRICE_ID: ${{ vars.NIB_ACCEPTANCE_PREVIEW_DEFAULT_PRICE_ID }}
+          NIB_ACCEPTANCE_PREVIEW_HIGH_PRICE_ID: ${{ vars.NIB_ACCEPTANCE_PREVIEW_HIGH_PRICE_ID }}
+          NIB_ACCEPTANCE_PREVIEW_USAGE_PRICE_ID: ${{ vars.NIB_ACCEPTANCE_PREVIEW_USAGE_PRICE_ID }}
+        run: |
+          mkdir -p ".nib/trusted-recipes/${{ matrix.example }}"
+          cd .nib/nib
+          node examples/acceptance/prepare.mjs "${{ matrix.example }}" "$GITHUB_WORKSPACE/.nib/trusted-recipes/${{ matrix.example }}/recipe.json"
+
+      - name: Bind trusted recipe to prebuilt artifact
+        env:
+          NIB_PILOT_EXAMPLE: ${{ matrix.example }}
+          NIB_TRUSTED_ROOT: ${{ github.workspace }}/.nib/nib
+          NIB_TRUSTED_RECIPE_PATH: ${{ github.workspace }}/.nib/trusted-recipes/${{ matrix.example }}/recipe.json
+          NIB_ARTIFACT_ROOT: ${{ github.workspace }}/.nib/pilot
+          NIB_TRUSTED_WRANGLER_PACKAGE: ${{ github.workspace }}/.nib/nib/apps/web
+        run: node .nib/nib/integrations/github-app/workflows/pilot-prebuilt-contract.mjs bind-recipe
+
+      - name: Deploy Cloudflare preview
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET: ${{ secrets.NIB_ACCEPTANCE_PREVIEW_AUTH_RATE_LIMIT_SECRET }}
+          NIB_ACCEPTANCE_PREVIEW_ACCEPTANCE_SIGNING_JWK: ${{ secrets.NIB_ACCEPTANCE_PREVIEW_ACCEPTANCE_SIGNING_JWK }}
+          NIB_ACCEPTANCE_PREVIEW_TRIAL_NETWORK_SECRET: ${{ secrets.NIB_ACCEPTANCE_PREVIEW_TRIAL_NETWORK_SECRET }}
+          NIB_ACCEPTANCE_PREVIEW_STRIPE_SECRET_KEY: ${{ secrets.NIB_ACCEPTANCE_PREVIEW_STRIPE_SECRET_KEY }}
+        run: |
+          cd .nib/nib
+          node integrations/cloudflare/bin/nib-cloudflare-preview.mjs deploy \
+            --recipe "$GITHUB_WORKSPACE/.nib/trusted-recipes/${{ matrix.example }}/recipe.json" \
+            --allow-live \
+            --state-dir "$GITHUB_WORKSPACE/.nib/cloudflare-previews/${{ matrix.example }}" \
+            --out "$GITHUB_WORKSPACE/.nib/cloudflare-previews/${{ matrix.example }}-manifest.json" \
+            --state-out "$GITHUB_WORKSPACE/.nib/cloudflare-previews/${{ matrix.example }}-state.json"
+
+      - name: Publish review
+        id: acceptance-publish
+        uses: ./.nib/nib/integrations/github-action
+        with:
+          mode: publish
+          api-origin: ${{ vars.NIB_API_ORIGIN || 'https://nibtool.com' }}
+          project-id: ${{ vars.NIB_PROJECT_ID }}
+          manifest-path: .nib/cloudflare-previews/${{ matrix.example }}-manifest.json
+          cloudflare-state-path: .nib/cloudflare-previews/${{ matrix.example }}-state.json
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Add review link to summary
+        run: |
+          {
+            echo "### Nib acceptance review"
+            echo ""
+            echo "- Example: ${{ matrix.example }}"
+            echo "- Review: ${{ steps.acceptance-publish.outputs.review-url }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Wait for human approval and verify gate
+        id: acceptance-verify
+        uses: ./.nib/nib/integrations/github-action
+        with:
+          mode: verify
+          api-origin: ${{ vars.NIB_API_ORIGIN || 'https://nibtool.com' }}
+          project-id: ${{ vars.NIB_PROJECT_ID }}
+          review-id: ${{ steps.acceptance-publish.outputs.review-id }}
+          manifest-hash: ${{ steps.acceptance-publish.outputs.manifest-hash }}
+          manifest-path: .nib/cloudflare-previews/${{ matrix.example }}-manifest.json
+          cloudflare-state-path: .nib/cloudflare-previews/${{ matrix.example }}-state.json
+          commit: ${{ github.sha }}
+          wait-timeout-seconds: '1800'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
